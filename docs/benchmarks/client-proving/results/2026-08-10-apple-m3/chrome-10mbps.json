@@ -1,0 +1,6179 @@
+{
+  "schema_version": 1,
+  "backend": "chrome-worker-snarkjs",
+  "host": {
+    "recorded_at": "2026-08-09T21:03:47.832Z",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.5.0",
+    "cpus": 8,
+    "cpu_model": "Apple M3",
+    "total_memory_bytes": 17179869184,
+    "os_release": "25.5.0",
+    "device_label": "apple-m3-16gb",
+    "simulated_network_mbps": 10
+  },
+  "results": {
+    "wallet_create": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 2432468,
+          "sha256": "434ee7bcffd8161e118999fc5e88b2ba369993533fc0524fecb75eb4a160fd3f"
+        },
+        "zkey": {
+          "bytes": 1511077,
+          "sha256": "64088e70403cb394b0d8c5207a99f7eaa47902dd818eb335607750907439b3ec"
+        },
+        "verification_key": {
+          "bytes": 2925,
+          "sha256": "145a3f75078558435c4b7ab209fe0aa7f169b1759db838364242535844d7d048"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 622928,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 645374,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.0600000023841858,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1029750784,
+          "first_quartile_median_rss_bytes": 1720320,
+          "last_quartile_median_rss_bytes": 1026605056,
+          "growth_bytes": 1024884736
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 12.14,
+            "rss_bytes": 1720320,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1052.35,
+            "rss_bytes": 994902016,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2088.81,
+            "rss_bytes": 995491840,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3118.68,
+            "rss_bytes": 1029750784,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4152.93,
+            "rss_bytes": 1026605056,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1649999991059303,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1029931008,
+            "first_quartile_median_rss_bytes": 1687552,
+            "last_quartile_median_rss_bytes": 1029931008,
+            "growth_bytes": 1028243456
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.9,
+              "rss_bytes": 1687552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1039.99,
+              "rss_bytes": 1015218176,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2076.99,
+              "rss_bytes": 1015840768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3113.77,
+              "rss_bytes": 1029931008,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.5,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1029931008,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1029931008,
+            "growth_bytes": 1028227072
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.62,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1048.5,
+              "rss_bytes": 1015250944,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2079.06,
+              "rss_bytes": 1015857152,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3111.27,
+              "rss_bytes": 1029931008,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.369999997317791,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1027211264,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1027211264,
+            "growth_bytes": 1025507328
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.95,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.01,
+              "rss_bytes": 1012137984,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2070.48,
+              "rss_bytes": 1013497856,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3104.91,
+              "rss_bytes": 1027211264,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1749999970197678,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1028390912,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1028390912,
+            "growth_bytes": 1026686976
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.84,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1044.48,
+              "rss_bytes": 1013760000,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2074.01,
+              "rss_bytes": 1014300672,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3103.48,
+              "rss_bytes": 1028390912,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2699999958276749,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1029652480,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1029652480,
+            "growth_bytes": 1027948544
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.49,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040.57,
+              "rss_bytes": 1014038528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2074.49,
+              "rss_bytes": 1015414784,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3109.92,
+              "rss_bytes": 1029652480,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.030000001192093,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1027637248,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1027637248,
+            "growth_bytes": 1025933312
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.6,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.59,
+              "rss_bytes": 1013202944,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.43,
+              "rss_bytes": 1013809152,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3114.54,
+              "rss_bytes": 1027637248,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1950000002980232,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1033519104,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1033519104,
+            "growth_bytes": 1031815168
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.61,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047,
+              "rss_bytes": 1017888768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2082.87,
+              "rss_bytes": 1019199488,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.77,
+              "rss_bytes": 1033519104,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.614999994635582,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1028096000,
+            "first_quartile_median_rss_bytes": 1687552,
+            "last_quartile_median_rss_bytes": 1028096000,
+            "growth_bytes": 1026408448
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.89,
+              "rss_bytes": 1687552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.48,
+              "rss_bytes": 1013432320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2074.18,
+              "rss_bytes": 1014005760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3104.49,
+              "rss_bytes": 1028096000,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3599999994039536,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1028341760,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1028341760,
+            "growth_bytes": 1026637824
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 34.23,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1071.25,
+              "rss_bytes": 1013661696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2097.77,
+              "rss_bytes": 1014284288,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3133.71,
+              "rss_bytes": 1028341760,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1899999976158142,
+          "process_tree_rss": {
+            "sample_count": 4,
+            "peak_rss_bytes": 1031045120,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1031045120,
+            "growth_bytes": 1029341184
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.21,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.21,
+              "rss_bytes": 1016152064,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2082.88,
+              "rss_bytes": 1016774656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3115.07,
+              "rss_bytes": 1031045120,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 3200.5499999970198,
+            "witness_ms": 39.70499999821186,
+            "prove_ms": 211.3149999976158,
+            "verify_ms": 7.865000002086163,
+            "end_to_end_ms": 3459.4349999949336
+          },
+          {
+            "artifact_load_ms": 3194.079999998212,
+            "witness_ms": 39.79500000178814,
+            "prove_ms": 214.7149999961257,
+            "verify_ms": 7.83500000089407,
+            "end_to_end_ms": 3456.4249999970198
+          },
+          {
+            "artifact_load_ms": 3190,
+            "witness_ms": 37.24000000208616,
+            "prove_ms": 208.35999999940395,
+            "verify_ms": 7.670000001788139,
+            "end_to_end_ms": 3443.2700000032783
+          },
+          {
+            "artifact_load_ms": 3186.130000002682,
+            "witness_ms": 45.83500000089407,
+            "prove_ms": 239.51500000059605,
+            "verify_ms": 8.060000002384186,
+            "end_to_end_ms": 3479.5400000065565
+          },
+          {
+            "artifact_load_ms": 3196.914999999106,
+            "witness_ms": 39.44999999552965,
+            "prove_ms": 209.3800000026822,
+            "verify_ms": 7.784999996423721,
+            "end_to_end_ms": 3453.5299999937415
+          },
+          {
+            "artifact_load_ms": 3195.7399999946356,
+            "witness_ms": 40.0899999961257,
+            "prove_ms": 213.42499999701977,
+            "verify_ms": 7.844999998807907,
+            "end_to_end_ms": 3457.099999986589
+          },
+          {
+            "artifact_load_ms": 3191.710000000894,
+            "witness_ms": 38.99000000208616,
+            "prove_ms": 211.47999999672174,
+            "verify_ms": 8.015000000596046,
+            "end_to_end_ms": 3450.195000000298
+          },
+          {
+            "artifact_load_ms": 3195.5499999970198,
+            "witness_ms": 37.35999999940395,
+            "prove_ms": 215.91499999910593,
+            "verify_ms": 8,
+            "end_to_end_ms": 3456.8249999955297
+          },
+          {
+            "artifact_load_ms": 3190.0049999952316,
+            "witness_ms": 39.01500000059605,
+            "prove_ms": 209.29500000178814,
+            "verify_ms": 7.935000002384186,
+            "end_to_end_ms": 3446.25
+          },
+          {
+            "artifact_load_ms": 3188.22500000149,
+            "witness_ms": 39.900000005960464,
+            "prove_ms": 211.6199999973178,
+            "verify_ms": 7.649999998509884,
+            "end_to_end_ms": 3447.3950000032783
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 3192.89,
+              "ci95_ms": [
+                3189.11,
+                3195.74
+              ]
+            },
+            "p95": {
+              "ms": 3198.91,
+              "ci95_ms": [
+                3194.99,
+                3200.55
+              ]
+            },
+            "p99": {
+              "ms": 3200.22,
+              "ci95_ms": [
+                3195.55,
+                3200.55
+              ]
+            },
+            "min_ms": 3186.13,
+            "max_ms": 3200.55,
+            "mean_ms": 3192.89
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 39.58,
+              "ci95_ms": [
+                38.19,
+                39.94
+              ]
+            },
+            "p95": {
+              "ms": 43.25,
+              "ci95_ms": [
+                39.8,
+                45.84
+              ]
+            },
+            "p99": {
+              "ms": 45.32,
+              "ci95_ms": [
+                39.86,
+                45.84
+              ]
+            },
+            "min_ms": 37.24,
+            "max_ms": 45.84,
+            "mean_ms": 39.74
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 211.55,
+              "ci95_ms": [
+                209.38,
+                214.71
+              ]
+            },
+            "p95": {
+              "ms": 228.89,
+              "ci95_ms": [
+                213.32,
+                239.52
+              ]
+            },
+            "p99": {
+              "ms": 237.39,
+              "ci95_ms": [
+                213.42,
+                239.52
+              ]
+            },
+            "min_ms": 208.36,
+            "max_ms": 239.52,
+            "mean_ms": 214.5
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 7.86,
+              "ci95_ms": [
+                7.75,
+                8
+              ]
+            },
+            "p95": {
+              "ms": 8.04,
+              "ci95_ms": [
+                7.94,
+                8.06
+              ]
+            },
+            "p99": {
+              "ms": 8.06,
+              "ci95_ms": [
+                7.94,
+                8.06
+              ]
+            },
+            "min_ms": 7.65,
+            "max_ms": 8.06,
+            "mean_ms": 7.87
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 3454.98,
+              "ci95_ms": [
+                3447.4,
+                3458.13
+              ]
+            },
+            "p95": {
+              "ms": 3470.49,
+              "ci95_ms": [
+                3456.8,
+                3479.54
+              ]
+            },
+            "p99": {
+              "ms": 3477.73,
+              "ci95_ms": [
+                3456.82,
+                3479.54
+              ]
+            },
+            "min_ms": 3443.27,
+            "max_ms": 3479.54,
+            "mean_ms": 3455
+          }
+        }
+      }
+    },
+    "deposit": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 3306514,
+          "sha256": "0da4cd4f2d02d1d795acd2c19f061410686e5d7cc6e40e86ca4b1a07e5ffb6c2"
+        },
+        "zkey": {
+          "bytes": 1230947,
+          "sha256": "d109d094a862ade8ca76ce13923150d4bd4799327c36232b7e5f58018b1f25d9"
+        },
+        "verification_key": {
+          "bytes": 3654,
+          "sha256": "31d2f803592ffd6c51c9b7ae3a8ed2f24c38ed1f97e4349843d96c03bf43d958"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 622492,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 644938,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.2950000017881393,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1031356416,
+          "first_quartile_median_rss_bytes": 1703936,
+          "last_quartile_median_rss_bytes": 1027964928,
+          "growth_bytes": 1026260992
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 11.44,
+            "rss_bytes": 1703936,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1046.63,
+            "rss_bytes": 996114432,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2080.71,
+            "rss_bytes": 996655104,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3114.42,
+            "rss_bytes": 1031356416,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4144.87,
+            "rss_bytes": 1027964928,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1700000017881393,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1069875200,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1069875200,
+            "growth_bytes": 1068171264
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.01,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1048.83,
+              "rss_bytes": 1014972416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2082.27,
+              "rss_bytes": 1016299520,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.4,
+              "rss_bytes": 1032159232,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4119.74,
+              "rss_bytes": 1069875200,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.239999994635582,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1069301760,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1069301760,
+            "growth_bytes": 1067597824
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.88,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.22,
+              "rss_bytes": 1014267904,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2083.1,
+              "rss_bytes": 1015644160,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.42,
+              "rss_bytes": 1031684096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4120.35,
+              "rss_bytes": 1069301760,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1750000044703484,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1069711360,
+            "first_quartile_median_rss_bytes": 1720320,
+            "last_quartile_median_rss_bytes": 1069711360,
+            "growth_bytes": 1067991040
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.61,
+              "rss_bytes": 1720320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.74,
+              "rss_bytes": 1017200640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2083.59,
+              "rss_bytes": 1017790464,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3116.98,
+              "rss_bytes": 1033699328,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4133.78,
+              "rss_bytes": 1069711360,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.380000002682209,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1067728896,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1067728896,
+            "growth_bytes": 1066024960
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.8,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.63,
+              "rss_bytes": 1014824960,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.78,
+              "rss_bytes": 1015447552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3106.98,
+              "rss_bytes": 1031225344,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4120.44,
+              "rss_bytes": 1067728896,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1750000044703484,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1067450368,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1067450368,
+            "growth_bytes": 1065746432
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.63,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.53,
+              "rss_bytes": 1013432320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2082.27,
+              "rss_bytes": 1014038528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3104.09,
+              "rss_bytes": 1030225920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4117.85,
+              "rss_bytes": 1067450368,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.030000001192093,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1070530560,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1070530560,
+            "growth_bytes": 1068826624
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.05,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1048.29,
+              "rss_bytes": 1016676352,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2085.8,
+              "rss_bytes": 1017282560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3114.58,
+              "rss_bytes": 1033175040,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4127.83,
+              "rss_bytes": 1070530560,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2150000035762787,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1054982144,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1054982144,
+            "growth_bytes": 1053278208
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.52,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1044.27,
+              "rss_bytes": 1014415360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2078.12,
+              "rss_bytes": 1015070720,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3099.2,
+              "rss_bytes": 1030946816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4115.27,
+              "rss_bytes": 1054982144,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.75,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1056686080,
+            "first_quartile_median_rss_bytes": 1720320,
+            "last_quartile_median_rss_bytes": 1056686080,
+            "growth_bytes": 1054965760
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.8,
+              "rss_bytes": 1720320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.03,
+              "rss_bytes": 1013841920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2071.48,
+              "rss_bytes": 1014431744,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3094.68,
+              "rss_bytes": 1030356992,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4110.85,
+              "rss_bytes": 1056686080,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.875,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1058308096,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1058308096,
+            "growth_bytes": 1056604160
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.5,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.19,
+              "rss_bytes": 1018494976,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2078.64,
+              "rss_bytes": 1019084800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3100.76,
+              "rss_bytes": 1035010048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4115.97,
+              "rss_bytes": 1058308096,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1649999991059303,
+          "process_tree_rss": {
+            "sample_count": 5,
+            "peak_rss_bytes": 1056686080,
+            "first_quartile_median_rss_bytes": 1703936,
+            "last_quartile_median_rss_bytes": 1056686080,
+            "growth_bytes": 1054982144
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.32,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.93,
+              "rss_bytes": 1014530048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2084.94,
+              "rss_bytes": 1015103488,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3106.6,
+              "rss_bytes": 1031176192,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4121.44,
+              "rss_bytes": 1056686080,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 3665.2299999967217,
+            "witness_ms": 53.60999999940395,
+            "prove_ms": 186.77499999850988,
+            "verify_ms": 8.024999998509884,
+            "end_to_end_ms": 3913.6399999931455
+          },
+          {
+            "artifact_load_ms": 3658.625,
+            "witness_ms": 50.66499999910593,
+            "prove_ms": 187.9649999961257,
+            "verify_ms": 8.109999999403954,
+            "end_to_end_ms": 3905.3649999946356
+          },
+          {
+            "artifact_load_ms": 3660.115000002086,
+            "witness_ms": 51.21999999880791,
+            "prove_ms": 185.0300000011921,
+            "verify_ms": 7.879999995231628,
+            "end_to_end_ms": 3904.244999997318
+          },
+          {
+            "artifact_load_ms": 3662.39999999851,
+            "witness_ms": 58.309999994933605,
+            "prove_ms": 186.85000000149012,
+            "verify_ms": 8.184999994933605,
+            "end_to_end_ms": 3915.744999989867
+          },
+          {
+            "artifact_load_ms": 3663.990000002086,
+            "witness_ms": 45.48499999940395,
+            "prove_ms": 182.01500000059605,
+            "verify_ms": 8.365000002086163,
+            "end_to_end_ms": 3899.8550000041723
+          },
+          {
+            "artifact_load_ms": 3668.7850000038743,
+            "witness_ms": 52.92999999970198,
+            "prove_ms": 186.64000000059605,
+            "verify_ms": 8.240000002086163,
+            "end_to_end_ms": 3916.5950000062585
+          },
+          {
+            "artifact_load_ms": 3662.3550000041723,
+            "witness_ms": 55.67999999970198,
+            "prove_ms": 181.85499999672174,
+            "verify_ms": 7.9749999940395355,
+            "end_to_end_ms": 3907.8649999946356
+          },
+          {
+            "artifact_load_ms": 3670.7700000032783,
+            "witness_ms": 53.94999999552965,
+            "prove_ms": 184.66499999910593,
+            "verify_ms": 7.875,
+            "end_to_end_ms": 3917.259999997914
+          },
+          {
+            "artifact_load_ms": 3671.7549999952316,
+            "witness_ms": 54.20499999821186,
+            "prove_ms": 186.30499999970198,
+            "verify_ms": 7.965000003576279,
+            "end_to_end_ms": 3920.2299999967217
+          },
+          {
+            "artifact_load_ms": 3664.945000000298,
+            "witness_ms": 58.57000000029802,
+            "prove_ms": 187.75999999791384,
+            "verify_ms": 8.219999998807907,
+            "end_to_end_ms": 3919.494999997318
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 3664.47,
+              "ci95_ms": [
+                3661.26,
+                3668.79
+              ]
+            },
+            "p95": {
+              "ms": 3671.31,
+              "ci95_ms": [
+                3665.23,
+                3671.75
+              ]
+            },
+            "p99": {
+              "ms": 3671.67,
+              "ci95_ms": [
+                3665.23,
+                3671.75
+              ]
+            },
+            "min_ms": 3658.63,
+            "max_ms": 3671.75,
+            "mean_ms": 3664.9
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 53.78,
+              "ci95_ms": [
+                51.22,
+                56.26
+              ]
+            },
+            "p95": {
+              "ms": 58.45,
+              "ci95_ms": [
+                54.2,
+                58.57
+              ]
+            },
+            "p99": {
+              "ms": 58.55,
+              "ci95_ms": [
+                55.52,
+                58.57
+              ]
+            },
+            "min_ms": 45.48,
+            "max_ms": 58.57,
+            "mean_ms": 53.46
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 186.47,
+              "ci95_ms": [
+                183.52,
+                187.2
+              ]
+            },
+            "p95": {
+              "ms": 187.87,
+              "ci95_ms": [
+                186.76,
+                187.96
+              ]
+            },
+            "p99": {
+              "ms": 187.95,
+              "ci95_ms": [
+                186.77,
+                187.96
+              ]
+            },
+            "min_ms": 181.85,
+            "max_ms": 187.96,
+            "mean_ms": 185.59
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 8.07,
+              "ci95_ms": [
+                7.93,
+                8.22
+              ]
+            },
+            "p95": {
+              "ms": 8.31,
+              "ci95_ms": [
+                8.17,
+                8.37
+              ]
+            },
+            "p99": {
+              "ms": 8.35,
+              "ci95_ms": [
+                8.21,
+                8.37
+              ]
+            },
+            "min_ms": 7.88,
+            "max_ms": 8.37,
+            "mean_ms": 8.08
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 3914.69,
+              "ci95_ms": [
+                3904.8,
+                3918.05
+              ]
+            },
+            "p95": {
+              "ms": 3919.9,
+              "ci95_ms": [
+                3916.6,
+                3920.23
+              ]
+            },
+            "p99": {
+              "ms": 3920.16,
+              "ci95_ms": [
+                3916.93,
+                3920.23
+              ]
+            },
+            "min_ms": 3899.86,
+            "max_ms": 3920.23,
+            "mean_ms": 3912.03
+          }
+        }
+      }
+    },
+    "input": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 3112865,
+          "sha256": "7cc2a3af90e14f333485aff3b64e2226afb4a5cfd368832a36a4b94ff67a8ff3"
+        },
+        "zkey": {
+          "bytes": 5629973,
+          "sha256": "60443358f00375bb163e15e1659c6c3ea7f8dcb5ef251ba578b3d9d378438ece"
+        },
+        "verification_key": {
+          "bytes": 3474,
+          "sha256": "f26a82f656a0dc9cc0ac50e3967b0a90e0d7630cd12fa33710e73594c3663072"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 627637,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 650083,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.0549999997019768,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1030209536,
+          "first_quartile_median_rss_bytes": 1703936,
+          "last_quartile_median_rss_bytes": 1027031040,
+          "growth_bytes": 1025327104
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 11.38,
+            "rss_bytes": 1703936,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1045.98,
+            "rss_bytes": 993427456,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2072.28,
+            "rss_bytes": 993984512,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3108.09,
+            "rss_bytes": 1030209536,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4147.51,
+            "rss_bytes": 1027031040,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.7150000035762787,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1030504448,
+            "first_quartile_median_rss_bytes": 507002880,
+            "last_quartile_median_rss_bytes": 1030438912,
+            "growth_bytes": 523436032
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.81,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1036.16,
+              "rss_bytes": 1012301824,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2071.18,
+              "rss_bytes": 1013645312,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3102.23,
+              "rss_bytes": 1029881856,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4127.45,
+              "rss_bytes": 1030438912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5162.62,
+              "rss_bytes": 1030504448,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6190.9,
+              "rss_bytes": 1030373376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7224.62,
+              "rss_bytes": 1030504448,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.060000002384186,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1033355264,
+            "first_quartile_median_rss_bytes": 508018688,
+            "last_quartile_median_rss_bytes": 1033117696,
+            "growth_bytes": 525099008
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.99,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.44,
+              "rss_bytes": 1014333440,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2079.18,
+              "rss_bytes": 1014923264,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3112.63,
+              "rss_bytes": 1032159232,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4147.28,
+              "rss_bytes": 1033256960,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5181.84,
+              "rss_bytes": 1033355264,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6204.54,
+              "rss_bytes": 1033060352,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7235.29,
+              "rss_bytes": 1033175040,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1950000002980232,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1033666560,
+            "first_quartile_median_rss_bytes": 509116416,
+            "last_quartile_median_rss_bytes": 1033609216,
+            "growth_bytes": 524492800
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.29,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1043.75,
+              "rss_bytes": 1016528896,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2080.83,
+              "rss_bytes": 1017135104,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3116.55,
+              "rss_bytes": 1032994816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4151.33,
+              "rss_bytes": 1033601024,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5182.53,
+              "rss_bytes": 1033666560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6214.27,
+              "rss_bytes": 1033551872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7249.63,
+              "rss_bytes": 1033666560,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2100000008940697,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1032749056,
+            "first_quartile_median_rss_bytes": 508198912,
+            "last_quartile_median_rss_bytes": 1032626176,
+            "growth_bytes": 524427264
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.23,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.92,
+              "rss_bytes": 1014693888,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.49,
+              "rss_bytes": 1016086528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3115.82,
+              "rss_bytes": 1031585792,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4153.13,
+              "rss_bytes": 1032683520,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5185.28,
+              "rss_bytes": 1032749056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6220.68,
+              "rss_bytes": 1032568832,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7250.43,
+              "rss_bytes": 1032683520,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2700000032782555,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1030701056,
+            "first_quartile_median_rss_bytes": 507658240,
+            "last_quartile_median_rss_bytes": 1030561792,
+            "growth_bytes": 522903552
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.72,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.98,
+              "rss_bytes": 1013612544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.75,
+              "rss_bytes": 1014202368,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3116.28,
+              "rss_bytes": 1029701632,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4141.55,
+              "rss_bytes": 1030602752,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5173.91,
+              "rss_bytes": 1030701056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6210.45,
+              "rss_bytes": 1030504448,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7242.04,
+              "rss_bytes": 1030619136,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2250000014901161,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1030225920,
+            "first_quartile_median_rss_bytes": 507420672,
+            "last_quartile_median_rss_bytes": 1030037504,
+            "growth_bytes": 522616832
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.31,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.28,
+              "rss_bytes": 1013137408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2084.16,
+              "rss_bytes": 1013727232,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3117,
+              "rss_bytes": 1028964352,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4151.41,
+              "rss_bytes": 1030111232,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5186.02,
+              "rss_bytes": 1030225920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6221.97,
+              "rss_bytes": 1029980160,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7250.9,
+              "rss_bytes": 1030094848,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.5749999955296516,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1031028736,
+            "first_quartile_median_rss_bytes": 507887616,
+            "last_quartile_median_rss_bytes": 1030856704,
+            "growth_bytes": 522969088
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.65,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1042.42,
+              "rss_bytes": 1014071296,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2068.06,
+              "rss_bytes": 1014677504,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3095.75,
+              "rss_bytes": 1030094848,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4129.65,
+              "rss_bytes": 1030963200,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5166.72,
+              "rss_bytes": 1031028736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6203.42,
+              "rss_bytes": 1030799360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7231.61,
+              "rss_bytes": 1030914048,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2049999982118607,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1032421376,
+            "first_quartile_median_rss_bytes": 508387328,
+            "last_quartile_median_rss_bytes": 1032282112,
+            "growth_bytes": 523894784
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.23,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040.55,
+              "rss_bytes": 1015070720,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2079.39,
+              "rss_bytes": 1015660544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3116.08,
+              "rss_bytes": 1031487488,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4143.93,
+              "rss_bytes": 1032355840,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5169.46,
+              "rss_bytes": 1032421376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6194.24,
+              "rss_bytes": 1032224768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7218.24,
+              "rss_bytes": 1032339456,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3350000008940697,
+          "process_tree_rss": {
+            "sample_count": 8,
+            "peak_rss_bytes": 1030914048,
+            "first_quartile_median_rss_bytes": 507502592,
+            "last_quartile_median_rss_bytes": 1030733824,
+            "growth_bytes": 523231232
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.83,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1043.81,
+              "rss_bytes": 1013301248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2069.01,
+              "rss_bytes": 1013891072,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.26,
+              "rss_bytes": 1029898240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4167.11,
+              "rss_bytes": 1030782976,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5201.61,
+              "rss_bytes": 1030914048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6230.85,
+              "rss_bytes": 1030668288,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7266.67,
+              "rss_bytes": 1030799360,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3900000005960464,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1776484352,
+            "first_quartile_median_rss_bytes": 507486208,
+            "last_quartile_median_rss_bytes": 1403265024,
+            "growth_bytes": 895778816
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 14.88,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1034.92,
+              "rss_bytes": 1013268480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2060.51,
+              "rss_bytes": 1014104064,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3081.41,
+              "rss_bytes": 1023361024,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4115.46,
+              "rss_bytes": 1030455296,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5145.14,
+              "rss_bytes": 1030537216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6169.02,
+              "rss_bytes": 1030389760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7203.95,
+              "rss_bytes": 1030045696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8244.4,
+              "rss_bytes": 1776484352,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 7026.965000003576,
+            "witness_ms": 49.230000004172325,
+            "prove_ms": 565.984999999404,
+            "verify_ms": 8.07999999821186,
+            "end_to_end_ms": 7650.260000005364
+          },
+          {
+            "artifact_load_ms": 7035.72500000149,
+            "witness_ms": 56.37000000476837,
+            "prove_ms": 627.8399999961257,
+            "verify_ms": 8.305000007152557,
+            "end_to_end_ms": 7728.240000009537
+          },
+          {
+            "artifact_load_ms": 7044.5250000059605,
+            "witness_ms": 50.67499999701977,
+            "prove_ms": 594.375,
+            "verify_ms": 8.230000004172325,
+            "end_to_end_ms": 7697.805000007153
+          },
+          {
+            "artifact_load_ms": 7039.17500000447,
+            "witness_ms": 50.04500000178814,
+            "prove_ms": 597.8350000008941,
+            "verify_ms": 8.465000003576279,
+            "end_to_end_ms": 7695.520000010729
+          },
+          {
+            "artifact_load_ms": 7039.420000001788,
+            "witness_ms": 52.475000001490116,
+            "prove_ms": 584.6549999937415,
+            "verify_ms": 8.030000001192093,
+            "end_to_end_ms": 7684.579999998212
+          },
+          {
+            "artifact_load_ms": 7043.0849999934435,
+            "witness_ms": 50.62999999523163,
+            "prove_ms": 614.7200000062585,
+            "verify_ms": 9.45499999821186,
+            "end_to_end_ms": 7717.8899999931455
+          },
+          {
+            "artifact_load_ms": 7043.679999999702,
+            "witness_ms": 51.62000000476837,
+            "prove_ms": 580.0649999976158,
+            "verify_ms": 8.200000002980232,
+            "end_to_end_ms": 7683.565000005066
+          },
+          {
+            "artifact_load_ms": 7037.704999998212,
+            "witness_ms": 40.2149999961257,
+            "prove_ms": 585.0600000023842,
+            "verify_ms": 8.445000000298023,
+            "end_to_end_ms": 7671.42499999702
+          },
+          {
+            "artifact_load_ms": 7047.560000002384,
+            "witness_ms": 50.145000003278255,
+            "prove_ms": 590.0450000017881,
+            "verify_ms": 8.29500000178814,
+            "end_to_end_ms": 7696.045000009239
+          },
+          {
+            "artifact_load_ms": 7037.119999997318,
+            "witness_ms": 50.26500000059605,
+            "prove_ms": 633.4149999991059,
+            "verify_ms": 8.350000001490116,
+            "end_to_end_ms": 7729.14999999851
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 7039.3,
+              "ci95_ms": [
+                7036.71,
+                7043.8
+              ]
+            },
+            "p95": {
+              "ms": 7046.19,
+              "ci95_ms": [
+                7041.76,
+                7047.56
+              ]
+            },
+            "p99": {
+              "ms": 7047.29,
+              "ci95_ms": [
+                7043.08,
+                7047.56
+              ]
+            },
+            "min_ms": 7026.97,
+            "max_ms": 7047.56,
+            "mean_ms": 7039.5
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 50.45,
+              "ci95_ms": [
+                49.69,
+                52.05
+              ]
+            },
+            "p95": {
+              "ms": 54.62,
+              "ci95_ms": [
+                50.67,
+                56.37
+              ]
+            },
+            "p99": {
+              "ms": 56.02,
+              "ci95_ms": [
+                50.67,
+                56.37
+              ]
+            },
+            "min_ms": 40.21,
+            "max_ms": 56.37,
+            "mean_ms": 50.17
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 592.21,
+              "ci95_ms": [
+                582.56,
+                614.72
+              ]
+            },
+            "p95": {
+              "ms": 630.91,
+              "ci95_ms": [
+                597.84,
+                633.41
+              ]
+            },
+            "p99": {
+              "ms": 632.91,
+              "ci95_ms": [
+                597.84,
+                633.41
+              ]
+            },
+            "min_ms": 565.98,
+            "max_ms": 633.41,
+            "mean_ms": 597.4
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 8.3,
+              "ci95_ms": [
+                8.16,
+                8.45
+              ]
+            },
+            "p95": {
+              "ms": 9.01,
+              "ci95_ms": [
+                8.35,
+                9.45
+              ]
+            },
+            "p99": {
+              "ms": 9.37,
+              "ci95_ms": [
+                8.35,
+                9.45
+              ]
+            },
+            "min_ms": 8.03,
+            "max_ms": 9.45,
+            "mean_ms": 8.39
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 7695.78,
+              "ci95_ms": [
+                7678,
+                7717.89
+              ]
+            },
+            "p95": {
+              "ms": 7728.74,
+              "ci95_ms": [
+                7697.81,
+                7729.15
+              ]
+            },
+            "p99": {
+              "ms": 7729.07,
+              "ci95_ms": [
+                7697.81,
+                7729.15
+              ]
+            },
+            "min_ms": 7650.26,
+            "max_ms": 7729.15,
+            "mean_ms": 7695.45
+          }
+        }
+      }
+    },
+    "spend": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 3141268,
+          "sha256": "66fd608943190be2ccd1e740793e272c323e66a9f2f74d96c27fd5d10fe4cb61"
+        },
+        "zkey": {
+          "bytes": 5848029,
+          "sha256": "8e07f9dc6720fba2867a053a46851a731bb5501a527ac7acfadc7a3b5feab78f"
+        },
+        "verification_key": {
+          "bytes": 4208,
+          "sha256": "fd880ec8b56691cbdeba3e1a618a2b237917cf14a3597a4c66c61a4c8e1fd69a"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 628322,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 650768,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.0600000023841858,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1029406720,
+          "first_quartile_median_rss_bytes": 1736704,
+          "last_quartile_median_rss_bytes": 1026048000,
+          "growth_bytes": 1024311296
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 13.41,
+            "rss_bytes": 1736704,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1046.32,
+            "rss_bytes": 994197504,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2074.71,
+            "rss_bytes": 994377728,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3101.82,
+            "rss_bytes": 1029406720,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4135.2,
+            "rss_bytes": 1026048000,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2250000014901161,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1695809536,
+            "first_quartile_median_rss_bytes": 510091264,
+            "last_quartile_median_rss_bytes": 1365819392,
+            "growth_bytes": 855728128
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.46,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1037.21,
+              "rss_bytes": 1018478592,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2066.91,
+              "rss_bytes": 1019150336,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3092.71,
+              "rss_bytes": 1028849664,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4123.08,
+              "rss_bytes": 1035812864,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5156.47,
+              "rss_bytes": 1035894784,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6185.81,
+              "rss_bytes": 1035714560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7211.5,
+              "rss_bytes": 1035829248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8262.92,
+              "rss_bytes": 1695809536,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1950000002980232,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1917124608,
+            "first_quartile_median_rss_bytes": 507904000,
+            "last_quartile_median_rss_bytes": 1474641920,
+            "growth_bytes": 966737920
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.8,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040.04,
+              "rss_bytes": 1014104064,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2074.86,
+              "rss_bytes": 1015496704,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3106.11,
+              "rss_bytes": 1031208960,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4137.8,
+              "rss_bytes": 1032093696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5175.09,
+              "rss_bytes": 1032208384,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6201.49,
+              "rss_bytes": 1032044544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7229.28,
+              "rss_bytes": 1032159232,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8255.91,
+              "rss_bytes": 1917124608,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.469999998807907,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1916338176,
+            "first_quartile_median_rss_bytes": 508051456,
+            "last_quartile_median_rss_bytes": 1473937408,
+            "growth_bytes": 965885952
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.2,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.57,
+              "rss_bytes": 1014398976,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2070.42,
+              "rss_bytes": 1015005184,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3099.25,
+              "rss_bytes": 1030635520,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4128.47,
+              "rss_bytes": 1031536640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5163.13,
+              "rss_bytes": 1031618560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6196.81,
+              "rss_bytes": 1031421952,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7231.53,
+              "rss_bytes": 1031536640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8278.35,
+              "rss_bytes": 1916338176,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.8200000002980232,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1905999872,
+            "first_quartile_median_rss_bytes": 507559936,
+            "last_quartile_median_rss_bytes": 1468284928,
+            "growth_bytes": 960724992
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.28,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1041.42,
+              "rss_bytes": 1013415936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2067.83,
+              "rss_bytes": 1014022144,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3094.92,
+              "rss_bytes": 1029685248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4128.05,
+              "rss_bytes": 1030569984,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5169.18,
+              "rss_bytes": 1030651904,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6199.9,
+              "rss_bytes": 1030455296,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7228.87,
+              "rss_bytes": 1030569984,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8290.89,
+              "rss_bytes": 1905999872,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.540000006556511,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1917763584,
+            "first_quartile_median_rss_bytes": 508747776,
+            "last_quartile_median_rss_bytes": 1475420160,
+            "growth_bytes": 966672384
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.14,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.43,
+              "rss_bytes": 1015791616,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2072.99,
+              "rss_bytes": 1016381440,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3100.14,
+              "rss_bytes": 1031815168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4134.71,
+              "rss_bytes": 1032962048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5169.4,
+              "rss_bytes": 1033027584,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6200.05,
+              "rss_bytes": 1032962048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7235.87,
+              "rss_bytes": 1033076736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8258.71,
+              "rss_bytes": 1917763584,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3299999982118607,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1901789184,
+            "first_quartile_median_rss_bytes": 508264448,
+            "last_quartile_median_rss_bytes": 1466933248,
+            "growth_bytes": 958668800
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.76,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.51,
+              "rss_bytes": 1014824960,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2071.14,
+              "rss_bytes": 1015480320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3100.35,
+              "rss_bytes": 1031159808,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4130.97,
+              "rss_bytes": 1032077312,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5159.91,
+              "rss_bytes": 1032175616,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6189.22,
+              "rss_bytes": 1031962624,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7215.76,
+              "rss_bytes": 1032077312,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8323.58,
+              "rss_bytes": 1901789184,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.8350000008940697,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1905213440,
+            "first_quartile_median_rss_bytes": 506724352,
+            "last_quartile_median_rss_bytes": 1467473920,
+            "growth_bytes": 960749568
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.46,
+              "rss_bytes": 1753088,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1037.86,
+              "rss_bytes": 1011695616,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2073.77,
+              "rss_bytes": 1013039104,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3110.88,
+              "rss_bytes": 1028784128,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4137.58,
+              "rss_bytes": 1029701632,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5172.35,
+              "rss_bytes": 1029767168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6205.08,
+              "rss_bytes": 1029619712,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7228.71,
+              "rss_bytes": 1029734400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8259.26,
+              "rss_bytes": 1905213440,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.5549999997019768,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1917059072,
+            "first_quartile_median_rss_bytes": 508076032,
+            "last_quartile_median_rss_bytes": 1474576384,
+            "growth_bytes": 966500352
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.64,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040.14,
+              "rss_bytes": 1014448128,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2065.13,
+              "rss_bytes": 1015529472,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3100.43,
+              "rss_bytes": 1031553024,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4138.49,
+              "rss_bytes": 1032126464,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5166.29,
+              "rss_bytes": 1032192000,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6200.57,
+              "rss_bytes": 1031979008,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7237.33,
+              "rss_bytes": 1032093696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8254.23,
+              "rss_bytes": 1917059072,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.8149999976158142,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1921630208,
+            "first_quartile_median_rss_bytes": 508829696,
+            "last_quartile_median_rss_bytes": 1477378048,
+            "growth_bytes": 968548352
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.34,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.52,
+              "rss_bytes": 1015955456,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2082.19,
+              "rss_bytes": 1016561664,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3113.84,
+              "rss_bytes": 1031946240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4147.88,
+              "rss_bytes": 1033093120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5183.04,
+              "rss_bytes": 1033191424,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6212.91,
+              "rss_bytes": 1032994816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7239.76,
+              "rss_bytes": 1033125888,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8252.25,
+              "rss_bytes": 1921630208,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.405000001192093,
+          "process_tree_rss": {
+            "sample_count": 9,
+            "peak_rss_bytes": 1918173184,
+            "first_quartile_median_rss_bytes": 508723200,
+            "last_quartile_median_rss_bytes": 1475518464,
+            "growth_bytes": 966795264
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.01,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1049.13,
+              "rss_bytes": 1015742464,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2083.8,
+              "rss_bytes": 1016315904,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3116.65,
+              "rss_bytes": 1031946240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4149.06,
+              "rss_bytes": 1032880128,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5179.41,
+              "rss_bytes": 1032978432,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6214.45,
+              "rss_bytes": 1032749056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7251.02,
+              "rss_bytes": 1032863744,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8265.57,
+              "rss_bytes": 1918173184,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 7233.945000000298,
+            "witness_ms": 50.11500000208616,
+            "prove_ms": 608.679999999702,
+            "verify_ms": 8.450000002980232,
+            "end_to_end_ms": 7901.190000005066
+          },
+          {
+            "artifact_load_ms": 7228.740000002086,
+            "witness_ms": 48.850000001490116,
+            "prove_ms": 591.8149999976158,
+            "verify_ms": 8.409999996423721,
+            "end_to_end_ms": 7877.814999997616
+          },
+          {
+            "artifact_load_ms": 7246.265000000596,
+            "witness_ms": 49.82999999821186,
+            "prove_ms": 610.054999999702,
+            "verify_ms": 10.765000000596046,
+            "end_to_end_ms": 7916.914999999106
+          },
+          {
+            "artifact_load_ms": 7238.009999997914,
+            "witness_ms": 53.270000003278255,
+            "prove_ms": 610.2100000008941,
+            "verify_ms": 8.490000002086163,
+            "end_to_end_ms": 7909.980000004172
+          },
+          {
+            "artifact_load_ms": 7242.109999999404,
+            "witness_ms": 50.50500000268221,
+            "prove_ms": 578.4200000017881,
+            "verify_ms": 8.359999999403954,
+            "end_to_end_ms": 7879.395000003278
+          },
+          {
+            "artifact_load_ms": 7238.02499999851,
+            "witness_ms": 53.230000004172325,
+            "prove_ms": 661.3899999931455,
+            "verify_ms": 8.515000000596046,
+            "end_to_end_ms": 7961.159999996424
+          },
+          {
+            "artifact_load_ms": 7229.010000005364,
+            "witness_ms": 48.49000000208616,
+            "prove_ms": 586.2999999970198,
+            "verify_ms": 8.450000002980232,
+            "end_to_end_ms": 7872.250000007451
+          },
+          {
+            "artifact_load_ms": 7245.35000000149,
+            "witness_ms": 48.80499999970198,
+            "prove_ms": 588.1550000011921,
+            "verify_ms": 8.390000000596046,
+            "end_to_end_ms": 7890.70000000298
+          },
+          {
+            "artifact_load_ms": 7227.340000003576,
+            "witness_ms": 49.30499999970198,
+            "prove_ms": 585.859999999404,
+            "verify_ms": 8.25,
+            "end_to_end_ms": 7870.755000002682
+          },
+          {
+            "artifact_load_ms": 7245.809999994934,
+            "witness_ms": 50.28000000119209,
+            "prove_ms": 589.5649999976158,
+            "verify_ms": 8.364999994635582,
+            "end_to_end_ms": 7894.019999988377
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 7238.02,
+              "ci95_ms": [
+                7229.01,
+                7245.35
+              ]
+            },
+            "p95": {
+              "ms": 7246.06,
+              "ci95_ms": [
+                7242.05,
+                7246.27
+              ]
+            },
+            "p99": {
+              "ms": 7246.22,
+              "ci95_ms": [
+                7242.11,
+                7246.27
+              ]
+            },
+            "min_ms": 7227.34,
+            "max_ms": 7246.27,
+            "mean_ms": 7237.46
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 49.97,
+              "ci95_ms": [
+                48.85,
+                51.76
+              ]
+            },
+            "p95": {
+              "ms": 53.25,
+              "ci95_ms": [
+                50.28,
+                53.27
+              ]
+            },
+            "p99": {
+              "ms": 53.27,
+              "ci95_ms": [
+                50.47,
+                53.27
+              ]
+            },
+            "min_ms": 48.49,
+            "max_ms": 53.27,
+            "mean_ms": 50.27
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 590.69,
+              "ci95_ms": [
+                586.3,
+                610.05
+              ]
+            },
+            "p95": {
+              "ms": 638.36,
+              "ci95_ms": [
+                601.85,
+                661.39
+              ]
+            },
+            "p99": {
+              "ms": 656.78,
+              "ci95_ms": [
+                608.55,
+                661.39
+              ]
+            },
+            "min_ms": 578.42,
+            "max_ms": 661.39,
+            "mean_ms": 601.04
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 8.43,
+              "ci95_ms": [
+                8.36,
+                8.49
+              ]
+            },
+            "p95": {
+              "ms": 9.75,
+              "ci95_ms": [
+                8.45,
+                10.77
+              ]
+            },
+            "p99": {
+              "ms": 10.56,
+              "ci95_ms": [
+                8.45,
+                10.77
+              ]
+            },
+            "min_ms": 8.25,
+            "max_ms": 10.77,
+            "mean_ms": 8.64
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 7892.36,
+              "ci95_ms": [
+                7877.81,
+                7909.98
+              ]
+            },
+            "p95": {
+              "ms": 7941.25,
+              "ci95_ms": [
+                7901.3,
+                7961.16
+              ]
+            },
+            "p99": {
+              "ms": 7957.18,
+              "ci95_ms": [
+                7901.19,
+                7961.16
+              ]
+            },
+            "min_ms": 7870.76,
+            "max_ms": 7961.16,
+            "mean_ms": 7897.42
+          }
+        }
+      }
+    },
+    "merge_k2": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 3271902,
+          "sha256": "82ea90465a1d2f1f2ca9f16385e3d43d0e6b9471e28a05092c5f610e4de8d4da"
+        },
+        "zkey": {
+          "bytes": 11758632,
+          "sha256": "f1dc24d9ab84ea452439804b4051c301af47754a66bf68d6a898c831196db279"
+        },
+        "verification_key": {
+          "bytes": 3836,
+          "sha256": "72432a3beb1f3cb26d039cfbcf59e29a2e67e15a5149b002410c7350016ada4d"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 631732,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 654154,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.1499999985098839,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1030225920,
+          "first_quartile_median_rss_bytes": 1736704,
+          "last_quartile_median_rss_bytes": 1027096576,
+          "growth_bytes": 1025359872
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 12.58,
+            "rss_bytes": 1736704,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1034.41,
+            "rss_bytes": 995475456,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2068.64,
+            "rss_bytes": 996048896,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3103.5,
+            "rss_bytes": 1030225920,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4124.73,
+            "rss_bytes": 1027096576,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1950000002980232,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2310012928,
+            "first_quartile_median_rss_bytes": 1014857728,
+            "last_quartile_median_rss_bytes": 1033535488,
+            "growth_bytes": 18677760
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.58,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.4,
+              "rss_bytes": 1014857728,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2080.68,
+              "rss_bytes": 1015939072,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.71,
+              "rss_bytes": 1032011776,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4131.78,
+              "rss_bytes": 1032945664,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5165.74,
+              "rss_bytes": 1032994816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6191.24,
+              "rss_bytes": 1032814592,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7223.39,
+              "rss_bytes": 1032929280,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8258.75,
+              "rss_bytes": 1032847360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9295.87,
+              "rss_bytes": 1033011200,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10326.76,
+              "rss_bytes": 1033191424,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11361.66,
+              "rss_bytes": 1033338880,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12397.09,
+              "rss_bytes": 1033535488,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13506.49,
+              "rss_bytes": 2310012928,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2100000008940697,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2363064320,
+            "first_quartile_median_rss_bytes": 1011957760,
+            "last_quartile_median_rss_bytes": 1030979584,
+            "growth_bytes": 19021824
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.46,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.36,
+              "rss_bytes": 1011957760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2071.56,
+              "rss_bytes": 1013284864,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3096.59,
+              "rss_bytes": 1029521408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4131.66,
+              "rss_bytes": 1030356992,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5169.54,
+              "rss_bytes": 1030406144,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6193.53,
+              "rss_bytes": 1030291456,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7227.4,
+              "rss_bytes": 1030422528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8253.05,
+              "rss_bytes": 1030291456,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9279.76,
+              "rss_bytes": 1030438912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10303.2,
+              "rss_bytes": 1030537216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11338.32,
+              "rss_bytes": 1030766592,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12370.22,
+              "rss_bytes": 1030979584,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13564.22,
+              "rss_bytes": 2363064320,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.339999996125698,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2312028160,
+            "first_quartile_median_rss_bytes": 1014710272,
+            "last_quartile_median_rss_bytes": 1033273344,
+            "growth_bytes": 18563072
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.98,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040,
+              "rss_bytes": 1014710272,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2071.12,
+              "rss_bytes": 1015316480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3094.15,
+              "rss_bytes": 1031782400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4123.32,
+              "rss_bytes": 1032683520,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5157.6,
+              "rss_bytes": 1032732672,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6190.02,
+              "rss_bytes": 1032601600,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7219.68,
+              "rss_bytes": 1032683520,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8255.59,
+              "rss_bytes": 1032568832,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9288.93,
+              "rss_bytes": 1032765440,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10322.28,
+              "rss_bytes": 1032847360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11357.76,
+              "rss_bytes": 1033060352,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12378.12,
+              "rss_bytes": 1033273344,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13538.63,
+              "rss_bytes": 2312028160,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3200000002980232,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2358640640,
+            "first_quartile_median_rss_bytes": 1013350400,
+            "last_quartile_median_rss_bytes": 1031454720,
+            "growth_bytes": 18104320
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.37,
+              "rss_bytes": 1687552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1044.06,
+              "rss_bytes": 1013350400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2075.42,
+              "rss_bytes": 1013989376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3101.45,
+              "rss_bytes": 1029668864,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4135.05,
+              "rss_bytes": 1030864896,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5162.59,
+              "rss_bytes": 1030914048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6200.66,
+              "rss_bytes": 1030701056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7223.68,
+              "rss_bytes": 1030815744,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8255.94,
+              "rss_bytes": 1030733824,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9290.49,
+              "rss_bytes": 1030914048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10321.98,
+              "rss_bytes": 1031012352,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11356.39,
+              "rss_bytes": 1031241728,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12393.93,
+              "rss_bytes": 1031454720,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13499.42,
+              "rss_bytes": 2358640640,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3150000050663948,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2380120064,
+            "first_quartile_median_rss_bytes": 1015431168,
+            "last_quartile_median_rss_bytes": 1033306112,
+            "growth_bytes": 17874944
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 12.24,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.82,
+              "rss_bytes": 1015431168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2079.91,
+              "rss_bytes": 1016037376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3112.61,
+              "rss_bytes": 1031831552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4142.81,
+              "rss_bytes": 1032732672,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5175.48,
+              "rss_bytes": 1032781824,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6204.11,
+              "rss_bytes": 1032585216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7240.37,
+              "rss_bytes": 1032699904,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8273.99,
+              "rss_bytes": 1032617984,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9306.35,
+              "rss_bytes": 1032749056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10335.53,
+              "rss_bytes": 1032945664,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11367.79,
+              "rss_bytes": 1033093120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12402.34,
+              "rss_bytes": 1033306112,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13495.08,
+              "rss_bytes": 2380120064,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.375,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2369044480,
+            "first_quartile_median_rss_bytes": 1017069568,
+            "last_quartile_median_rss_bytes": 1035255808,
+            "growth_bytes": 18186240
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.29,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1036.34,
+              "rss_bytes": 1017069568,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2067.64,
+              "rss_bytes": 1017643008,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3093.02,
+              "rss_bytes": 1033732096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4121.65,
+              "rss_bytes": 1034633216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5151.87,
+              "rss_bytes": 1034682368,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6187.9,
+              "rss_bytes": 1034469376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7222.19,
+              "rss_bytes": 1034584064,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8247.73,
+              "rss_bytes": 1034502144,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9281.39,
+              "rss_bytes": 1034682368,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10316.52,
+              "rss_bytes": 1034813440,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11346.12,
+              "rss_bytes": 1035042816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12377.75,
+              "rss_bytes": 1035255808,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13473.45,
+              "rss_bytes": 2369044480,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.1700000017881393,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2299101184,
+            "first_quartile_median_rss_bytes": 1013841920,
+            "last_quartile_median_rss_bytes": 1032388608,
+            "growth_bytes": 18546688
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.96,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1044.95,
+              "rss_bytes": 1013841920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2070.28,
+              "rss_bytes": 1015185408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3096.88,
+              "rss_bytes": 1030668288,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4132.44,
+              "rss_bytes": 1031815168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5170.49,
+              "rss_bytes": 1031897088,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6197.56,
+              "rss_bytes": 1031684096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7228.84,
+              "rss_bytes": 1031815168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8266.74,
+              "rss_bytes": 1031700480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9300.72,
+              "rss_bytes": 1031864320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10337.1,
+              "rss_bytes": 1032044544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11371.51,
+              "rss_bytes": 1032192000,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12407.93,
+              "rss_bytes": 1032388608,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13485.38,
+              "rss_bytes": 2299101184,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.024999998509884,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2292023296,
+            "first_quartile_median_rss_bytes": 1014038528,
+            "last_quartile_median_rss_bytes": 1032241152,
+            "growth_bytes": 18202624
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.32,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.37,
+              "rss_bytes": 1014038528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2074.7,
+              "rss_bytes": 1014661120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3104.43,
+              "rss_bytes": 1030602752,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4138.79,
+              "rss_bytes": 1031700480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5172.73,
+              "rss_bytes": 1031766016,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6208.07,
+              "rss_bytes": 1031536640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7245.79,
+              "rss_bytes": 1031651328,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8269.27,
+              "rss_bytes": 1031569408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9303.37,
+              "rss_bytes": 1031733248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10337.13,
+              "rss_bytes": 1031864320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11360.38,
+              "rss_bytes": 1032060928,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12388.98,
+              "rss_bytes": 1032241152,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13484.18,
+              "rss_bytes": 2292023296,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.2899999991059303,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2325889024,
+            "first_quartile_median_rss_bytes": 1015218176,
+            "last_quartile_median_rss_bytes": 1035157504,
+            "growth_bytes": 19939328
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.93,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.32,
+              "rss_bytes": 1015218176,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.52,
+              "rss_bytes": 1015758848,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.1,
+              "rss_bytes": 1033666560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4136.76,
+              "rss_bytes": 1034584064,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5171.48,
+              "rss_bytes": 1034665984,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6203.85,
+              "rss_bytes": 1034518528,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7238.37,
+              "rss_bytes": 1034633216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8272.8,
+              "rss_bytes": 1034485760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9289.86,
+              "rss_bytes": 1034649600,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10322.63,
+              "rss_bytes": 1034797056,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11354.25,
+              "rss_bytes": 1034977280,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12390.67,
+              "rss_bytes": 1035157504,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13471.79,
+              "rss_bytes": 2325889024,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3999999985098839,
+          "process_tree_rss": {
+            "sample_count": 14,
+            "peak_rss_bytes": 2319728640,
+            "first_quartile_median_rss_bytes": 1014136832,
+            "last_quartile_median_rss_bytes": 1032962048,
+            "growth_bytes": 18825216
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.62,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1050.61,
+              "rss_bytes": 1014136832,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2084.77,
+              "rss_bytes": 1015283712,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3107.9,
+              "rss_bytes": 1031258112,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4142.52,
+              "rss_bytes": 1032388608,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5174.77,
+              "rss_bytes": 1032486912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6205.73,
+              "rss_bytes": 1032241152,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7237.99,
+              "rss_bytes": 1032355840,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8271.31,
+              "rss_bytes": 1032306688,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9305.99,
+              "rss_bytes": 1032454144,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10340.29,
+              "rss_bytes": 1032650752,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11366.05,
+              "rss_bytes": 1032781824,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12397.69,
+              "rss_bytes": 1032962048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13482.89,
+              "rss_bytes": 2319728640,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 12072.314999997616,
+            "witness_ms": 55.92499999701977,
+            "prove_ms": 1038.3650000020862,
+            "verify_ms": 8.824999995529652,
+            "end_to_end_ms": 13175.429999992251
+          },
+          {
+            "artifact_load_ms": 12082.265000000596,
+            "witness_ms": 59.5350000038743,
+            "prove_ms": 1062.234999999404,
+            "verify_ms": 9.100000001490116,
+            "end_to_end_ms": 13213.135000005364
+          },
+          {
+            "artifact_load_ms": 12073.379999995232,
+            "witness_ms": 57.71000000089407,
+            "prove_ms": 1036.8299999982119,
+            "verify_ms": 9.32999999821186,
+            "end_to_end_ms": 13177.24999999255
+          },
+          {
+            "artifact_load_ms": 12078.92500000447,
+            "witness_ms": 54.854999996721745,
+            "prove_ms": 1038.1899999976158,
+            "verify_ms": 8.365000002086163,
+            "end_to_end_ms": 13180.335000000894
+          },
+          {
+            "artifact_load_ms": 12070.625,
+            "witness_ms": 54.92999999970198,
+            "prove_ms": 1049.8650000020862,
+            "verify_ms": 8.740000002086163,
+            "end_to_end_ms": 13184.160000003874
+          },
+          {
+            "artifact_load_ms": 12060.92499999702,
+            "witness_ms": 50.32999999821186,
+            "prove_ms": 1023.1150000020862,
+            "verify_ms": 8.899999998509884,
+            "end_to_end_ms": 13143.269999995828
+          },
+          {
+            "artifact_load_ms": 12075.045000001788,
+            "witness_ms": 54.70000000298023,
+            "prove_ms": 1036.8099999949336,
+            "verify_ms": 8.619999997317791,
+            "end_to_end_ms": 13175.17499999702
+          },
+          {
+            "artifact_load_ms": 12076.60000000149,
+            "witness_ms": 56.20499999821186,
+            "prove_ms": 1020.2599999979138,
+            "verify_ms": 8.424999997019768,
+            "end_to_end_ms": 13161.489999994636
+          },
+          {
+            "artifact_load_ms": 12075.989999994636,
+            "witness_ms": 52.45499999821186,
+            "prove_ms": 1032.6599999964237,
+            "verify_ms": 8.700000002980232,
+            "end_to_end_ms": 13169.804999992251
+          },
+          {
+            "artifact_load_ms": 12078.655000001192,
+            "witness_ms": 54.59000000357628,
+            "prove_ms": 1031.7700000032783,
+            "verify_ms": 8.625,
+            "end_to_end_ms": 13173.640000008047
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 12075.52,
+              "ci95_ms": [
+                12072.31,
+                12078.66
+              ]
+            },
+            "p95": {
+              "ms": 12080.76,
+              "ci95_ms": [
+                12077.02,
+                12082.27
+              ]
+            },
+            "p99": {
+              "ms": 12081.96,
+              "ci95_ms": [
+                12076.6,
+                12082.27
+              ]
+            },
+            "min_ms": 12060.92,
+            "max_ms": 12082.27,
+            "mean_ms": 12074.47
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 54.89,
+              "ci95_ms": [
+                53.58,
+                56.32
+              ]
+            },
+            "p95": {
+              "ms": 58.71,
+              "ci95_ms": [
+                55.63,
+                59.54
+              ]
+            },
+            "p99": {
+              "ms": 59.37,
+              "ci95_ms": [
+                55.92,
+                59.54
+              ]
+            },
+            "min_ms": 50.33,
+            "max_ms": 59.54,
+            "mean_ms": 55.12
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 1036.82,
+              "ci95_ms": [
+                1029.96,
+                1044.03
+              ]
+            },
+            "p95": {
+              "ms": 1056.67,
+              "ci95_ms": [
+                1038.19,
+                1062.23
+              ]
+            },
+            "p99": {
+              "ms": 1061.12,
+              "ci95_ms": [
+                1038.19,
+                1062.23
+              ]
+            },
+            "min_ms": 1020.26,
+            "max_ms": 1062.23,
+            "mean_ms": 1037.01
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 8.72,
+              "ci95_ms": [
+                8.56,
+                8.96
+              ]
+            },
+            "p95": {
+              "ms": 9.23,
+              "ci95_ms": [
+                8.82,
+                9.33
+              ]
+            },
+            "p99": {
+              "ms": 9.31,
+              "ci95_ms": [
+                8.82,
+                9.33
+              ]
+            },
+            "min_ms": 8.37,
+            "max_ms": 9.33,
+            "mean_ms": 8.76
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 13175.3,
+              "ci95_ms": [
+                13168.33,
+                13180.7
+              ]
+            },
+            "p95": {
+              "ms": 13200.1,
+              "ci95_ms": [
+                13177.25,
+                13213.14
+              ]
+            },
+            "p99": {
+              "ms": 13210.53,
+              "ci95_ms": [
+                13177.25,
+                13213.14
+              ]
+            },
+            "min_ms": 13143.27,
+            "max_ms": 13213.14,
+            "mean_ms": 13175.37
+          }
+        }
+      }
+    },
+    "merge_k4": {
+      "artifacts": {
+        "wasm": {
+          "bytes": 3368545,
+          "sha256": "67d9fae7a69148099b0f83404d8fce329baa713d57e222a7824453bbe4f3ccc0"
+        },
+        "zkey": {
+          "bytes": 22585512,
+          "sha256": "9dd0023db8aeb95c28161c056a116aafc81a586e4166144bda87fa4ce25c8d30"
+        },
+        "verification_key": {
+          "bytes": 4207,
+          "sha256": "63c205fde31240b142e0728b8e5a9ed1bd2b2aeebe9dbae0fcced940a75e80da"
+        }
+      },
+      "warmups": 0,
+      "browser": {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+        "hardware_concurrency": 8,
+        "device_memory_gib": 16,
+        "cross_origin_isolated": true,
+        "prover_threads": 1,
+        "measured_memory_bytes_at_boot": 638782,
+        "measured_memory_source_at_boot": "performance.memory.usedJSHeapSize",
+        "measured_memory_bytes_after": 661204,
+        "measured_memory_source_after": "performance.memory.usedJSHeapSize",
+        "max_main_thread_stall_ms": 1.0499999970197678,
+        "process_tree_rss": {
+          "sample_count": 5,
+          "peak_rss_bytes": 1030488064,
+          "first_quartile_median_rss_bytes": 1703936,
+          "last_quartile_median_rss_bytes": 1027080192,
+          "growth_bytes": 1025376256
+        },
+        "soak_process_tree_rss": null,
+        "process_tree_rss_samples": [
+          {
+            "elapsed_ms": 11.04,
+            "rss_bytes": 1703936,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 1045.92,
+            "rss_bytes": 994541568,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 2076.66,
+            "rss_bytes": 995868672,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 3111.44,
+            "rss_bytes": 1030488064,
+            "phase": "setup"
+          },
+          {
+            "elapsed_ms": 4144.96,
+            "rss_bytes": 1027080192,
+            "phase": "setup"
+          }
+        ]
+      },
+      "cold_browser_sessions": [
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.709999993443489,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2773598208,
+            "first_quartile_median_rss_bytes": 1016102912,
+            "last_quartile_median_rss_bytes": 958283776,
+            "growth_bytes": -57819136
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.57,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.11,
+              "rss_bytes": 1015529472,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2087.78,
+              "rss_bytes": 1016102912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3115.13,
+              "rss_bytes": 1032093696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4147.81,
+              "rss_bytes": 1033027584,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5183.06,
+              "rss_bytes": 1033109504,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6220.53,
+              "rss_bytes": 1032880128,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7251.87,
+              "rss_bytes": 1033011200,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8287,
+              "rss_bytes": 1032912896,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9323.89,
+              "rss_bytes": 1033076736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10350.3,
+              "rss_bytes": 1033240576,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11383.17,
+              "rss_bytes": 1033420800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12418.64,
+              "rss_bytes": 1033617408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13435.81,
+              "rss_bytes": 1039548416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14463.89,
+              "rss_bytes": 1043808256,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15485.34,
+              "rss_bytes": 933199872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16511.61,
+              "rss_bytes": 933347328,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17535.47,
+              "rss_bytes": 929382400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18568.99,
+              "rss_bytes": 929398784,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19607.44,
+              "rss_bytes": 958283776,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20641.61,
+              "rss_bytes": 958283776,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21660.06,
+              "rss_bytes": 1524367360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22689.3,
+              "rss_bytes": 2773598208,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.6099999994039536,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2760097792,
+            "first_quartile_median_rss_bytes": 1018052608,
+            "last_quartile_median_rss_bytes": 964640768,
+            "growth_bytes": -53411840
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.17,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1035.86,
+              "rss_bytes": 1017298944,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2067.78,
+              "rss_bytes": 1018052608,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3096.04,
+              "rss_bytes": 1027932160,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4131.59,
+              "rss_bytes": 1035124736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5167.64,
+              "rss_bytes": 1035206656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6200.27,
+              "rss_bytes": 1035059200,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7236.47,
+              "rss_bytes": 1035075584,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8267.53,
+              "rss_bytes": 1034960896,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9296.1,
+              "rss_bytes": 1035157504,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10331.78,
+              "rss_bytes": 1035288576,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11365.21,
+              "rss_bytes": 1035468800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12395.82,
+              "rss_bytes": 1035665408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13421.97,
+              "rss_bytes": 1041580032,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14441.39,
+              "rss_bytes": 1052246016,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15459.91,
+              "rss_bytes": 935968768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16472.3,
+              "rss_bytes": 935510016,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17499.55,
+              "rss_bytes": 935559168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18537.54,
+              "rss_bytes": 935575552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19574.67,
+              "rss_bytes": 964640768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20607.54,
+              "rss_bytes": 964640768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21622.19,
+              "rss_bytes": 1490042880,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22646.05,
+              "rss_bytes": 2760097792,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.375,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2783608832,
+            "first_quartile_median_rss_bytes": 1014661120,
+            "last_quartile_median_rss_bytes": 960462848,
+            "growth_bytes": -54198272
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.35,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1046.88,
+              "rss_bytes": 1013252096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2076.27,
+              "rss_bytes": 1014661120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3111.64,
+              "rss_bytes": 1025867776,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4143.19,
+              "rss_bytes": 1031684096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5177.78,
+              "rss_bytes": 1031782400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6215.57,
+              "rss_bytes": 1031520256,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7235.65,
+              "rss_bytes": 1031634944,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8273.36,
+              "rss_bytes": 1031536640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9305.49,
+              "rss_bytes": 1031733248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10331.82,
+              "rss_bytes": 1031815168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11363.99,
+              "rss_bytes": 1032044544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12399.21,
+              "rss_bytes": 1032273920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13418.64,
+              "rss_bytes": 1037746176,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14455.4,
+              "rss_bytes": 1049264128,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15477.57,
+              "rss_bytes": 931463168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16511.42,
+              "rss_bytes": 931463168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17542.11,
+              "rss_bytes": 931463168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18576.35,
+              "rss_bytes": 931479552,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19609.71,
+              "rss_bytes": 960462848,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20640.23,
+              "rss_bytes": 960462848,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21655.3,
+              "rss_bytes": 1528610816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22673.2,
+              "rss_bytes": 2783608832,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.5349999964237213,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2723561472,
+            "first_quartile_median_rss_bytes": 1014005760,
+            "last_quartile_median_rss_bytes": 960397312,
+            "growth_bytes": -53608448
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.97,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1043.42,
+              "rss_bytes": 1012613120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2077.5,
+              "rss_bytes": 1014005760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3105.72,
+              "rss_bytes": 1023655936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4133.32,
+              "rss_bytes": 1031110656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5168.81,
+              "rss_bytes": 1031176192,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6204.28,
+              "rss_bytes": 1030914048,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7238.1,
+              "rss_bytes": 1031028736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8270.36,
+              "rss_bytes": 1030963200,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9307.27,
+              "rss_bytes": 1031143424,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10341.75,
+              "rss_bytes": 1031290880,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11375.84,
+              "rss_bytes": 1031503872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12403.84,
+              "rss_bytes": 1031684096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13419.24,
+              "rss_bytes": 1039548416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14442.44,
+              "rss_bytes": 1048117248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15464.31,
+              "rss_bytes": 935165952,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16496.21,
+              "rss_bytes": 931332096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17532.28,
+              "rss_bytes": 931332096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18564.92,
+              "rss_bytes": 931348480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19607,
+              "rss_bytes": 960397312,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20643.11,
+              "rss_bytes": 960397312,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21678.68,
+              "rss_bytes": 1524744192,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22697.58,
+              "rss_bytes": 2723561472,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.7300000041723251,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2749972480,
+            "first_quartile_median_rss_bytes": 1014054912,
+            "last_quartile_median_rss_bytes": 959889408,
+            "growth_bytes": -54165504
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.63,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.04,
+              "rss_bytes": 1013235712,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2081.06,
+              "rss_bytes": 1014054912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3115.41,
+              "rss_bytes": 1023836160,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4150.59,
+              "rss_bytes": 1031503872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5180.47,
+              "rss_bytes": 1031307264,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6214.28,
+              "rss_bytes": 1031028736,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7248.95,
+              "rss_bytes": 1031045120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8276.57,
+              "rss_bytes": 1030979584,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9304.97,
+              "rss_bytes": 1031159808,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10340.95,
+              "rss_bytes": 1031258112,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11370.65,
+              "rss_bytes": 1031471104,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12403.61,
+              "rss_bytes": 1031700480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13420.57,
+              "rss_bytes": 1040302080,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14434.88,
+              "rss_bytes": 1169408000,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15456.18,
+              "rss_bytes": 930758656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16477.09,
+              "rss_bytes": 959053824,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17504.92,
+              "rss_bytes": 930988032,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18538.98,
+              "rss_bytes": 931004416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19572.18,
+              "rss_bytes": 959889408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20607.19,
+              "rss_bytes": 959889408,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21627.79,
+              "rss_bytes": 1467351040,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22667.51,
+              "rss_bytes": 2749972480,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.4049999937415123,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2754150400,
+            "first_quartile_median_rss_bytes": 1018593280,
+            "last_quartile_median_rss_bytes": 964673536,
+            "growth_bytes": -53919744
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.61,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.47,
+              "rss_bytes": 1018019840,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2078.03,
+              "rss_bytes": 1018593280,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3107.65,
+              "rss_bytes": 1028227072,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4146.27,
+              "rss_bytes": 1035468800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5185.06,
+              "rss_bytes": 1035567104,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6213.33,
+              "rss_bytes": 1035337728,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7248.24,
+              "rss_bytes": 1035354112,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8284.7,
+              "rss_bytes": 1035288576,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9317.22,
+              "rss_bytes": 1035452416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10349.9,
+              "rss_bytes": 1035632640,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11384.06,
+              "rss_bytes": 1035796480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12411.72,
+              "rss_bytes": 1036599296,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13426.01,
+              "rss_bytes": 1041301504,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14443.47,
+              "rss_bytes": 1077542912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15466.88,
+              "rss_bytes": 935133184,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16503.02,
+              "rss_bytes": 935559168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17535.87,
+              "rss_bytes": 935608320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18571.21,
+              "rss_bytes": 935624704,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19601.26,
+              "rss_bytes": 964673536,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20635.56,
+              "rss_bytes": 964673536,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21653.07,
+              "rss_bytes": 1504559104,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22670.32,
+              "rss_bytes": 2754150400,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.3900000005960464,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2783248384,
+            "first_quartile_median_rss_bytes": 1018167296,
+            "last_quartile_median_rss_bytes": 964362240,
+            "growth_bytes": -53805056
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.6,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1047.25,
+              "rss_bytes": 1017004032,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2068.61,
+              "rss_bytes": 1018167296,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3097.89,
+              "rss_bytes": 1027719168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4129.42,
+              "rss_bytes": 1035239424,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5164.9,
+              "rss_bytes": 1035321344,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6200.18,
+              "rss_bytes": 1035206656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7234.71,
+              "rss_bytes": 1035272192,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8268.12,
+              "rss_bytes": 1035206656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9304.24,
+              "rss_bytes": 1035386880,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10338.14,
+              "rss_bytes": 1035468800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11375.97,
+              "rss_bytes": 1035714560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12403.48,
+              "rss_bytes": 1035911168,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13438.66,
+              "rss_bytes": 1040957440,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14463.26,
+              "rss_bytes": 1047281664,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15483.96,
+              "rss_bytes": 935133184,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16513.92,
+              "rss_bytes": 937066496,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17545.14,
+              "rss_bytes": 935362560,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18578.51,
+              "rss_bytes": 935378944,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19610.75,
+              "rss_bytes": 964362240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20645.12,
+              "rss_bytes": 964362240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21678.99,
+              "rss_bytes": 1501380608,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22701.72,
+              "rss_bytes": 2783248384,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 1.6400000005960464,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2786951168,
+            "first_quartile_median_rss_bytes": 1014562816,
+            "last_quartile_median_rss_bytes": 964165632,
+            "growth_bytes": -50397184
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.47,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1040.33,
+              "rss_bytes": 1013972992,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2072.79,
+              "rss_bytes": 1014562816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3104.04,
+              "rss_bytes": 1024229376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4137.7,
+              "rss_bytes": 1031684096,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5173.03,
+              "rss_bytes": 1031733248,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6205.97,
+              "rss_bytes": 1031585792,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7239.71,
+              "rss_bytes": 1031700480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8259.44,
+              "rss_bytes": 1031602176,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9294.23,
+              "rss_bytes": 1031782400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10328.59,
+              "rss_bytes": 1031864320,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11363.05,
+              "rss_bytes": 1032110080,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12396.95,
+              "rss_bytes": 1032290304,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13412.04,
+              "rss_bytes": 1038483456,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14427.76,
+              "rss_bytes": 1048657920,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15448.59,
+              "rss_bytes": 939065344,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16469.27,
+              "rss_bytes": 935100416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17502.06,
+              "rss_bytes": 935100416,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18534.99,
+              "rss_bytes": 935116800,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19569.55,
+              "rss_bytes": 964165632,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20601.22,
+              "rss_bytes": 964165632,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21636.87,
+              "rss_bytes": 1425162240,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22655.17,
+              "rss_bytes": 2786951168,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.149999998509884,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2756018176,
+            "first_quartile_median_rss_bytes": 1015758848,
+            "last_quartile_median_rss_bytes": 961527808,
+            "growth_bytes": -54231040
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 10.81,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1045.83,
+              "rss_bytes": 1015119872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2076.58,
+              "rss_bytes": 1015758848,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3111.71,
+              "rss_bytes": 1025097728,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4140.84,
+              "rss_bytes": 1032486912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5173.4,
+              "rss_bytes": 1032552448,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6206.04,
+              "rss_bytes": 1032437760,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7238.99,
+              "rss_bytes": 1032552448,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8268.47,
+              "rss_bytes": 1032404992,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9304.34,
+              "rss_bytes": 1032585216,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10337.31,
+              "rss_bytes": 1032667136,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11371.2,
+              "rss_bytes": 1032896512,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12406.16,
+              "rss_bytes": 1033093120,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13422.61,
+              "rss_bytes": 1095794688,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14443.59,
+              "rss_bytes": 1048952832,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15466.26,
+              "rss_bytes": 934264832,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16492.17,
+              "rss_bytes": 932577280,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17526.13,
+              "rss_bytes": 932626432,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18553.53,
+              "rss_bytes": 932642816,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19586.2,
+              "rss_bytes": 961527808,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20622.37,
+              "rss_bytes": 961527808,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21649.96,
+              "rss_bytes": 1404436480,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22708.02,
+              "rss_bytes": 2756018176,
+              "phase": "setup"
+            }
+          ]
+        },
+        {
+          "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+          "hardware_concurrency": 8,
+          "device_memory_gib": 16,
+          "cross_origin_isolated": true,
+          "prover_threads": 1,
+          "measured_memory_bytes_at_boot": null,
+          "measured_memory_source_at_boot": null,
+          "measured_memory_bytes_after": null,
+          "measured_memory_source_after": null,
+          "max_main_thread_stall_ms": 2.2450000047683716,
+          "process_tree_rss": {
+            "sample_count": 23,
+            "peak_rss_bytes": 2775760896,
+            "first_quartile_median_rss_bytes": 1015398400,
+            "last_quartile_median_rss_bytes": 959823872,
+            "growth_bytes": -55574528
+          },
+          "soak_process_tree_rss": null,
+          "process_tree_rss_samples": [
+            {
+              "elapsed_ms": 11.17,
+              "rss_bytes": 1703936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 1044.23,
+              "rss_bytes": 1014054912,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 2080.31,
+              "rss_bytes": 1015398400,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 3108.33,
+              "rss_bytes": 1023688704,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 4136.97,
+              "rss_bytes": 1030176768,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 5170.38,
+              "rss_bytes": 1030258688,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 6205.48,
+              "rss_bytes": 1029881856,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 7235.67,
+              "rss_bytes": 1029947392,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 8272.23,
+              "rss_bytes": 1029881856,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 9309.48,
+              "rss_bytes": 1030045696,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 10337.47,
+              "rss_bytes": 1030193152,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 11372.86,
+              "rss_bytes": 1030373376,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 12406.95,
+              "rss_bytes": 1030553600,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 13440.94,
+              "rss_bytes": 1036140544,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 14478.84,
+              "rss_bytes": 1038057472,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 15497.02,
+              "rss_bytes": 929005568,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 16521.33,
+              "rss_bytes": 930447360,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 17552.35,
+              "rss_bytes": 930758656,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 18593.32,
+              "rss_bytes": 930775040,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 19623.11,
+              "rss_bytes": 959823872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 20654.92,
+              "rss_bytes": 959823872,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 21672.08,
+              "rss_bytes": 1560231936,
+              "phase": "setup"
+            },
+            {
+              "elapsed_ms": 22695.57,
+              "rss_bytes": 2775760896,
+              "phase": "setup"
+            }
+          ]
+        }
+      ],
+      "warm": {
+        "samples": [],
+        "summary": {}
+      },
+      "cold": {
+        "samples": [
+          {
+            "artifact_load_ms": 20858.994999997318,
+            "witness_ms": 69.74499999731779,
+            "prove_ms": 1833.594999998808,
+            "verify_ms": 8.350000001490116,
+            "end_to_end_ms": 22770.684999994934
+          },
+          {
+            "artifact_load_ms": 20832.489999994636,
+            "witness_ms": 68.68999999761581,
+            "prove_ms": 1827.9850000068545,
+            "verify_ms": 8.575000002980232,
+            "end_to_end_ms": 22737.740000002086
+          },
+          {
+            "artifact_load_ms": 20839.390000000596,
+            "witness_ms": 69.35000000149012,
+            "prove_ms": 1839.039999999106,
+            "verify_ms": 8.25,
+            "end_to_end_ms": 22756.030000001192
+          },
+          {
+            "artifact_load_ms": 20842.045000001788,
+            "witness_ms": 71.51500000059605,
+            "prove_ms": 1861.2550000026822,
+            "verify_ms": 8.45499999821186,
+            "end_to_end_ms": 22783.27000000328
+          },
+          {
+            "artifact_load_ms": 20843.489999994636,
+            "witness_ms": 68.63000000268221,
+            "prove_ms": 1816.7550000026822,
+            "verify_ms": 8.470000006258488,
+            "end_to_end_ms": 22737.34500000626
+          },
+          {
+            "artifact_load_ms": 20824.64500000328,
+            "witness_ms": 69.22999999672174,
+            "prove_ms": 1833.7700000032783,
+            "verify_ms": 8.53999999910593,
+            "end_to_end_ms": 22736.185000002384
+          },
+          {
+            "artifact_load_ms": 20844.259999997914,
+            "witness_ms": 71.83500000089407,
+            "prove_ms": 1830.9899999946356,
+            "verify_ms": 8.380000002682209,
+            "end_to_end_ms": 22755.464999996126
+          },
+          {
+            "artifact_load_ms": 20834.42500000447,
+            "witness_ms": 69.06000000238419,
+            "prove_ms": 1815.5349999964237,
+            "verify_ms": 8.325000002980232,
+            "end_to_end_ms": 22727.34500000626
+          },
+          {
+            "artifact_load_ms": 20850.734999999404,
+            "witness_ms": 69.42999999970198,
+            "prove_ms": 1844.0799999982119,
+            "verify_ms": 8.54500000178814,
+            "end_to_end_ms": 22772.789999999106
+          },
+          {
+            "artifact_load_ms": 20842.484999999404,
+            "witness_ms": 70.97500000149012,
+            "prove_ms": 1888.890000000596,
+            "verify_ms": 8.554999999701977,
+            "end_to_end_ms": 22810.905000001192
+          }
+        ],
+        "summary": {
+          "artifact_load_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 20842.27,
+              "ci95_ms": [
+                20834.43,
+                20847.11
+              ]
+            },
+            "p95": {
+              "ms": 20855.28,
+              "ci95_ms": [
+                20843.49,
+                20858.99
+              ]
+            },
+            "p99": {
+              "ms": 20858.25,
+              "ci95_ms": [
+                20843.49,
+                20858.99
+              ]
+            },
+            "min_ms": 20824.65,
+            "max_ms": 20858.99,
+            "mean_ms": 20841.3
+          },
+          "witness_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 69.39,
+              "ci95_ms": [
+                68.96,
+                70.98
+              ]
+            },
+            "p95": {
+              "ms": 71.69,
+              "ci95_ms": [
+                69.74,
+                71.84
+              ]
+            },
+            "p99": {
+              "ms": 71.81,
+              "ci95_ms": [
+                70.84,
+                71.84
+              ]
+            },
+            "min_ms": 68.63,
+            "max_ms": 71.84,
+            "mean_ms": 69.85
+          },
+          "prove_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 1833.68,
+              "ci95_ms": [
+                1823.87,
+                1850.15
+              ]
+            },
+            "p95": {
+              "ms": 1876.45,
+              "ci95_ms": [
+                1839.04,
+                1888.89
+              ]
+            },
+            "p99": {
+              "ms": 1886.4,
+              "ci95_ms": [
+                1839.04,
+                1888.89
+              ]
+            },
+            "min_ms": 1815.53,
+            "max_ms": 1888.89,
+            "mean_ms": 1839.19
+          },
+          "verify_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 8.46,
+              "ci95_ms": [
+                8.35,
+                8.55
+              ]
+            },
+            "p95": {
+              "ms": 8.57,
+              "ci95_ms": [
+                8.52,
+                8.58
+              ]
+            },
+            "p99": {
+              "ms": 8.57,
+              "ci95_ms": [
+                8.54,
+                8.58
+              ]
+            },
+            "min_ms": 8.25,
+            "max_ms": 8.58,
+            "mean_ms": 8.44
+          },
+          "end_to_end_ms": {
+            "count": 10,
+            "p50": {
+              "ms": 22755.75,
+              "ci95_ms": [
+                22737.35,
+                22776.98
+              ]
+            },
+            "p95": {
+              "ms": 22798.47,
+              "ci95_ms": [
+                22765.25,
+                22810.91
+              ]
+            },
+            "p99": {
+              "ms": 22808.42,
+              "ci95_ms": [
+                22770.68,
+                22810.91
+              ]
+            },
+            "min_ms": 22727.35,
+            "max_ms": 22810.91,
+            "mean_ms": 22758.78
+          }
+        }
+      }
+    }
+  }
+}
