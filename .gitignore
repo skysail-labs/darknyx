@@ -76,3 +76,5 @@ precomputed_*.bin
 # Hyperliquid perp darkpool — its OWN nested git repo; kept out of this repo's
 # history entirely (open a separate Claude session from hl-perp/ for that work).
 hl-perp/
+# Local client-proving benchmark output (reviewed reports live under docs/benchmarks).
+packages/client-prover-bench/results/

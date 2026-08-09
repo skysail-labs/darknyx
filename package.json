@@ -11,7 +11,10 @@
     "build:circuits": "bash scripts/build-circuits.sh",
     "setup:ptau": "bash scripts/download-ptau.sh",
     "test:sdk": "npm -w @darknyx/sdk run test",
-    "test:prover": "npm -w @darknyx/web-zk-prover run test",
+    "test:prover": "npm -w @darknyx/client-prover-bench run test",
+    "bench:client-prover:node": "npm -w @darknyx/client-prover-bench run bench:node --",
+    "bench:client-prover:browser": "npm -w @darknyx/client-prover-bench run bench:browser --",
+    "bench:client-prover:native": "npm -w @darknyx/client-prover-bench run bench:native --",
     "check:brand": "bash scripts/check-brand-namespace.sh",
     "typecheck": "tsc -b packages",
     "format": "prettier --write \"packages/**/*.{ts,tsx,json}\""

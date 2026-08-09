@@ -25,6 +25,8 @@ import {
   ownerCommitment,
   pubkeyToFrPair,
 } from "../utxo/note.js";
+import { deriveNoteUseTag } from "../utxo/note-use.js";
+import { bn254ToBE32 } from "../keys/key-generators.js";
 import { merkleTreePda } from "../idl/vault-client.js";
 import { buildOrder } from "../orders/build-order.js";
 import type {
@@ -246,7 +248,9 @@ export function nodeValidInputProver(artifacts: {
     if (params.amount <= 0n || params.amount > 0xffff_ffff_ffff_ffffn) {
       throw new Error("VALID_INPUT amount must be a positive u64");
     }
-    // Recompute the note commitment from the opening (a circuit public input).
+    // Recompute the private Merkle leaf, then derive the circuit's public
+    // consume handle. Both are 32 bytes; passing the commitment here compiles
+    // but targets the pre-note-use-tag circuit interface.
     const owner = await ownerCommitment(
       params.spendingKey,
       params.ownerCommitmentBlinding,
@@ -257,10 +261,14 @@ export function nodeValidInputProver(artifacts: {
       ownerCommitment: owner,
       innerHash: params.innerHash,
     });
+    const noteUseTagBE = await deriveNoteUseTag(
+      commitmentBE,
+      bn254ToBE32(params.innerHash),
+    );
     const [mintLo, mintHi] = pubkeyToFrPair(params.tokenMint);
     const inputs = {
       merkleRoot: toBigIntBE(params.witness.merkleRoot).toString(),
-      noteCommitment: toBigIntBE(commitmentBE).toString(),
+      noteUseTag: toBigIntBE(noteUseTagBE).toString(),
       tokenMint: [mintLo.toString(), mintHi.toString()],
       amount: params.amount.toString(),
       spendingKey: params.spendingKey.toString(),
@@ -285,10 +293,26 @@ export function nodeValidInputProver(artifacts: {
       artifacts.wasmPath,
       artifacts.zkeyPath,
     );
-    const { proof: onchain } = formatGroth16ForOnChain(
+    const { proof: onchain, publicInputsBE } = formatGroth16ForOnChain(
       proof as never,
       publicSignals as never,
     );
+    const expected = [
+      params.witness.merkleRoot,
+      noteUseTagBE,
+      bn254ToBE32(mintLo),
+      bn254ToBE32(mintHi),
+    ];
+    if (
+      publicInputsBE.length !== expected.length ||
+      publicInputsBE.some(
+        (value, index) =>
+          value.length !== expected[index].length ||
+          value.some((byte, offset) => byte !== expected[index][offset]),
+      )
+    ) {
+      throw new Error("VALID_INPUT public-input ordering mismatch");
+    }
     // valid_input_proof = pi_a ‖ pi_b ‖ pi_c (256 bytes).
     const proofBytes = new Uint8Array(256);
     proofBytes.set(onchain.piA, 0);
