@@ -1,0 +1,13 @@
+{
+  "name": "@darknyx/browser-custody-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Decision-grade WebAuthn PRF browser-custody prototype for Darknyx",
+  "scripts": {
+    "test": "node src/browser-runner.mjs"
+  },
+  "dependencies": {
+    "scrypt-js": "3.0.1"
+  }
+}

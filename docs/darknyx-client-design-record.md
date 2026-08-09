@@ -1,8 +1,9 @@
 # Darknyx Client — design record and implementation plan
 
-> Status: **ACTIVE DESIGN RECORD — Phase 0 foundation and Apple M3 baseline
-> complete; physical x86, custody, firm-up, MM-demand, and trader evidence are
-> still open.**
+> Status: **ACTIVE DESIGN RECORD — Phase 0 foundation, Apple M3 proving, and the
+> automated browser-custody mechanism spike are complete; physical x86,
+> physical-authenticator/wallet qualification, firm-up, MM-demand, and trader
+> evidence are still open.**
 >
 > Supersedes the August 2026 native-first client notes. Their product
 > decomposition, security boundaries and MM framing are carried forward; their
@@ -318,7 +319,8 @@ was 1,984.94 / 2,070.53 / 2,095.96 ms. All 10 Mbps artifact gates passed, and a
 1,006-proof Chrome soak degraded 5.62% over ten minutes. See
 [`docs/benchmarks/client-proving/results/2026-08-10-apple-m3/README.md`](benchmarks/client-proving/results/2026-08-10-apple-m3/README.md).
 This closes the Apple performance leg only. The physical x86 memory gate and I6
-custody work still block D1; G4/G5 and I3/I7 still block later product choices.
+physical-authenticator, wallet-under-COOP/COEP, and focused custody-review work
+still block D1; G4/G5 and I3/I7 still block later product choices.
 
 ### 4.3 Proposed gates **[TARGET]**
 
@@ -667,6 +669,28 @@ service-worker/update rollback, memory lifetime, backup recovery, and an
 adversarial same-origin test. Passing performance alone selects nothing. If the
 review fails, use a signed Tauri shell with native custody/proving and internal
 IPC; do not bridge secrets over localhost HTTP.
+
+The first focused mechanism spike is now **[MEASURED]** in
+[`packages/browser-custody-spike`](../packages/browser-custody-spike) with its
+evidence contract in
+[`docs/benchmarks/browser-custody/README.md`](benchmarks/browser-custody/README.md).
+It provisioned a 64-byte seed inside a Worker, persisted only AES-GCM ciphertext
+in IndexedDB, unlocked through a user-verified WebAuthn PRF credential, rejected
+ciphertext tampering and a non-PRF authenticator, locked on inactivity, and
+round-tripped the existing scrypt N=2^17 backup v2 format across browser and
+Node implementations. The Apple M3 headless-Chrome run measured approximately
+13 seconds for each backup direction, off the main thread.
+
+The adversarial same-origin test also succeeded in recovering the seed after
+the virtual user approved WebAuthn. This is the expected and decisive boundary:
+the browser implementation protects copied at-rest data and keeps secrets out
+of the normal UI API, but it does **not** protect against malicious code served
+by the trusted application origin. Browser-first therefore remains viable only
+under a conventional hardened-dApp threat model. Physical authenticator and
+wallet-under-COOP/COEP qualification, release/update hardening, and the focused
+XSS/supply-chain review remain open before D1 closes. If malicious release
+delivery is in scope, the same typed vault contract moves behind a signed Tauri
+host: normally a Rust module in that host process, not a localhost daemon.
 
 ---
 
