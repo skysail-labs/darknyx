@@ -25,7 +25,8 @@ wss://<gateway-host>/v1/stream
 ```
 
 The socket upgrades **unauthenticated**. Every op except `ping` is rejected until
-a successful `login`:
+a successful `login`. Login must complete within **10 seconds** of opening the
+socket; traffic and pings do not extend that absolute window:
 
 ```json
 { "op": "login", "token": "<access_token>", "cancel_on_disconnect": true }
@@ -41,6 +42,14 @@ To refresh an expiring token, send another `login` on the same socket without
 dropping your subscriptions. The server emits an `auth_expired` reminder about
 60 seconds before expiry.
 
+The venue also caps total sockets and concurrent sockets per account. A full
+venue refuses the HTTP upgrade with `503` plus `Retry-After`; an over-limit
+account receives stream error `4290` and remains unauthenticated. Reuse one
+multiplexed session instead of opening one socket per market or channel. A
+token refresh must retain the same account identity; attempting to switch
+accounts on an authenticated socket returns stream error `4030` and requires a
+new connection.
+
 ## Subscribe to channels
 
 ```json
@@ -55,6 +64,13 @@ dropping your subscriptions. The server emits an `auth_expired` reminder about
 
 `unsubscribe` takes the same `channels` array. Each server push is tagged with a
 top-level `channel` field so you can route it.
+
+Every server frame also carries one connection-global monotonic `seq`. A gap,
+or close code `1011`, means state may have been missed. Reconnect, re-read the
+orders you track, recover notes from chain, refresh the relevant tree snapshot,
+and then resume tailing. A server-side fan-out loss closes every active session
+with `1011`, even if your own consumer was fast, so silence must never be read as
+completeness.
 
 ## Submit orders
 
@@ -81,6 +97,7 @@ reply; later state changes arrive on the `orders` channel.
 
 Send `{ "op": "ping" }` at least every 30 seconds; the server replies
 `{ "op": "pong" }`. A session silent for more than 60 seconds is dropped.
+Send `{ "op": "logout" }` for a clean client-initiated close.
 
 ## What is not served here
 

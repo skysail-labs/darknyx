@@ -64,9 +64,13 @@ rejects the second one outright.
 
 That rejection is deliberate and it is protecting you. A duplicate commitment
 used to be accepted: both deposits moved tokens in, but only one could ever be
-withdrawn, because the consume-once guard is keyed on the commitment. The
-second deposit's tokens were silently unrecoverable, and because the vault was
-over-collateralised rather than under, no solvency alarm fired.
+consumed. Both copies would derive the same note-use tag, so the first spend
+would create the shared consume-once record and the second copy would be
+unusable. The duplicate-deposit guard is therefore still keyed on the public
+commitment, even though later note use is keyed on the unlinkable tag. Without
+that guard, the second deposit's tokens would be silently unrecoverable and,
+because the vault was over-collateralised rather than under, no solvency alarm
+would fire.
 
 The realistic way to hit this is not malice but a **seed-only restore**: nothing
 on-chain records how far your `depositIndex` has advanced, so a client rebuilt
@@ -81,8 +85,10 @@ chain history. During recovery, the client:
 
 1. re-derives the wallet's hidden owner commitment from the seed;
 2. reads the public recovery nonce from the deposit instruction;
-3. derives the hidden deposit inner hash from those two values; and
-4. reconstructs and verifies the note commitment.
+3. re-derives the note-specific secret from the seed and recovery nonce;
+4. derives the hidden deposit inner hash from the owner commitment, nonce, and
+   note secret; and
+5. reconstructs and verifies the note commitment.
 
 Keep a local note store for fast startup, but it is a cache rather than the only
 copy of the deposit opening. Use the versioned authenticated seed-backup format;

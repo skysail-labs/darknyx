@@ -72,6 +72,7 @@ reconcile after reconnecting.
 | `POST` | `/admin/accounts/{api_key}/disable` | admin bearer | Suspend an account immediately |
 | `POST` | `/admin/accounts/{api_key}/enable` | admin bearer | Reinstate a suspended account |
 | `POST` | `/admin/accounts/{api_key}/revoke-tokens` | admin bearer | Invalidate the account's current tokens |
+| `GET/POST/DELETE` | `/admin/drain` | admin bearer | Inspect, begin, or cancel a planned-stop drain |
 | `GET` | `/admin/metrics/settlement` | admin bearer | Bounded settlement queue, throughput, and latency telemetry |
 | `GET` | `/system/status` | public | Liveness / degraded-mode snapshot |
 | `GET` | `/time` | public | Server slot + unix time |
@@ -86,7 +87,9 @@ reconcile after reconnecting.
 | `/v1/stream` | bidirectional | In-band login; framed order operations; `orders`, `fills`, and `tree` subscriptions; cancel-on-disconnect |
 
 Open `/v1/stream` without query credentials and authenticate with an `op: login`
-frame. The SDK multiplexes all channels and order operations on that session.
+frame within 10 seconds. The SDK multiplexes all channels and order operations
+on that session, refreshes tokens in-band, and reconnects/resubscribes when the
+connection drops.
 
 ## Quick start
 
@@ -100,8 +103,9 @@ TOKEN=$(curl -s -X POST "$GATEWAY/auth/token" \
 # 2. Read the markets (public).
 curl -s "$GATEWAY/instruments" | jq .
 
-# 3. Check the venue is healthy before trading.
+# 3. Check venue-wide readiness and the selected market's readiness.
 curl -s "$GATEWAY/system/status" | jq .
+curl -s "$GATEWAY/instruments/SOL-USDC" | jq .trading_enabled
 
 # 4. Place an order. The body carries the collateral-note commitment, the
 #    VALID_INPUT proof, signed viewing key + boot session, and a trading-key

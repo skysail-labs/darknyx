@@ -66,7 +66,7 @@ carries `x-request-id` for support correlation.
 | `404 Not Found` | No such order / batch / instrument. |
 | `409 Conflict` | Duplicate order id, or a replay-protection nonce that did not advance. |
 | `429 Too Many Requests` | Rate limited. Back off and retry. |
-| `503 Service Unavailable` | New trading is paused because a required subsystem or finalized governance view is unavailable, or credential verification is momentarily at capacity. |
+| `503 Service Unavailable` | New trading is paused because a required subsystem or finalized governance view is unavailable; a requested tree shard's mirror is unsafe; or credential verification is momentarily at capacity. |
 
 See [Error Codes](../reference/error-codes.md) for the full catalogue of conditions
 per status.

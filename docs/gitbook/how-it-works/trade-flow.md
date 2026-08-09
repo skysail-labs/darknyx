@@ -49,7 +49,7 @@ Solana transaction. Only the *result* settles.
 | **4. Match** | Enclave | Each market book independently collects crossing orders and clears them at a single **oracle-anchored price** (see [Clearing Price](../trading-concepts/clearing-price.md)). Note-bound owner identity plus trading-key equality prevents accidental self-matches. |
 | **5. Prove** | Enclave | The engine proves asset identity, scaled floor-price arithmetic, conservation, the configured fee, and deterministic output ownership for every active match. Oracle and limit-price policy remain enforced by the attested matcher. |
 | **6. Settle** | Enclave → Vault (L1) | The engine locks inputs, verifies one batch proof, then sends each match independently. Confirmed matches create output notes; ambiguous matches remain reserved; definitive failures are terminal and require a fresh order after unlock. |
-| **7. Notify** | Enclave → Client | Only confirmed matches commit book quantities and publish fills. The orders and fills channels carry lifecycle events and encrypted recovery data; expired batch markers are reclaimed asynchronously. |
+| **7. Notify** | Enclave → Client | Only confirmed matches commit book quantities and publish fills. The orders and fills channels carry lifecycle events and verified change-note memos; encrypted recovery data remains on-chain for cold recovery. Expired batch markers are reclaimed asynchronously. |
 
 ## What is on-chain and what is not
 

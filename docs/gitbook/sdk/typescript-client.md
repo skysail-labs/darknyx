@@ -265,9 +265,11 @@ const client = new DarknyxClient("https://<gateway-host>");
 await client.login(API_KEY, API_SECRET, PASSPHRASE);
 
 const status = await client.systemStatus();
-if (status.degraded) throw new Error("venue degraded, back off");
-
 const markets = await client.getInstruments();
+const market = markets.find((m) => m.symbol === "SOL-USDC");
+if (!status.settle_enabled || !market?.trading_enabled) {
+  throw new Error("SOL-USDC is not ready, back off");
+}
 console.log(markets.map((m) => m.symbol));
 
 // build + place an order (see above), then watch its lifecycle on the streams.
@@ -277,7 +279,9 @@ console.log(markets.map((m) => m.symbol));
 **Verify the engine first**
 
 For the full trust guarantee, verify the enclave's attestation against an
-expected measurement before sending order intent; the SDK ships a helper that
-runs the [attestation chain](../api/transport-and-attestation.md) for you. Skipping it
-gives you a private channel to *a* machine, not a verified one.
+independently approved measurement before sending order intent. The SDK helper
+verifies DCAP, the measured event log, freshness, and the quote-bound signer
+set; your client must also compare that complete set with finalized on-chain
+`VaultConfig.tee_pubkeys`. The reference daemon performs both halves. Skipping
+them gives you a private channel to *a* machine, not a verified one.
 {% endhint %}

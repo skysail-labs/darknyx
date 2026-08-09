@@ -42,7 +42,7 @@ the body.
 |---|---|---|---|
 | `trading_key` | string | Yes | 32-byte hex. Must be the key that placed the order. |
 | `cancel_nonce` | integer | Yes | A nonce bound into the signed cancel body. Must **strictly increase** per trading key. |
-| `session_id` | string | Yes | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. |
+| `session_id` | string | Yes | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. The value is not quote-bound; a substituted value only makes the engine reject the request. |
 | `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body: `{ order_id, trading_key, cancel_nonce, session_id }`. |
 
 The cancel nonce is part of the signed bytes, so a captured cancel request cannot
