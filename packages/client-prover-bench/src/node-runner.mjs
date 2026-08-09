@@ -152,4 +152,6 @@ if (args.output) {
   const path = await writeReport(report, args.output);
   process.stderr.write(`wrote ${path}\n`);
 }
-process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`, () =>
+  process.exit(0),
+);
