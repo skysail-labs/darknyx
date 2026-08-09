@@ -80,7 +80,8 @@ npm run bench:client-prover:node -- \
 
 Run stable Chrome with ten cold samples and an optional idealized 10 Mbps server
 throttle. Omit `--network-mbps` for latency measurements; use it only for the
-artifact-fetch gate:
+artifact-fetch gate. Throttled mode transfers WASM and zkey sequentially so the
+configured value is one aggregate bandwidth cap, not a per-response multiplier:
 
 ```sh
 npm run bench:client-prover:browser -- \

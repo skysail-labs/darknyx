@@ -188,6 +188,7 @@ async function runCircuit(name) {
         wasm: "/artifacts/circuit.wasm",
         zkey: "/artifacts/circuit_final.zkey",
         verificationKey: "/artifacts/verification_key.json",
+        sequential: networkMbps > 0,
       },
     };
     let finish;

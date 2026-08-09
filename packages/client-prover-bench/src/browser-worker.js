@@ -16,18 +16,21 @@ function waitForSoakStart() {
 
 async function fetchArtifacts(urls) {
   const started = now();
-  await Promise.all([
-    fetch(urls.wasm).then((response) => {
+  const fetchBinary = (url, label) =>
+    fetch(url).then((response) => {
       if (!response.ok)
-        throw new Error(`wasm fetch failed: ${response.status}`);
+        throw new Error(`${label} fetch failed: ${response.status}`);
       return response.arrayBuffer();
-    }),
-    fetch(urls.zkey).then((response) => {
-      if (!response.ok)
-        throw new Error(`zkey fetch failed: ${response.status}`);
-      return response.arrayBuffer();
-    }),
-  ]);
+    });
+  if (urls.sequential) {
+    await fetchBinary(urls.wasm, "wasm");
+    await fetchBinary(urls.zkey, "zkey");
+  } else {
+    await Promise.all([
+      fetchBinary(urls.wasm, "wasm"),
+      fetchBinary(urls.zkey, "zkey"),
+    ]);
+  }
   return now() - started;
 }
 
@@ -95,6 +98,7 @@ self.onmessage = async ({ data }) => {
           wasm: `${urls.wasm}?cold=${nonce}`,
           zkey: `${urls.zkey}?cold=${nonce}`,
           verificationKey: `${urls.verificationKey}?cold=${nonce}`,
+          sequential: urls.sequential,
         }),
       );
       self.postMessage({
