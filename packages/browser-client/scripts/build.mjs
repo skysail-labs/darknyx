@@ -27,4 +27,18 @@ await Promise.all([
     format: "iife",
     outfile: new URL("../dist/vault.worker.js", import.meta.url).pathname,
   }),
+  build({
+    ...shared,
+    entryPoints: [new URL("../src/internal.ts", import.meta.url).pathname],
+    format: "esm",
+    outfile: new URL("../dist/internal.js", import.meta.url).pathname,
+  }),
+  build({
+    ...shared,
+    entryPoints: [
+      new URL("../src/prover/prover.worker.ts", import.meta.url).pathname,
+    ],
+    format: "iife",
+    outfile: new URL("../dist/prover.worker.js", import.meta.url).pathname,
+  }),
 ]);

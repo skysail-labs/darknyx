@@ -35,6 +35,25 @@ below it, shows only its own layer, and stays open until explicitly approved.
   Trusted Types, and fail-closed unsupported-PRF behavior. This is qualification
   evidence for the implementation mechanism, not the still-open physical-device
   or hostile-origin launch gates.
+- **Layer 3 — code complete, review pending:** the internal prover Worker covers
+  all six client circuits from SHA-256-verified bytes described by an
+  Ed25519-signed, release-pinned manifest. It verifies every proof locally and
+  keeps the generic prove channel out of the public package entrypoint. A local
+  Chrome 151 product-bundle pass proved and verified wallet-create, deposit,
+  input, spend, merge K=2, and merge K=4 sequentially with a 26.75 ms maximum
+  UI-thread heartbeat stall. First-use timings (including artifact fetch,
+  hashing, initialisation, witness, prove, and verify) were 0.69 s, 0.25 s,
+  0.86 s, 0.92 s, 1.51 s, and 2.79 s respectively on the Apple M3 host. These
+  are integration evidence, not replacements for the decision-grade warm/cold
+  distributions or the still-open physical x86 gate.
+
+The production Worker currently bundles snarkjs, whose package declares
+GPL-3.0. Before distributing the browser application, obtain a focused license-
+compatibility review against Darknyx's source-available project license and ship
+all required third-party notices/source obligations. The implementation and
+performance choice in this stack is not a legal conclusion; an incompatible
+distribution result is a release blocker or a prover-backend replacement
+trigger.
 
 No product PR in this stack is auto-merged. If a lower layer changes during
 review, fix that branch and rebase its up-stack dependants. Merge the reviewed

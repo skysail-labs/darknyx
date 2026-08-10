@@ -22,6 +22,10 @@ describe("browser custody product boundary", () => {
       new URL("../dist/index.js", import.meta.url),
       "utf8",
     );
+    const proverWorker = await readFile(
+      new URL("../dist/prover.worker.js", import.meta.url),
+      "utf8",
+    );
 
     for (const forbidden of [
       "testOnly",
@@ -31,8 +35,16 @@ describe("browser custody product boundary", () => {
     ]) {
       expect(worker, forbidden).not.toContain(forbidden);
       expect(entry, forbidden).not.toContain(forbidden);
+      expect(proverWorker, forbidden).not.toContain(forbidden);
     }
     expect(worker).toContain("darknyx/master-seed-backup/v2");
     expect(worker).toContain("browser vault is locked");
+    expect(entry).not.toContain("BrowserProverSuite");
+    expect(entry).not.toContain("proveValidInput");
+    expect(proverWorker).toContain("artifact manifest signature is invalid");
+    expect(proverWorker).toContain(
+      "browser proof failed mandatory local verification",
+    );
+    expect(proverWorker).not.toContain("node:");
   });
 });

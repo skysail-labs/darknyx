@@ -17,11 +17,16 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
-    "test": "npm run build && vitest run && node tests/browser-runner.mjs",
+    "test": "npm run test:unit && npm run test:custody && npm run test:prover",
+    "test:unit": "npm run build && vitest run",
+    "test:custody": "node tests/browser-runner.mjs",
+    "test:prover": "node scripts/verify-artifact-payload.mjs && node tests/prover-browser-runner.mjs",
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@darknyx/client-core": "0.1.0",
+    "@darknyx/sdk": "0.1.0",
+    "snarkjs": "^0.7.5",
     "scrypt-js": "3.0.1"
   },
   "devDependencies": {

@@ -79,6 +79,7 @@ jobs:
       daemon: ${{ steps.filter.outputs.daemon }}
       browser_custody: ${{ steps.filter.outputs.browser_custody }}
       browser_client: ${{ steps.filter.outputs.browser_client }}
+      browser_prover: ${{ steps.filter.outputs.browser_prover }}
       ts: ${{ steps.filter.outputs.ts }}
       deps: ${{ steps.filter.outputs.deps }}
     steps:
@@ -119,6 +120,10 @@ jobs:
             circuits:
               - 'circuits/**'
               - 'scripts/ci-build-circuits.sh'
+              - 'packages/browser-client/artifacts/**'
+              - 'packages/browser-client/src/prover/**'
+              - 'packages/browser-client/tests/prover-*'
+              - 'packages/browser-client/scripts/verify-artifact-payload.mjs'
               - 'package.json'
               - 'package-lock.json'
             sdk:
@@ -145,6 +150,18 @@ jobs:
               - 'packages/client-core/**'
               - 'packages/browser-client/**'
               - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/pr-checks.yml'
+            browser_prover:
+              - 'packages/browser-client/artifacts/**'
+              - 'packages/browser-client/src/prover/**'
+              - 'packages/browser-client/src/internal.ts'
+              - 'packages/browser-client/tests/prover-*'
+              - 'packages/browser-client/tests/artifact-manifest.test.ts'
+              - 'packages/browser-client/tests/groth16-format-parity.test.ts'
+              - 'packages/browser-client/scripts/verify-artifact-payload.mjs'
+              - 'packages/browser-client/scripts/build.mjs'
+              - 'packages/browser-client/package.json'
               - 'package-lock.json'
               - '.github/workflows/pr-checks.yml'
             # Any TypeScript, anywhere, plus the configs that decide HOW it is
@@ -256,6 +273,7 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       needs.changes.outputs.circuits == 'true' ||
+      needs.changes.outputs.browser_prover == 'true' ||
       needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
@@ -385,9 +403,17 @@ jobs:
           }
           echo "restored circuit artefacts complete (built: ${built[*]})"
 
-      # Upload the build output for the sdk job. Only the artefacts the
-      # prover tests actually consume: `.wasm` and `.zkey`. We don't
-      # need the `.r1cs` / `.sym` / `verification_key.json` downstream.
+      - name: Export browser verification keys from committed proving keys
+        run: |
+          set -euo pipefail
+          for zkey in circuits/build/*/circuit_final.zkey; do
+            out="$(dirname "$zkey")/verification_key.json"
+            node_modules/.bin/snarkjs zkey export verificationkey "$zkey" "$out"
+          done
+
+      # Upload the build output for SDK and browser-product prover tests. The
+      # browser additionally consumes the exported verification-key JSON and
+      # checks all three artifacts against its committed release payload.
       - name: Upload circuit build artefacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -396,6 +422,7 @@ jobs:
             circuits/build/*/circuit_js/circuit.wasm
             circuits/build/*/circuit_final.zkey
             circuits/build/*/circuit.r1cs
+            circuits/build/*/verification_key.json
           if-no-files-found: error
           retention-days: 1
 
@@ -591,12 +618,12 @@ jobs:
   browser-client:
     name: Browser client — contracts + security boundary
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, circuits]
     if: >-
       always() && (
         github.event_name == 'push' ||
         needs.changes.outputs.browser_client == 'true'
-      )
+      ) && needs.circuits.result != 'failure'
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -615,6 +642,9 @@ jobs:
       - name: Build platform-neutral client core
         run: npm -w @darknyx/client-core run build
 
+      - name: Build browser-safe SDK dependencies
+        run: npm -w @darknyx/sdk run build
+
       - name: Build production browser client
         run: npm -w @darknyx/browser-client run build
 
@@ -627,8 +657,22 @@ jobs:
       - name: Typecheck browser-client tests and boundary assertions
         run: npm -w @darknyx/browser-client run typecheck:tests
 
+      - name: Browser-client unit and bundle-boundary tests
+        run: npm exec -- vitest run --root packages/browser-client
+
       - name: Production browser custody lifecycle
-        run: npm run test:browser-client
+        run: npm -w @darknyx/browser-client run test:custody
+
+      - name: Download circuit build artefacts
+        if: needs.changes.outputs.browser_prover == 'true'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: circuit-build
+          path: circuits/build
+
+      - name: Signed-manifest hashes + all-six browser proofs
+        if: needs.changes.outputs.browser_prover == 'true'
+        run: npm -w @darknyx/browser-client run test:prover
 
   daemon:
     name: Daemon — keystore, lifecycle, attestation (vitest)

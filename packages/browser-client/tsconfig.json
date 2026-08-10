@@ -6,6 +6,6 @@
     "composite": true,
     "types": []
   },
-  "references": [{ "path": "../client-core" }],
+  "references": [{ "path": "../client-core" }, { "path": "../sdk" }],
   "include": ["src/**/*"]
 }
