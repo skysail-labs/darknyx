@@ -1,6 +1,6 @@
 /** Fixed-layout parser for the on-chain mint-pair MarketConfig PDA. */
 
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 import { PublicKey } from "@solana/web3.js";
 
 export const MARKET_CONFIG_ACCOUNT_LEN = 108;
@@ -18,10 +18,9 @@ export interface OnChainMarketConfig {
   bump: number;
 }
 
-const MARKET_CONFIG_DISCRIMINATOR = createHash("sha256")
-  .update("account:MarketConfig")
-  .digest()
-  .subarray(0, 8);
+const MARKET_CONFIG_DISCRIMINATOR = sha256(
+  new TextEncoder().encode("account:MarketConfig"),
+).subarray(0, 8);
 
 function u64(data: Uint8Array, offset: number): bigint {
   return new DataView(

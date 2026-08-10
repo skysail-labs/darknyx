@@ -22,6 +22,10 @@
     "./merkle-root-ring": {
       "types": "./dist/zk/merkle-root-ring.d.ts",
       "default": "./dist/zk/merkle-root-ring.js"
+    },
+    "./browser-attestation": {
+      "types": "./dist/browser-attestation.d.ts",
+      "default": "./dist/browser-attestation.js"
     }
   },
   "files": [

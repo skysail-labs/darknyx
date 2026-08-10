@@ -58,6 +58,16 @@ below it, shows only its own layer, and stays open until explicitly approved.
   backup, recovers a real seed-derived deposit fixture, round-trips encrypted
   inventory, rejects ciphertext tampering, and proves that vault lock revokes
   inventory decrypt access.
+- **Layer 5a — code complete, review pending:** browser venue boot now starts
+  from finalized `VaultConfig`, verifies the DCAP quote against the
+  release-pinned compose hash and governed shard-0 signer, requires exact
+  quote/on-chain signer-set equality, and binds every advertised instrument to
+  its finalized `MarketConfig`. Browser attestation no longer relies on Node
+  crypto polyfills. The browser obtains only a short-lived token from a
+  same-origin, opaque-venue session broker; long-lived CVM credentials stay
+  server-side. Wallet Standard discovery and sign-and-send are constrained to
+  bounded Solana transaction bytes. The visual workspace and typed
+  order/lifecycle composition remain the next stacked Layer 5b change.
 
 The production Worker currently bundles snarkjs, whose package declares
 GPL-3.0. Before distributing the browser application, obtain a focused license-

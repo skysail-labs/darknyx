@@ -14,6 +14,23 @@ origin; origin and release integrity remain part of the browser custody model.
 The package deliberately exports no raw seed, generic signing, arbitrary
 proving, note-opening, or witness API.
 
+The trusted product-composition entrypoint establishes venue identity before it
+requests a trading token. It reads `VaultConfig` and every advertised
+`MarketConfig` at finalized commitment, verifies the TDX quote against the
+release-pinned compose hash and finalized shard-0 key, requires exact equality
+between the quote-bound and governed signer sets, and rejects instrument fields
+that differ from governance. The SDK attestation core uses environment-neutral
+noble SHA-256/SHA-384 primitives; this is a real browser path, not a Node crypto
+polyfill.
+
+The browser never receives a CVM API secret or passphrase. A relative,
+same-origin `/api/darknyx/session` broker maps the release's opaque `venue_id`
+to server-held credentials and returns only a short-lived bearer token. The
+broker endpoint cannot be configured cross-origin. External wallets are
+discovered through Wallet Standard and are used only for bounded, explicitly
+user-approved Solana transactions; they are not the Darknyx note seed or a
+generic message signer.
+
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,
 checks every recovered opening and tag, filters historical ancestors through

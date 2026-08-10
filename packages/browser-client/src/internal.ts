@@ -33,3 +33,19 @@ export type {
   InventoryNote,
   RecoveryReport,
 } from "./inventory/types.js";
+export {
+  bootstrapTrustedVenue,
+  type BootstrapTrustedVenueOptions,
+} from "./venue/trusted-venue.js";
+export { SameOriginSessionBroker } from "./venue/session-broker.js";
+export type {
+  TrustedInstrument,
+  TrustedVenueIdentity,
+  TrustedVenueSession,
+  VenueReleaseConfig,
+  VenueTrustState,
+} from "./venue/types.js";
+export {
+  ExternalWalletController,
+  type ConnectedWalletView,
+} from "./wallet/wallet-standard.js";

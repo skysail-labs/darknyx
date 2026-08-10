@@ -12,7 +12,7 @@
  * unit test. Per-market parameters live in the separate `MarketConfig` PDA.
  */
 
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 import { PublicKey } from "@solana/web3.js";
 
 import { AttestationError } from "./verify-core.js";
@@ -29,10 +29,9 @@ export const NUM_TEE_KEYS_OFFSET = 1258;
 export const NUM_TREES_OFFSET = 1259;
 export const VAULT_CONFIG_ACCOUNT_LEN = 1264;
 
-const VAULT_CONFIG_DISCRIMINATOR = createHash("sha256")
-  .update("account:VaultConfig")
-  .digest()
-  .subarray(0, 8);
+const VAULT_CONFIG_DISCRIMINATOR = sha256(
+  new TextEncoder().encode("account:VaultConfig"),
+).subarray(0, 8);
 
 /** Parse the active `tee_pubkeys` (base58, shard order) from raw account data.
  *  (Derive the account address with `vaultConfigPda` from `idl/vault-client`.) */
