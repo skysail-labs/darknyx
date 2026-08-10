@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import {
+  createHash,
   createCipheriv,
   createDecipheriv,
   randomBytes,
@@ -12,6 +13,18 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PublicKey } from "@solana/web3.js";
+import {
+  bn254ToBE32,
+  buildDepositInstruction,
+  deriveBlindingFactor,
+  deriveDepositInnerHash,
+  deriveNoteSecret,
+  deriveOwnerCommitmentBlinding,
+  deriveSpendingKey,
+  noteCommitmentV2,
+  ownerCommitment,
+} from "@darknyx/sdk";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const candidates =
@@ -29,6 +42,94 @@ if (!chrome) throw new Error("Chrome/Chromium not found; set CHROME_PATH");
 const passphrase = "correct horse battery staple";
 const aad = Buffer.from("darknyx/master-seed-backup/v2");
 const expectedSeed = randomBytes(64);
+const recoveryAmount = 987_654_321n;
+const recoveryProgramId = new PublicKey(
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
+const recoveryPayer = new PublicKey(new Uint8Array(32).fill(0x52));
+const recoveryBaseMint = new Uint8Array(32).fill(0xb1);
+const recoveryQuoteMint = new Uint8Array(32).fill(0x9e);
+
+const concatBytes = (...parts) => {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+};
+
+const u64le = (value) => {
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, value, true);
+  return out;
+};
+
+async function recoveryFixture() {
+  const owner = await ownerCommitment(
+    deriveSpendingKey(expectedSeed),
+    deriveOwnerCommitmentBlinding(expectedSeed),
+  );
+  const nonce = bn254ToBE32(deriveBlindingFactor(expectedSeed, 77n));
+  const inner = await deriveDepositInnerHash(
+    bn254ToBE32(owner),
+    nonce,
+    bn254ToBE32(deriveNoteSecret(expectedSeed, nonce)),
+  );
+  const innerHash = BigInt(`0x${Buffer.from(inner).toString("hex")}`);
+  const commitment = await noteCommitmentV2({
+    tokenMint: recoveryQuoteMint,
+    amount: recoveryAmount,
+    ownerCommitment: owner,
+    innerHash,
+  });
+  const instruction = buildDepositInstruction({
+    programId: recoveryProgramId,
+    treeId: 0,
+    depositor: recoveryPayer,
+    tokenMint: new PublicKey(recoveryQuoteMint),
+    depositorTokenAccount: recoveryPayer,
+    tokenProgramId: recoveryProgramId,
+    amount: recoveryAmount,
+    noteCommitment: commitment,
+    recoveryNonce: nonce,
+    proof: {
+      piA: new Uint8Array(64).fill(1),
+      piB: new Uint8Array(128).fill(2),
+      piC: new Uint8Array(64).fill(3),
+    },
+  });
+  const discriminator = createHash("sha256")
+    .update("event:NoteCreated")
+    .digest()
+    .subarray(0, 8);
+  const event = concatBytes(
+    discriminator,
+    new Uint8Array([0]),
+    u64le(7n),
+    commitment,
+    recoveryQuoteMint,
+    u64le(recoveryAmount),
+    new Uint8Array(32),
+  );
+  return {
+    program_id: recoveryProgramId.toBase58(),
+    base_mint: Buffer.from(recoveryBaseMint).toString("hex"),
+    quote_mint: Buffer.from(recoveryQuoteMint).toString("hex"),
+    amount: recoveryAmount.toString(),
+    transaction: {
+      signature: "browser-recovery-deposit",
+      slot: 101,
+      ix_data: Buffer.from(instruction.data).toString("base64"),
+      logs: [
+        `Program ${recoveryProgramId.toBase58()} invoke [1]`,
+        `Program data: ${Buffer.from(event).toString("base64")}`,
+        `Program ${recoveryProgramId.toBase58()} success`,
+      ],
+    },
+  };
+}
 
 function sealBackup(seed) {
   const salt = randomBytes(16);
@@ -101,6 +202,7 @@ class Cdp {
     this.socket = new WebSocket(url);
     this.pending = new Map();
     this.nextId = 1;
+    this.events = [];
     this.closing = false;
     this.ready = new Promise((resolveReady, rejectReady) => {
       this.socket.onopen = resolveReady;
@@ -110,7 +212,17 @@ class Cdp {
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(String(data));
       const pending = this.pending.get(message.id);
-      if (!pending) return;
+      if (!pending) {
+        if (
+          message.method === "Runtime.exceptionThrown" ||
+          message.method === "Runtime.consoleAPICalled" ||
+          message.method === "Log.entryAdded" ||
+          message.method === "Inspector.targetCrashed"
+        ) {
+          this.events.push(message);
+        }
+        return;
+      }
       this.pending.delete(message.id);
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result ?? {});
@@ -176,12 +288,11 @@ async function terminate(child) {
 
 const page = await readFile(resolve(root, "tests/browser-page.html"));
 const pageScript = await readFile(resolve(root, "tests/browser-page.js"));
-const indexBundle = await readFile(resolve(root, "dist/index.js"));
-const workerBundle = await readFile(resolve(root, "dist/vault.worker.js"));
 const nodeBackup = sealBackup(expectedSeed);
+const browserRecoveryFixture = await recoveryFixture();
 const csp = [
   "default-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
   "connect-src 'self'",
   "worker-src 'self'",
   "base-uri 'none'",
@@ -243,6 +354,7 @@ async function scenario(hasPrf, scenarioName) {
             scenario: scenarioName,
             passphrase,
             node_backup: nodeBackup,
+            recovery: browserRecoveryFixture,
           }),
         );
         return;
@@ -250,12 +362,18 @@ async function scenario(hasPrf, scenarioName) {
       const asset = {
         "/": [page, "text/html; charset=utf-8"],
         "/browser-page.js": [pageScript, "text/javascript; charset=utf-8"],
-        "/dist/index.js": [indexBundle, "text/javascript; charset=utf-8"],
-        "/dist/vault.worker.js": [
-          workerBundle,
-          "text/javascript; charset=utf-8",
-        ],
       }[url.pathname];
+      if (url.pathname.startsWith("/dist/")) {
+        const distRoot = resolve(root, "dist");
+        const assetPath = resolve(root, url.pathname.slice(1));
+        if (!assetPath.startsWith(`${distRoot}/`)) {
+          response.writeHead(404).end();
+          return;
+        }
+        response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+        response.end(await readFile(assetPath));
+        return;
+      }
       if (!asset) {
         response.writeHead(404).end();
         return;
@@ -299,6 +417,8 @@ async function scenario(hasPrf, scenarioName) {
       flatten: true,
     });
     await cdp.send("WebAuthn.enable", { enableUI: false }, sessionId);
+    await cdp.send("Runtime.enable", {}, sessionId);
+    await cdp.send("Log.enable", {}, sessionId);
     await cdp.send(
       "WebAuthn.addVirtualAuthenticator",
       {
@@ -327,7 +447,17 @@ async function scenario(hasPrf, scenarioName) {
       );
     });
     const result = await Promise.race([resultPromise, timeout]);
-    if (!result.ok) throw new Error(result.error);
+    if (!result.ok) {
+      const progress = await cdp.send(
+        "Runtime.evaluate",
+        { expression: "document.querySelector('#status')?.textContent" },
+        sessionId,
+      );
+      throw new Error(
+        `${result.error}; page progress=${progress.result?.value ?? "unknown"}; ` +
+          `browser events=${JSON.stringify(cdp.events.slice(-20))}`,
+      );
+    }
     return { ...result.result, chrome_product: product };
   } catch (error) {
     throw new Error(
@@ -355,6 +485,10 @@ try {
     "ciphertext_tamper_rejected",
     "status_polling_did_not_extend_inactivity",
     "backup_v2_node_to_browser_to_node",
+    "encrypted_inventory_roundtrip",
+    "browser_seed_chain_recovery",
+    "inventory_revoked_on_lock",
+    "inventory_tamper_rejected",
     "busy_during_backup",
     "ui_responsive_during_backup",
     "cross_origin_isolated",

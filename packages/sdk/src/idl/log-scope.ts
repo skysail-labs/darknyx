@@ -45,16 +45,17 @@ const PROGRAM_DATA_PREFIX = "Program data: ";
 export function programEventPayloads(
   logs: readonly string[],
   programId: string,
-): Buffer[] {
+): Uint8Array[] {
   const stack: string[] = [];
-  const out: Buffer[] = [];
+  const out: Uint8Array[] = [];
 
   for (const line of logs) {
     if (line.startsWith(PROGRAM_DATA_PREFIX)) {
       if (stack[stack.length - 1] !== programId) continue;
       try {
+        const decoded = atob(line.slice(PROGRAM_DATA_PREFIX.length).trim());
         out.push(
-          Buffer.from(line.slice(PROGRAM_DATA_PREFIX.length).trim(), "base64"),
+          Uint8Array.from(decoded, (character) => character.charCodeAt(0)),
         );
       } catch {
         // Undecodable payload — skip, same as any unrecognised line.

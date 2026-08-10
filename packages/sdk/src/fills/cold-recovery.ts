@@ -10,15 +10,16 @@
 
 import type { Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 import { anchorDiscriminator } from "../idl/vault-client.js";
+import { programEventPayloads } from "../idl/log-scope.js";
 import {
   bn254ToBE32,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   deriveNoteSecret,
 } from "../keys/key-generators.js";
-import { deriveMergeOutputInnerHash } from "../utxo/merge.js";
+import { deriveMergeOutputInnerHash } from "../utxo/merge-inner.js";
 import { deriveDepositInnerHash } from "../utxo/deposit-inner.js";
 import { noteCommitmentV2, ownerCommitment } from "../utxo/note.js";
 import { deriveNoteUseTag } from "../utxo/note-use.js";
@@ -36,24 +37,24 @@ const DEPOSIT_DISC = anchorDiscriminator("deposit");
 const MERGE_DISC = anchorDiscriminator("merge");
 const NOTE_CREATED_DISC = eventDiscriminator("NoteCreated");
 const NOTE_MERGED_DISC = eventDiscriminator("NoteMerged");
-const PROGRAM_DATA_PREFIX = "Program data: ";
 
 function eventDiscriminator(name: string): Uint8Array {
-  return new Uint8Array(
-    createHash("sha256").update(`event:${name}`).digest().subarray(0, 8),
-  );
+  return sha256(new TextEncoder().encode(`event:${name}`)).slice(0, 8);
 }
 
-const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
+const hex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 const same = (a: Uint8Array, b: Uint8Array): boolean =>
-  Buffer.from(a).equals(Buffer.from(b));
+  a.length === b.length && a.every((value, index) => value === b[index]);
 const isZero = (b: Uint8Array): boolean => b.every((x) => x === 0);
 const ZERO32_BYTES = new Uint8Array(32);
 
 /** Parse a 32-byte hex string, or `null` if it is not exactly that. */
 function fromHex(value: string): Uint8Array | null {
   if (!/^[0-9a-fA-F]{64}$/.test(value)) return null;
-  return Uint8Array.from(Buffer.from(value, "hex"));
+  return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
 }
 
 function be32ToBig(bytes: Uint8Array): bigint {
@@ -66,20 +67,24 @@ function hasDisc(bytes: Uint8Array, disc: Uint8Array): boolean {
   return bytes.length >= 8 && same(bytes.subarray(0, 8), disc);
 }
 
+function readU64LE(bytes: Uint8Array, offset: number): bigint {
+  return new DataView(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  ).getBigUint64(offset, true);
+}
+
 function eventBodies(
   logs: readonly string[],
   discriminator: Uint8Array,
-): Buffer[] {
-  const out: Buffer[] = [];
-  for (const line of logs) {
-    if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
-    let bytes: Buffer;
-    try {
-      bytes = Buffer.from(line.slice(PROGRAM_DATA_PREFIX.length).trim(), "base64");
-    } catch {
-      continue;
+  programId: PublicKey,
+): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  for (const bytes of programEventPayloads(logs, programId.toBase58())) {
+    if (hasDisc(bytes, discriminator)) {
+      out.push(bytes.subarray(8));
     }
-    if (hasDisc(bytes, discriminator)) out.push(bytes.subarray(8));
   }
   return out;
 }
@@ -94,15 +99,18 @@ export interface DepositRecoveryRecord {
 }
 
 /** Decode seed-independent deposit data + its matching NoteCreated event. */
-export function decodeDeposits(tx: RawSettleTx): DepositRecoveryRecord[] {
-  const events = eventBodies(tx.logMessages ?? [], NOTE_CREATED_DISC)
+export function decodeDeposits(
+  tx: RawSettleTx,
+  programId: PublicKey,
+): DepositRecoveryRecord[] {
+  const events = eventBodies(tx.logMessages ?? [], NOTE_CREATED_DISC, programId)
     .filter((body) => body.length >= 1 + 8 + 32 + 32 + 8)
     .map((body) => ({
       treeId: body[0],
-      leafIndex: body.readBigUInt64LE(1),
+      leafIndex: readU64LE(body, 1),
       commitment: Uint8Array.from(body.subarray(9, 41)),
       tokenMint: Uint8Array.from(body.subarray(41, 73)),
-      amount: body.readBigUInt64LE(73),
+      amount: readU64LE(body, 73),
     }));
   const out: DepositRecoveryRecord[] = [];
   for (const data of tx.ixDatas) {
@@ -141,14 +149,17 @@ export interface MergeRecoveryRecord {
 }
 
 /** Decode merge input handles + exact output leaf position. */
-export function decodeMerges(tx: RawSettleTx): MergeRecoveryRecord[] {
-  const events = eventBodies(tx.logMessages ?? [], NOTE_MERGED_DISC)
+export function decodeMerges(
+  tx: RawSettleTx,
+  programId: PublicKey,
+): MergeRecoveryRecord[] {
+  const events = eventBodies(tx.logMessages ?? [], NOTE_MERGED_DISC, programId)
     .filter((body) => body.length >= 1 + 32 + 32 + 1 + 8)
     .map((body) => ({
       treeId: body[0],
       outputCommitment: Uint8Array.from(body.subarray(1, 33)),
       tokenMint: Uint8Array.from(body.subarray(33, 65)),
-      leafIndex: body.readBigUInt64LE(66),
+      leafIndex: readU64LE(body, 66),
     }));
   const out: MergeRecoveryRecord[] = [];
   for (const data of tx.ixDatas) {
@@ -223,7 +234,7 @@ export async function recoverNotesFromChain(
   const notes = new Map<string, StoredNote>();
   const recovered = { deposits: 0, trade: 0, change: 0, merges: 0 };
 
-  const deposits = txs.flatMap(decodeDeposits);
+  const deposits = txs.flatMap((tx) => decodeDeposits(tx, opts.programId));
   for (const deposit of deposits) {
     // Re-derive the per-note secret from seed + the PUBLIC nonce recorded in
     // the deposit instruction. This is the whole reason the secret is keyed on
@@ -255,7 +266,10 @@ export async function recoverNotesFromChain(
   }
 
   const settlements = txs.flatMap((tx) => {
-    const leaves = decodeTradeSettledLeaves(tx.logMessages ?? [], opts.programId);
+    const leaves = decodeTradeSettledLeaves(
+      tx.logMessages ?? [],
+      opts.programId,
+    );
     return tx.ixDatas.flatMap((data) => {
       const initial = decodeSettleFills(data, tx.signature, tx.slot);
       if (!initial) return [];
@@ -263,7 +277,7 @@ export async function recoverNotesFromChain(
       return decodeSettleFills(data, tx.signature, tx.slot, event) ?? [];
     });
   });
-  const merges = txs.flatMap(decodeMerges);
+  const merges = txs.flatMap((tx) => decodeMerges(tx, opts.programId));
 
   /**
    * Invert the tag namespace: `tag -> the held note that produces it`.
@@ -333,7 +347,9 @@ export async function recoverNotesFromChain(
         slots.push(note);
       }
       if (unresolved) continue;
-      const resolved = slots.filter((slot): slot is StoredNote => slot !== null);
+      const resolved = slots.filter(
+        (slot): slot is StoredNote => slot !== null,
+      );
       if (resolved.length === 0) continue;
       if (
         resolved.some(
@@ -349,7 +365,9 @@ export async function recoverNotesFromChain(
       // private witnesses there), so rebuild that vector in slot order from the
       // notes the tags resolved to — zero for the pad slots.
       const inputCommitments = slots.map((slot) =>
-        slot === null ? ZERO32_BYTES : (fromHex(slot.commitment) ?? ZERO32_BYTES),
+        slot === null
+          ? ZERO32_BYTES
+          : (fromHex(slot.commitment) ?? ZERO32_BYTES),
       );
       const innerHash = await deriveMergeOutputInnerHash(inputCommitments);
       const commitment = await noteCommitmentV2({

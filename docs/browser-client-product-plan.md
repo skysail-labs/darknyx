@@ -46,6 +46,18 @@ below it, shows only its own layer, and stays open until explicitly approved.
   0.86 s, 0.92 s, 1.51 s, and 2.79 s respectively on the Apple M3 host. These
   are integration evidence, not replacements for the decision-grade warm/cold
   distributions or the still-open physical x86 gate.
+- **Layer 4 — code complete, review pending:** the encrypted inventory plane
+  reconstructs deposit/trade/change/merge notes from seed plus finalized chain
+  data inside the custody Worker, rejects unresolved owned outputs, and checks
+  tag-keyed consumed PDAs before exposing balances. Finalized root rings are
+  parsed newest-first; proof cache keys bind note, tag, shard, root, circuit and
+  proving-key versions; ageing roots refresh in the background and evicted or
+  version-mismatched proofs become stale. Reservations are serialized and
+  persisted before authorization, so reload and ambiguous transport cannot
+  double-allocate a note. A Chrome product-bundle test restores a Node-created
+  backup, recovers a real seed-derived deposit fixture, round-trips encrypted
+  inventory, rejects ciphertext tampering, and proves that vault lock revokes
+  inventory decrypt access.
 
 The production Worker currently bundles snarkjs, whose package declares
 GPL-3.0. Before distributing the browser application, obtain a focused license-

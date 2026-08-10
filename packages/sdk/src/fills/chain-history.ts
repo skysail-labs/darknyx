@@ -30,7 +30,7 @@ import {
   MessageV0,
   type VersionedTransactionResponse,
 } from "@solana/web3.js";
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 import { anchorDiscriminator } from "../idl/vault-client.js";
 import { programEventPayloads } from "../idl/log-scope.js";
 import { deriveOrderId } from "../keys/key-generators.js";
@@ -39,10 +39,7 @@ import type { IndexerFill, BackfillResult } from "./history.js";
 /** `sha256("global:tee_forced_settle_batched")[..8]`. */
 const SETTLE_DISCRIMINATOR = anchorDiscriminator("tee_forced_settle_batched");
 const TRADE_SETTLED_DISCRIMINATOR = new Uint8Array(
-  createHash("sha256")
-    .update("event:TradeSettled")
-    .digest()
-    .subarray(0, 8),
+  sha256(new TextEncoder().encode("event:TradeSettled")).slice(0, 8),
 );
 
 /** Borsh `MatchResultPayload` length (v11, 552 B). Mirrors decode.ts::PAYLOAD_LEN. */
@@ -54,12 +51,15 @@ const PAYLOAD_OFFSET = 8 + 1;
  *  relock tags pushed it 64 bytes later):
  *  eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3". */
 const FILL_RECOVERY_OFFSET = 424;
-const RECOVERY_V3_TRAILER = Buffer.from("DNYXREC3", "ascii");
+const RECOVERY_V3_TRAILER = new TextEncoder().encode("DNYXREC3");
 
 const ZERO32 = "0".repeat(64);
-const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const hex = (b: Uint8Array) =>
+  Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
+const same = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
 const NO_LEAF = 0xffff_ffff_ffff_ffffn;
 
 export interface TradeSettledLeaves {
@@ -86,14 +86,11 @@ export function decodeTradeSettledLeaves(
   programId: PublicKey | string,
 ): Map<string, TradeSettledLeaves> {
   const out = new Map<string, TradeSettledLeaves>();
-  const vault = typeof programId === "string" ? programId : programId.toBase58();
+  const vault =
+    typeof programId === "string" ? programId : programId.toBase58();
   for (const bytes of programEventPayloads(logs, vault)) {
     if (bytes.length < 8 + 1 + 16 + 6 * 8) continue;
-    if (
-      !Buffer.from(bytes.subarray(0, 8)).equals(
-        Buffer.from(TRADE_SETTLED_DISCRIMINATOR),
-      )
-    ) {
+    if (!same(bytes.subarray(0, 8), TRADE_SETTLED_DISCRIMINATOR)) {
       continue;
     }
     const matchId = hex(bytes.subarray(9, 25));
@@ -145,16 +142,10 @@ export function decodeSettleFills(
   const batchSlot = v.getBigUint64(416, true).toString();
 
   const r = FILL_RECOVERY_OFFSET;
-  const recoveryV3 = Buffer.from(p.subarray(r + 120, r + 128)).equals(
-    RECOVERY_V3_TRAILER,
-  );
+  const recoveryV3 = same(p.subarray(r + 120, r + 128), RECOVERY_V3_TRAILER);
   const eph = recoveryV3 ? hexOrNull(p.subarray(r, r + 32)) : null;
-  const buyerEnc = recoveryV3
-    ? hexOrNull(p.subarray(r + 32, r + 76))
-    : null;
-  const sellerEnc = recoveryV3
-    ? hexOrNull(p.subarray(r + 76, r + 120))
-    : null;
+  const buyerEnc = recoveryV3 ? hexOrNull(p.subarray(r + 32, r + 76)) : null;
+  const sellerEnc = recoveryV3 ? hexOrNull(p.subarray(r + 76, r + 120)) : null;
 
   const buyerExact = noteE === ZERO32;
   const sellerExact = noteF === ZERO32;

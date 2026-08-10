@@ -7,7 +7,9 @@
  * Rust tests use).
  */
 
-import crypto from "node:crypto";
+import { hkdf } from "@noble/hashes/hkdf";
+import { sha256 } from "@noble/hashes/sha2";
+import { shake256 } from "@noble/hashes/sha3";
 import nacl from "tweetnacl";
 import type { MasterSeedMode } from "../providers.js";
 
@@ -42,28 +44,9 @@ export function hkdfExpand(
   info: Uint8Array,
   length: number,
 ): Uint8Array {
-  // HKDF-SHA256: extract (salt=empty) then expand.
-  const salt = new Uint8Array(32); // all zeros
-  const prk = crypto
-    .createHmac("sha256", Buffer.from(salt))
-    .update(Buffer.from(ikm))
-    .digest();
-  const out = Buffer.alloc(length);
-  let prev = Buffer.alloc(0);
-  let filled = 0;
-  let counter = 1;
-  while (filled < length) {
-    const h = crypto.createHmac("sha256", prk);
-    h.update(prev);
-    h.update(Buffer.from(info));
-    h.update(Buffer.from([counter]));
-    prev = h.digest();
-    const take = Math.min(prev.length, length - filled);
-    prev.copy(out, filled, 0, take);
-    filled += take;
-    counter += 1;
-  }
-  return new Uint8Array(out);
+  // `undefined` salt is RFC 5869's HashLen zero bytes, matching Rust
+  // `Hkdf::new(None, ...)` and the historical Node implementation.
+  return hkdf(sha256, ikm, undefined, info, length);
 }
 
 /** Reduce a big-endian byte buffer modulo BN254_r. */
@@ -86,7 +69,7 @@ function bigintToBE32(n: bigint): Uint8Array {
 
 /** 64-byte random master seed (CSPRNG). */
 export function generateMasterSeed(): Uint8Array {
-  return new Uint8Array(crypto.randomBytes(MASTER_SEED_BYTES));
+  return crypto.getRandomValues(new Uint8Array(MASTER_SEED_BYTES));
 }
 
 /** Resolve a `MasterSeedMode` to actual seed bytes. */
@@ -297,7 +280,7 @@ export function darknyxShakeKdfV1(
   data: Uint8Array,
   outLen: number,
 ): Uint8Array {
-  const shake = crypto.createHash("shake256", { outputLength: outLen });
+  const shake = shake256.create({ dkLen: outLen });
   // Preserve the historical literal bytes for byte compatibility. They do not
   // make raw SHAKE256 a standards-conformant KMAC construction.
   const name = new TextEncoder().encode("KMAC");
@@ -308,12 +291,12 @@ export function darknyxShakeKdfV1(
   const paddedHeader = bytepad(header, 136);
   const paddedKey = bytepad(encodeString(key), 136);
 
-  shake.update(Buffer.from(paddedHeader));
-  shake.update(Buffer.from(paddedKey));
-  shake.update(Buffer.from(data));
+  shake.update(paddedHeader);
+  shake.update(paddedKey);
+  shake.update(data);
   const bits = BigInt(outLen) * 8n;
-  shake.update(Buffer.from(rightEncode(bits)));
-  return new Uint8Array(shake.digest());
+  shake.update(rightEncode(bits));
+  return shake.digest();
 }
 
 export const __testing = { hkdfExpand, reduceMod, bytepad };

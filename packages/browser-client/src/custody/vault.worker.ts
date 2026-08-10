@@ -1,4 +1,18 @@
 import type { EncryptedSeedBackupV2, VaultStatus } from "@darknyx/client-core";
+import { PublicKey } from "@solana/web3.js";
+import {
+  recoverNotesFromChain,
+  type RawSettleTx,
+} from "@darknyx/sdk/browser-recovery";
+import {
+  bn254ToBE32,
+  deriveNoteUseTag,
+  deriveOwnerCommitmentBlinding,
+  deriveSpendingKey,
+  noteCommitmentV2,
+  ownerCommitment,
+  pubkeyToFrPair,
+} from "@darknyx/sdk/browser-inventory-crypto";
 import { scrypt } from "scrypt-js";
 
 import {
@@ -20,6 +34,10 @@ const ACCEPTED_SCRYPT_N = new Set([16_384, CURRENT_SCRYPT_N]);
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const MIN_PASSPHRASE_LENGTH = 12;
+const INVENTORY_KEY_INFO = new TextEncoder().encode(
+  "darknyx/browser-inventory-key/v1",
+);
+const INVENTORY_AAD = new TextEncoder().encode("darknyx/browser-inventory/v1");
 
 type VaultHeader = Omit<BrowserVaultRecord, "cipher">;
 type Cipher = BrowserVaultRecord["cipher"];
@@ -49,6 +67,19 @@ let inactivityDeadline = 0;
 function toHex(value: Uint8Array): string {
   return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
+  );
+}
+
+function be32ToBigInt(value: Uint8Array): bigint {
+  let result = 0n;
+  for (const byte of value) result = (result << 8n) | BigInt(byte);
+  return result;
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
   );
 }
 
@@ -291,6 +322,28 @@ async function importBackup(
   }
 }
 
+async function deriveInventoryKey(): Promise<CryptoKey> {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    requireSeed(),
+    "HKDF",
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(32),
+      info: INVENTORY_KEY_INFO,
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
 type Handler = (payload: Record<string, unknown>) => Promise<unknown>;
 
 const handlers: Readonly<Record<string, Handler>> = Object.freeze({
@@ -346,6 +399,134 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       clearSeed();
       throw error;
     }
+  },
+  async inventorySeal({ plaintext }) {
+    if (!(plaintext instanceof Uint8Array)) {
+      throw new Error("inventory plaintext must be bytes");
+    }
+    const plaintextBytes = Uint8Array.from(plaintext);
+    const iv = randomBytes(12);
+    const key = await deriveInventoryKey();
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, additionalData: INVENTORY_AAD },
+        key,
+        plaintextBytes,
+      ),
+    );
+    return { iv, ciphertext };
+  },
+  async inventoryOpen({ iv, ciphertext }) {
+    if (
+      !(iv instanceof Uint8Array) ||
+      iv.length !== 12 ||
+      !(ciphertext instanceof Uint8Array) ||
+      ciphertext.length < 16
+    ) {
+      throw new Error("malformed inventory ciphertext");
+    }
+    // Keep a locked vault distinguishable from authenticated-decryption
+    // failure so the UI can request an unlock instead of reporting corruption.
+    const key = await deriveInventoryKey();
+    try {
+      const ivBytes = Uint8Array.from(iv);
+      const ciphertextBytes = Uint8Array.from(ciphertext);
+      return new Uint8Array(
+        await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: ivBytes, additionalData: INVENTORY_AAD },
+          key,
+          ciphertextBytes,
+        ),
+      );
+    } catch {
+      throw new Error("browser inventory decrypt failed");
+    }
+  },
+  async recoverNotes({
+    programId,
+    baseMint,
+    quoteMint,
+    transactions,
+    sinceSlot,
+  }) {
+    if (typeof programId !== "string" || !Array.isArray(transactions)) {
+      throw new Error("malformed browser recovery request");
+    }
+    if (
+      sinceSlot !== undefined &&
+      (!Number.isSafeInteger(sinceSlot) || (sinceSlot as number) < 0)
+    ) {
+      throw new Error("recovery sinceSlot must be a non-negative safe integer");
+    }
+    return recoverNotesFromChain({
+      connection: undefined as never,
+      programId: new PublicKey(programId),
+      masterSeed: requireSeed(),
+      baseMint: fromHex(baseMint, 32, "base mint"),
+      quoteMint: fromHex(quoteMint, 32, "quote mint"),
+      sinceSlot: sinceSlot as number | undefined,
+      scan: async () => transactions as RawSettleTx[],
+    });
+  },
+  async validInputWitness({ note, merkleRoot, siblings, pathIndices }) {
+    if (!note || typeof note !== "object") {
+      throw new Error("VALID_INPUT note is malformed");
+    }
+    const candidate = note as Record<string, unknown>;
+    if (
+      typeof candidate.commitment !== "string" ||
+      !(candidate.tokenMint instanceof Uint8Array) ||
+      candidate.tokenMint.length !== 32 ||
+      typeof candidate.amount !== "bigint" ||
+      candidate.amount <= 0n ||
+      typeof candidate.ownerCommitment !== "bigint" ||
+      typeof candidate.innerHash !== "bigint" ||
+      !Array.isArray(siblings) ||
+      siblings.length !== 20 ||
+      !Array.isArray(pathIndices) ||
+      pathIndices.length !== 20 ||
+      pathIndices.some((index) => index !== 0 && index !== 1)
+    ) {
+      throw new Error("VALID_INPUT witness is malformed");
+    }
+    const root = fromHex(merkleRoot, 32, "Merkle root");
+    const siblingValues = siblings.map((value, index) =>
+      be32ToBigInt(fromHex(value, 32, `Merkle sibling ${index}`)),
+    );
+    const currentSeed = requireSeed();
+    const spendingKey = deriveSpendingKey(currentSeed);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
+    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    if (expectedOwner !== candidate.ownerCommitment) {
+      throw new Error("inventory note is not owned by this vault");
+    }
+    const commitment = await noteCommitmentV2({
+      tokenMint: candidate.tokenMint,
+      amount: candidate.amount,
+      ownerCommitment: candidate.ownerCommitment,
+      innerHash: candidate.innerHash,
+    });
+    if (
+      !equalBytes(commitment, fromHex(candidate.commitment, 32, "commitment"))
+    ) {
+      throw new Error("inventory note opening does not match its commitment");
+    }
+    const noteUseTag = await deriveNoteUseTag(
+      commitment,
+      bn254ToBE32(candidate.innerHash),
+    );
+    const [mintLo, mintHi] = pubkeyToFrPair(candidate.tokenMint);
+    return {
+      merkleRoot: be32ToBigInt(root).toString(),
+      noteUseTag: be32ToBigInt(noteUseTag).toString(),
+      tokenMint: [mintLo.toString(), mintHi.toString()],
+      amount: candidate.amount.toString(),
+      spendingKey: spendingKey.toString(),
+      ownerCommitmentBlinding: ownerBlinding.toString(),
+      innerHash: candidate.innerHash.toString(),
+      merklePath: siblingValues.map(String),
+      merkleIndices: (pathIndices as number[]).map(String),
+    };
   },
 });
 

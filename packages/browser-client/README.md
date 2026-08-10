@@ -14,6 +14,23 @@ origin; origin and release integrity remain part of the browser custody model.
 The package deliberately exports no raw seed, generic signing, arbitrary
 proving, note-opening, or witness API.
 
+The internal composition bundle now also contains the inventory plane. It
+reconstructs notes from finalized chain transactions inside the custody Worker,
+checks every recovered opening and tag, filters historical ancestors through
+the finalized `ConsumedNoteEntry` PDA, and persists notes, ready proofs, roots,
+and reservations as one authenticated ciphertext. Inventory encryption and
+decryption stay inside the custody Worker, so explicit or inactivity lock also
+revokes note-database access. Page code receives aggregate balances and opaque
+proof/reservation handles only.
+
+`VALID_INPUT` proofs are cached by the exact
+`(commitment, note-use tag, shard, root, circuit version, proving-key version)`
+tuple. The root synchronizer reads the finalized on-chain ring in newest-first
+order; evicted roots become stale, ageing roots trigger background refresh, and
+the TEE inclusion response must equal the finalized refresh target before any
+private witness is built. Reservation writes are serialized and durable before
+authorization, including across reloads and ambiguous transport outcomes.
+
 The internal product-composition bundle also supplies all six client Groth16
 provers. It accepts only an Ed25519-signed artifact manifest matching the exact
 release-pinned signer key, artifact-set ID, protocol version, circuit set, and

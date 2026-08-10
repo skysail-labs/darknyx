@@ -21,7 +21,7 @@
  * fixed vector in `tests/fill-encryption.test.ts`.
  */
 
-import crypto from "node:crypto";
+import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import nacl from "tweetnacl";
 import { hkdfExpand } from "./key-generators.js";
 
@@ -43,9 +43,7 @@ export interface FillAmounts {
 
 /** Reject low-order X25519 encodings by applying a fixed probe scalar and
  * requiring a non-zero shared secret (RFC 7748 contributory check). */
-export function isContributoryX25519PublicKey(
-  publicKey: Uint8Array,
-): boolean {
+export function isContributoryX25519PublicKey(publicKey: Uint8Array): boolean {
   if (publicKey.length !== X25519_LEN) return false;
   try {
     const shared = nacl.scalarMult(new Uint8Array(32).fill(0x42), publicKey);
@@ -89,24 +87,15 @@ export function encryptFillAmounts(
   const shared = nacl.scalarMult(ephemeralSecret, recipientPub);
   const key = deriveAeadKey(shared, ephPub, recipientPub);
 
-  const cipher = crypto.createCipheriv(
-    "chacha20-poly1305",
-    Buffer.from(key),
-    Buffer.from(nonce12),
-    {
-      authTagLength: TAG_LEN,
-    },
-  );
-  const plaintext = Buffer.alloc(AMOUNTS_LEN);
-  plaintext.writeBigUInt64LE(amounts.trade, 0);
-  plaintext.writeBigUInt64LE(amounts.change, 8);
-  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
+  const plaintext = new Uint8Array(AMOUNTS_LEN);
+  const plaintextView = new DataView(plaintext.buffer);
+  plaintextView.setBigUint64(0, amounts.trade, true);
+  plaintextView.setBigUint64(8, amounts.change, true);
+  const sealed = chacha20poly1305(key, nonce12).encrypt(plaintext);
 
   const blob = new Uint8Array(SIDE_BLOB_LEN);
   blob.set(nonce12, 0);
-  blob.set(ct, NONCE_LEN);
-  blob.set(tag, NONCE_LEN + AMOUNTS_LEN);
+  blob.set(sealed, NONCE_LEN);
   return blob;
 }
 
@@ -129,23 +118,13 @@ export function decryptFillAmounts(
     const shared = nacl.scalarMult(viewingSecret, ephemeralPub);
     const key = deriveAeadKey(shared, ephemeralPub, myPub);
     const nonce = blob.subarray(0, NONCE_LEN);
-    const ct = blob.subarray(NONCE_LEN, NONCE_LEN + AMOUNTS_LEN);
-    const tag = blob.subarray(NONCE_LEN + AMOUNTS_LEN);
-    const decipher = crypto.createDecipheriv(
-      "chacha20-poly1305",
-      Buffer.from(key),
-      Buffer.from(nonce),
-      { authTagLength: TAG_LEN },
-    );
-    decipher.setAuthTag(Buffer.from(tag));
-    const pt = Buffer.concat([
-      decipher.update(Buffer.from(ct)),
-      decipher.final(),
-    ]);
+    const sealed = blob.subarray(NONCE_LEN);
+    const pt = chacha20poly1305(key, nonce).decrypt(sealed);
     if (pt.length !== AMOUNTS_LEN) return null;
+    const view = new DataView(pt.buffer, pt.byteOffset, pt.byteLength);
     return {
-      trade: pt.readBigUInt64LE(0),
-      change: pt.readBigUInt64LE(8),
+      trade: view.getBigUint64(0, true),
+      change: view.getBigUint64(8, true),
     };
   } catch {
     return null;

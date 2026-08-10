@@ -8,17 +8,26 @@ const shared = {
   bundle: true,
   platform: "browser",
   target: ["chrome113", "edge113"],
+  inject: [new URL("./node-shims.ts", import.meta.url).pathname],
   sourcemap: true,
   legalComments: "linked",
 };
 
+await build({
+  ...shared,
+  entryPoints: {
+    index: new URL("../src/index.ts", import.meta.url).pathname,
+    internal: new URL("../src/internal.ts", import.meta.url).pathname,
+  },
+  format: "esm",
+  splitting: true,
+  outdir: new URL("../dist", import.meta.url).pathname,
+  // Keep shared chunks beside the entrypoints: BrowserVault deliberately
+  // resolves its default Worker relative to the module that defines it.
+  chunkNames: "[name]-[hash]",
+});
+
 await Promise.all([
-  build({
-    ...shared,
-    entryPoints: [new URL("../src/index.ts", import.meta.url).pathname],
-    format: "esm",
-    outfile: new URL("../dist/index.js", import.meta.url).pathname,
-  }),
   build({
     ...shared,
     entryPoints: [
@@ -26,12 +35,6 @@ await Promise.all([
     ],
     format: "iife",
     outfile: new URL("../dist/vault.worker.js", import.meta.url).pathname,
-  }),
-  build({
-    ...shared,
-    entryPoints: [new URL("../src/internal.ts", import.meta.url).pathname],
-    format: "esm",
-    outfile: new URL("../dist/internal.js", import.meta.url).pathname,
   }),
   build({
     ...shared,

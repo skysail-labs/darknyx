@@ -26,6 +26,17 @@ type Pending = {
   reject(error: unknown): void;
 };
 
+type InternalRequest = <T>(
+  type:
+    | "inventorySeal"
+    | "inventoryOpen"
+    | "recoverNotes"
+    | "validInputWitness",
+  payload?: Record<string, unknown>,
+) => Promise<T>;
+
+const internalRequests = new WeakMap<BrowserVault, InternalRequest>();
+
 interface TrustedTypesFactoryLike {
   createPolicy(
     name: string,
@@ -141,6 +152,9 @@ export class BrowserVault implements VaultLifecyclePort {
       this.#pending.clear();
       this.#worker.terminate();
     };
+    internalRequests.set(this, (type, payload = {}) =>
+      this.#request(type, payload),
+    );
   }
 
   async #request<T>(
@@ -300,5 +314,21 @@ export class BrowserVault implements VaultLifecyclePort {
     }
     this.#pending.clear();
     this.#cachedState = "locked";
+    internalRequests.delete(this);
   }
+}
+
+/** Product-composition capability. Absent from the package's public entrypoint. */
+export function requestVaultInternal<T>(
+  vault: BrowserVault,
+  type:
+    | "inventorySeal"
+    | "inventoryOpen"
+    | "recoverNotes"
+    | "validInputWitness",
+  payload: Record<string, unknown> = {},
+): Promise<T> {
+  const request = internalRequests.get(vault);
+  if (!request) throw new Error("browser vault is unavailable");
+  return request<T>(type, payload);
 }

@@ -41,6 +41,9 @@ describe("browser custody product boundary", () => {
     expect(worker).toContain("browser vault is locked");
     expect(entry).not.toContain("BrowserProverSuite");
     expect(entry).not.toContain("proveValidInput");
+    expect(entry).not.toContain("BrowserInventory");
+    expect(entry).not.toContain("validInputWitness");
+    expect(entry).not.toContain("recoverNotes");
     expect(proverWorker).toContain("artifact manifest signature is invalid");
     expect(proverWorker).toContain(
       "browser proof failed mandatory local verification",

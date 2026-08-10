@@ -145,6 +145,19 @@ const server = createServer(async (request, response) => {
       response.end(config);
       return;
     }
+    if (url.pathname.startsWith("/dist/")) {
+      const distRoot = resolve(packageRoot, "dist");
+      const assetPath = resolve(packageRoot, url.pathname.slice(1));
+      if (!assetPath.startsWith(`${distRoot}/`)) {
+        response.writeHead(404).end();
+        return;
+      }
+      const body = await readFile(assetPath);
+      response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+      response.setHeader("Content-Length", body.length);
+      response.end(body);
+      return;
+    }
     const asset = assets.get(url.pathname);
     if (!asset) {
       response.writeHead(404).end();

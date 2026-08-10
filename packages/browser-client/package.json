@@ -26,8 +26,12 @@
   "dependencies": {
     "@darknyx/client-core": "0.1.0",
     "@darknyx/sdk": "0.1.0",
-    "snarkjs": "0.7.5",
-    "scrypt-js": "3.0.1"
+    "assert": "2.1.0",
+    "buffer": "6.0.3",
+    "events": "3.3.0",
+    "process": "0.11.10",
+    "scrypt-js": "3.0.1",
+    "snarkjs": "0.7.5"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

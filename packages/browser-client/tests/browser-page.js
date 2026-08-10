@@ -1,4 +1,9 @@
 import { BrowserVault, IndexedDbVaultStore } from "/dist/index.js";
+import {
+  BrowserInventory,
+  inventoryStoreForVault,
+  recoverBrowserInventory,
+} from "/dist/internal.js";
 
 const status = document.querySelector("#status");
 const config = await fetch("/config.json").then((response) => response.json());
@@ -25,6 +30,42 @@ function trustedTypesAreEnforced() {
   } catch (error) {
     return error instanceof TypeError;
   }
+}
+
+function readInventoryRecord(databaseName) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const transaction = request.result.transaction("inventory", "readonly");
+      const get = transaction.objectStore("inventory").get("primary");
+      get.onerror = () => reject(get.error);
+      get.onsuccess = () => resolve(get.result);
+    };
+  });
+}
+
+function writeInventoryRecord(databaseName, record) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const transaction = request.result.transaction("inventory", "readwrite");
+      transaction.onerror = () => reject(transaction.error);
+      transaction.oncomplete = resolve;
+      transaction.objectStore("inventory").put(record, "primary");
+    };
+  });
+}
+
+function fromHex(value) {
+  return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
+}
+
+function fromBase64(value) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
 async function unsupported() {
@@ -86,6 +127,7 @@ async function supported() {
 
   await store.clear();
   vault = new BrowserVault({ store, inactivityMs: 60_000 });
+  status.textContent = "restoring";
   const restoreStarted = performance.now();
   await vault.restoreBackup(
     config.node_backup,
@@ -94,6 +136,95 @@ async function supported() {
   );
   const restoreMs = performance.now() - restoreStarted;
   const restoredRecord = structuredClone(await store.load());
+  const inventoryDatabase = `darknyx-inventory-${config.scenario}`;
+  status.textContent = "creating-inventory-store";
+  const inventoryStore = await inventoryStoreForVault(vault, inventoryDatabase);
+  await inventoryStore.clear();
+  status.textContent = "recovering-inventory";
+  const recovered = await recoverBrowserInventory({
+    vault,
+    programId: config.recovery.program_id,
+    baseMint: fromHex(config.recovery.base_mint),
+    quoteMint: fromHex(config.recovery.quote_mint),
+    scan: async () => [
+      {
+        signature: config.recovery.transaction.signature,
+        slot: config.recovery.transaction.slot,
+        ixDatas: [fromBase64(config.recovery.transaction.ix_data)],
+        logMessages: config.recovery.transaction.logs,
+      },
+    ],
+  });
+  const inventory = await BrowserInventory.create({
+    store: inventoryStore,
+    markets: [
+      {
+        symbol: "SOL-USDC",
+        baseMintHex: config.recovery.base_mint,
+        quoteMintHex: config.recovery.quote_mint,
+        priceScale: 1_000_000n,
+        feeRateBps: 30n,
+      },
+    ],
+    circuitVersion: "valid-input-v3",
+    provingKeyVersion: "test-pk",
+  });
+  status.textContent = "applying-recovery";
+  await inventory.recover(recovered, async () => false);
+  const inventoryBalance = (await inventory.listBalances())[0];
+  if (inventoryBalance.spendableAtoms !== config.recovery.amount) {
+    throw new Error("browser seed-plus-chain recovery produced wrong balance");
+  }
+  const inventoryRecord = structuredClone(
+    await readInventoryRecord(inventoryDatabase),
+  );
+  if (JSON.stringify(inventoryRecord).includes(config.recovery.amount)) {
+    throw new Error("inventory plaintext was persisted in IndexedDB");
+  }
+  const reloaded = await BrowserInventory.create({
+    store: inventoryStore,
+    markets: [
+      {
+        symbol: "SOL-USDC",
+        baseMintHex: config.recovery.base_mint,
+        quoteMintHex: config.recovery.quote_mint,
+        priceScale: 1_000_000n,
+        feeRateBps: 30n,
+      },
+    ],
+    circuitVersion: "valid-input-v3",
+    provingKeyVersion: "test-pk",
+  });
+  if (
+    (await reloaded.listBalances())[0].spendableAtoms !== config.recovery.amount
+  ) {
+    throw new Error("encrypted inventory did not round-trip");
+  }
+  status.textContent = "testing-inventory-lock";
+  await vault.lock();
+  let inventoryLocked = false;
+  try {
+    await inventoryStore.load();
+  } catch (error) {
+    inventoryLocked = /vault is locked/.test(String(error));
+  }
+  if (!inventoryLocked)
+    throw new Error("locked vault still decrypted inventory");
+  await vault.unlock();
+  const tamperedInventory = structuredClone(inventoryRecord);
+  tamperedInventory.ciphertext = mutate(tamperedInventory.ciphertext);
+  await writeInventoryRecord(inventoryDatabase, tamperedInventory);
+  let inventoryTamperRejected = false;
+  try {
+    await inventoryStore.load();
+  } catch (error) {
+    inventoryTamperRejected = /decrypt failed/.test(String(error));
+  }
+  if (!inventoryTamperRejected) {
+    throw new Error("tampered inventory ciphertext was accepted");
+  }
+  await writeInventoryRecord(inventoryDatabase, inventoryRecord);
+  status.textContent = "exporting-backup";
   let responsivenessTicks = 0;
   const heartbeat = setInterval(() => {
     responsivenessTicks += 1;
@@ -124,6 +255,10 @@ async function supported() {
     backup_v2_node_to_browser_to_node: interop.same_seed,
     indexeddb_contains_plaintext_seed:
       interop.indexeddb_contains_plaintext_seed,
+    encrypted_inventory_roundtrip: true,
+    browser_seed_chain_recovery: recovered.recovered.deposits === 1,
+    inventory_revoked_on_lock: inventoryLocked,
+    inventory_tamper_rejected: inventoryTamperRejected,
     busy_during_backup: busyDuringBackup,
     ui_responsive_during_backup:
       responsivenessTicks >= minimumResponsivenessTicks,

@@ -34,23 +34,14 @@ import type {
   PlaceOrderRequest,
   ValidInputRelay,
 } from "../orders/build-order.js";
+import {
+  parseMerkleRootRing,
+  type MerkleRootRingSnapshot,
+} from "./merkle-root-ring.js";
+
+export { parseMerkleRootRing, type MerkleRootRingSnapshot };
 
 const MERKLE_DEPTH = 20;
-
-// On-chain `MerkleTree` account layout (8-byte Anchor discriminator prefix):
-//   +8  leaf_count(u64)  +16 current_root[32]  +48 roots[ROOT_HISTORY_SIZE][32]
-// Mirrors `programs/vault/src/state.rs::MerkleTree` — keep in lockstep.
-const ROOT_HISTORY_SIZE = 64;
-const MERKLE_TREE_ACCOUNT_LEN = 2_744;
-const CURRENT_ROOT_OFFSET = 8 + 8;
-const ROOTS_RING_OFFSET = CURRENT_ROOT_OFFSET + 32;
-const TREE_ID_OFFSET =
-  ROOTS_RING_OFFSET + ROOT_HISTORY_SIZE * 32 + MERKLE_DEPTH * 32 + 1;
-// sha256("account:MerkleTree")[0..8], pinned as bytes so this prover module
-// remains browser-compatible (no node:crypto import).
-const MERKLE_TREE_DISCRIMINATOR = Uint8Array.from([
-  98, 51, 51, 226, 162, 20, 73, 212,
-]);
 
 /** Verify that a Merkle root is accepted by the specified on-chain shard. */
 export type RootVerifier = (root: Uint8Array, treeId: number) => Promise<void>;
@@ -90,43 +81,13 @@ export function onchainRootVerifier(deps: {
         `merkle tree shard ${treeId} is owned by ${acct.owner.toBase58()}, not ${deps.programId.toBase58()}`,
       );
     }
-    if (data.length !== MERKLE_TREE_ACCOUNT_LEN) {
-      throw new Error(
-        `merkle tree shard ${treeId} account length must be ${MERKLE_TREE_ACCOUNT_LEN}, got ${data.length}`,
-      );
-    }
-    if (
-      !data
-        .subarray(0, 8)
-        .every((value, index) => value === MERKLE_TREE_DISCRIMINATOR[index])
-    ) {
-      throw new Error(`invalid MerkleTree discriminator for shard ${treeId}`);
-    }
-    if (data[TREE_ID_OFFSET] !== treeId) {
-      throw new Error(
-        `merkle tree PDA shard ${treeId} contains tree_id ${data[TREE_ID_OFFSET]}`,
-      );
-    }
-    const matchesAt = (off: number): boolean => {
-      if (off + 32 > data.length) return false;
-      for (let i = 0; i < 32; i++) if (data[off + i] !== root[i]) return false;
-      return true;
-    };
-    // current_root is the latest; the ring holds the last ROOT_HISTORY_SIZE.
-    if (matchesAt(CURRENT_ROOT_OFFSET)) return;
-    for (let i = 0; i < ROOT_HISTORY_SIZE; i++) {
-      const off = ROOTS_RING_OFFSET + i * 32;
-      // Skip empty (all-zero) ring slots — a fabricated all-zero root must not
-      // match an uninitialised slot.
-      let allZero = true;
-      for (let j = 0; j < 32; j++) {
-        if (data[off + j] !== 0) {
-          allZero = false;
-          break;
-        }
-      }
-      if (!allZero && matchesAt(off)) return;
-    }
+    const snapshot = parseMerkleRootRing(data, treeId);
+    const matches = snapshot.acceptedRoots.some(
+      (accepted) =>
+        accepted.length === root.length &&
+        accepted.every((value, index) => value === root[index]),
+    );
+    if (matches) return;
     throw new Error(
       `inclusion root ${Buffer.from(root).toString("hex")} is not in shard ${treeId}'s ` +
         `on-chain root ring — refusing to prove against a root the vault won't accept`,

@@ -1,0 +1,287 @@
+import {
+  noteCommitmentV2,
+  type StoredNote,
+} from "@darknyx/sdk/browser-inventory-crypto";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  BrowserInventory,
+  InMemoryInventoryStore,
+  type BrowserMarketInventoryConfig,
+  type FinalizedRootRing,
+  type RecoveryReport,
+} from "../src/internal.js";
+
+const mint = (byte: number) => new Uint8Array(32).fill(byte);
+const mintHex = (byte: number) => byte.toString(16).padStart(2, "0").repeat(32);
+const root = (byte: number) => byte.toString(16).padStart(2, "0").repeat(32);
+const proof = () => new Uint8Array(256).fill(0x77);
+
+const market: BrowserMarketInventoryConfig = {
+  symbol: "SOL-USDC",
+  baseMintHex: mintHex(0xb1),
+  quoteMintHex: mintHex(0x9e),
+  priceScale: 100n,
+  feeRateBps: 100n,
+};
+
+async function note(
+  tokenMint: Uint8Array,
+  amount: bigint,
+  innerHash: bigint,
+  leafIndex: bigint,
+): Promise<StoredNote> {
+  const candidate = {
+    tokenMint,
+    amount,
+    ownerCommitment: 31n,
+    innerHash,
+  };
+  const commitment = await noteCommitmentV2(candidate);
+  return {
+    ...candidate,
+    commitment: Array.from(commitment, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join(""),
+    leafIndex,
+    treeId: 0,
+  };
+}
+
+const report = (notes: StoredNote[]): RecoveryReport => ({
+  notes,
+  recovered: { deposits: notes.length, trade: 0, change: 0, merges: 0 },
+  unresolvedSettlements: 0,
+  unresolvedMerges: 0,
+});
+
+const ring = (...acceptedRoots: string[]): FinalizedRootRing => ({
+  treeId: 0,
+  finalizedSlot: 1_000,
+  acceptedRoots,
+});
+
+function ids(...values: string[]): () => string {
+  let index = 0;
+  return () => values[index++] ?? `fallback-${index}`;
+}
+
+describe("browser inventory plane", () => {
+  it("revalidates recovered openings and chain consumption before exposing balances", async () => {
+    const store = new InMemoryInventoryStore();
+    const inventory = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const spendable = await note(mint(0x9e), 500n, 41n, 2n);
+    const consumed = await note(mint(0xb1), 70n, 42n, 3n);
+    const checked: string[] = [];
+
+    await inventory.recover(report([spendable, consumed]), async (tag) => {
+      checked.push(tag);
+      return checked.length === 2;
+    });
+
+    expect(checked).toHaveLength(2);
+    expect(await inventory.listBalances()).toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "500",
+        reservedAtoms: "0",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("persists one reservation per note and refuses double allocation after reload", async () => {
+    const store = new InMemoryInventoryStore();
+    const first = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-a", "reservation-a"),
+    });
+    const collateral = await note(mint(0x9e), 101n, 51n, 4n);
+    await first.recover(report([collateral]), async () => false);
+    await first.synchronizeFinalizedRoots([ring(root(1))]);
+    await first.cacheReadyProof(collateral.commitment, root(1), proof());
+    const draft = {
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid" as const,
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    };
+
+    await expect(first.reserveReadyIntent(draft)).resolves.toMatchObject({
+      status: "ready",
+    });
+    const reloaded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(reloaded.reserveReadyIntent(draft)).resolves.toEqual({
+      status: "not_ready",
+      retryAfterMs: 250,
+    });
+    expect(await reloaded.listBalances()).toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "101",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("refreshes an ageing accepted-root proof before eviction and stales evicted roots", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      refreshAtRootPosition: 1,
+      randomId: ids("old", "new"),
+    });
+    const collateral = await note(mint(0x9e), 500n, 61n, 5n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    await inventory.synchronizeFinalizedRoots([ring(root(2), root(1))]);
+    const producer = vi.fn(async () => ({ proofBytes: proof() }));
+
+    await expect(inventory.refreshExpiringProofs(producer)).resolves.toBe(1);
+    expect(producer).toHaveBeenCalledWith(
+      expect.objectContaining({ root: root(2), treeId: 0 }),
+    );
+    expect(await inventory.proofReadiness()).toEqual({
+      ready: 2,
+      proving: 0,
+      stale: 0,
+    });
+
+    await inventory.synchronizeFinalizedRoots([
+      {
+        ...ring(root(3)),
+        finalizedSlot: 1_001,
+      },
+    ]);
+    expect(await inventory.proofReadiness()).toEqual({
+      ready: 0,
+      proving: 0,
+      stale: 2,
+    });
+  });
+
+  it("does not mutate inventory when owned recovery outputs are unresolved", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const incomplete = report([await note(mint(0x9e), 10n, 71n, 6n)]);
+    incomplete.unresolvedSettlements = 1;
+    await expect(
+      inventory.recover(incomplete, async () => false),
+    ).rejects.toThrow(/unresolved owned outputs/);
+    expect(await inventory.listBalances()).toEqual([]);
+  });
+
+  it("keeps recovered notes unavailable until their leaf index is resolved", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const unresolvedLeaf = await note(mint(0x9e), 10n, 72n, 6n);
+    delete unresolvedLeaf.leafIndex;
+    await inventory.recover(report([unresolvedLeaf]), async () => false);
+    expect(await inventory.listBalances()).toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "10",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("clears every proving marker after one refresh fails", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const first = await note(mint(0x9e), 10n, 73n, 7n);
+    const second = await note(mint(0x9e), 20n, 74n, 8n);
+    await inventory.recover(report([first, second]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    const producer = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("proof failed"))
+      .mockResolvedValueOnce({ proofBytes: proof() });
+
+    await expect(inventory.refreshExpiringProofs(producer)).rejects.toThrow(
+      /proof failed/,
+    );
+    expect(producer).toHaveBeenCalledTimes(2);
+    expect(await inventory.proofReadiness()).toEqual({
+      ready: 1,
+      proving: 0,
+      stale: 0,
+    });
+  });
+
+  it("rejects a finalized snapshot rollback", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await inventory.synchronizeFinalizedRoots([
+      { ...ring(root(1)), finalizedSlot: 9 },
+    ]);
+    await expect(
+      inventory.synchronizeFinalizedRoots([
+        { ...ring(root(2)), finalizedSlot: 8 },
+      ]),
+    ).rejects.toThrow(/moved backwards/);
+  });
+
+  it("invalidates cached proofs when circuit or proving-key versions change", async () => {
+    const store = new InMemoryInventoryStore();
+    const original = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("versioned-proof"),
+    });
+    const collateral = await note(mint(0x9e), 500n, 81n, 7n);
+    await original.recover(report([collateral]), async () => false);
+    await original.synchronizeFinalizedRoots([ring(root(1))]);
+    await original.cacheReadyProof(collateral.commitment, root(1), proof());
+
+    const upgraded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v4",
+      provingKeyVersion: "pk-2",
+    });
+    expect(await upgraded.proofReadiness()).toEqual({
+      ready: 0,
+      proving: 0,
+      stale: 1,
+    });
+  });
+});
