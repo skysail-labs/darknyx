@@ -447,12 +447,15 @@ function AccountPanel({ snapshot, actions }: TraderShellProps) {
   const [passphrase, setPassphrase] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [invoking, setInvoking] = useState(false);
   const operation = snapshot.accountOperation;
   const busy =
-    operation !== undefined &&
-    operation.state !== "finalized" &&
-    operation.state !== "ambiguous" &&
-    operation.state !== "failed";
+    (operation !== undefined &&
+      operation.state !== "finalized" &&
+      operation.state !== "ambiguous" &&
+      operation.state !== "failed") ||
+    invoking;
   const blocked =
     snapshot.vault.state !== "unlocked" ||
     snapshot.wallet.state !== "connected" ||
@@ -460,11 +463,32 @@ function AccountPanel({ snapshot, actions }: TraderShellProps) {
 
   async function run(kind: "deposit" | "withdraw") {
     if (!selected || blocked || busy) return;
-    await actions[kind]({
-      marketSymbol: selected.symbol,
-      asset,
-      amount,
-    });
+    setInvoking(true);
+    setAccountError(null);
+    try {
+      await actions[kind]({
+        marketSymbol: selected.symbol,
+        asset,
+        amount,
+      });
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInvoking(false);
+    }
+  }
+
+  async function runMerge() {
+    if (!selected || blocked || busy) return;
+    setInvoking(true);
+    setAccountError(null);
+    try {
+      await actions.merge(selected.symbol, asset);
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setInvoking(false);
+    }
   }
 
   async function downloadBackup() {
@@ -479,9 +503,16 @@ function AccountPanel({ snapshot, actions }: TraderShellProps) {
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = "darknyx-seed-backup-v2.json";
+      anchor.hidden = true;
+      document.body.append(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
-      setBackupStatus("Encrypted backup downloaded. Keep it offline.");
+      setTimeout(() => {
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }, 0);
+      setBackupStatus(
+        "Encrypted backup generated. Verify that the download completed, then keep it offline.",
+      );
     } catch (error) {
       setBackupStatus(error instanceof Error ? error.message : String(error));
     }
@@ -550,23 +581,21 @@ function AccountPanel({ snapshot, actions }: TraderShellProps) {
               disabled={blocked || busy || !amount}
               onClick={() => void run("deposit")}
             >
-              <ArrowDownToLine /> Deposit
+              <ArrowDownToLine aria-hidden="true" /> Deposit
             </button>
             <button
               type="button"
               disabled={blocked || busy || !amount}
               onClick={() => void run("withdraw")}
             >
-              <ArrowUpFromLine /> Withdraw
+              <ArrowUpFromLine aria-hidden="true" /> Withdraw
             </button>
             <button
               type="button"
               disabled={blocked || busy}
-              onClick={() =>
-                selected && void actions.merge(selected.symbol, asset)
-              }
+              onClick={() => void runMerge()}
             >
-              <Layers3 /> Consolidate
+              <Layers3 aria-hidden="true" /> Consolidate
             </button>
           </div>
           {operation && (
@@ -574,13 +603,14 @@ function AccountPanel({ snapshot, actions }: TraderShellProps) {
               className={`account-result is-${operation.state}`}
               role="status"
             >
-              {busy && <LoaderCircle className="spin" />}
+              {busy && <LoaderCircle className="spin" aria-hidden="true" />}
               <span>
                 <b>{operation.kind.replace("merge", "consolidation")}</b>
                 {operation.message}
               </span>
             </div>
           )}
+          {accountError && <p role="alert">{accountError}</p>}
         </div>
         <div className="account-card backup-card">
           <h3>Portable recovery</h3>

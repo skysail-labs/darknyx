@@ -49,7 +49,7 @@ import {
   type BrowserVaultRecord,
 } from "./codec.js";
 import { BROWSER_VAULT_LOCKED_ERROR } from "./errors.js";
-import { canonicalU64 } from "../canonical-u64.js";
+import { canonicalU64, U64_MAX } from "../canonical-u64.js";
 
 const encoder = new TextEncoder();
 const BACKUP_FORMAT = "darknyx-master-seed-backup";
@@ -717,6 +717,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     let root: Uint8Array | undefined;
     const merklePath: bigint[][] = [];
     const merkleIndices: number[][] = [];
+    const seenCommitments = new Set<string>();
     for (let index = 0; index < notes.length; index += 1) {
       const note = notes[index];
       const inclusion = paths[index];
@@ -756,6 +757,11 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       if (!equalBytes(commitment, fromHex(note.commitment, 32, "commitment"))) {
         throw new Error("merge note opening does not match its commitment");
       }
+      const commitmentHex = toHex(commitment);
+      if (seenCommitments.has(commitmentHex)) {
+        throw new Error("merge inputs must be distinct notes");
+      }
+      seenCommitments.add(commitmentHex);
       commitments.push(commitment);
       tags.push(
         await deriveNoteUseTag(commitment, bn254ToBE32(note.innerHash)),

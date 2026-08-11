@@ -472,47 +472,30 @@ export class BrowserInventory implements InventoryIntentPort {
 
   /** Allocate a never-reused HD order/trading-key index and persist it first. */
   async allocateOrderIndex(): Promise<number> {
-    return this.#serialized(async () => {
-      if (this.#snapshot.nextOrderIndex > 0xffff_fffe) {
-        throw new Error("browser order sequence is exhausted");
-      }
-      const index = this.#snapshot.nextOrderIndex;
-      this.#snapshot.nextOrderIndex += 1;
-      await this.#save();
-      return index;
-    });
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        if (this.#snapshot.nextOrderIndex > 0xffff_fffe) {
+          throw new Error("browser order sequence is exhausted");
+        }
+        const index = this.#snapshot.nextOrderIndex;
+        this.#snapshot.nextOrderIndex += 1;
+        return index;
+      }),
+    );
   }
 
   /** Allocate and persist a never-reused deposit recovery-nonce index. */
   async allocateDepositIndex(): Promise<number> {
-    return this.#serialized(async () => {
-      if (this.#snapshot.nextDepositIndex > 0xffff_fffe) {
-        throw new Error("browser deposit sequence is exhausted");
-      }
-      const index = this.#snapshot.nextDepositIndex;
-      this.#snapshot.nextDepositIndex += 1;
-      await this.#save();
-      return index;
-    });
-  }
-
-  async selectSpendableNote(
-    mint: string,
-    amount: bigint,
-  ): Promise<InventoryNote | null> {
-    fromHex32(mint, "selection mint");
-    if (amount <= 0n || amount > U64_MAX)
-      throw new Error("selection amount is invalid");
-    return this.#serialized(async () => {
-      const note = this.#snapshot.notes.find(
-        (candidate) =>
-          candidate.state === "spendable" &&
-          candidate.leafIndex !== undefined &&
-          hex(candidate.tokenMint) === mint &&
-          candidate.amount === amount,
-      );
-      return note ? structuredClone(note) : null;
-    });
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        if (this.#snapshot.nextDepositIndex > 0xffff_fffe) {
+          throw new Error("browser deposit sequence is exhausted");
+        }
+        const index = this.#snapshot.nextDepositIndex;
+        this.#snapshot.nextDepositIndex += 1;
+        return index;
+      }),
+    );
   }
 
   async reserveAccountExact(
@@ -522,97 +505,16 @@ export class BrowserInventory implements InventoryIntentPort {
     fromHex32(mint, "selection mint");
     if (amount <= 0n || amount > U64_MAX)
       throw new Error("selection amount is invalid");
-    return this.#serialized(async () => {
-      const note = this.#snapshot.notes.find(
-        (candidate) =>
-          candidate.state === "spendable" &&
-          candidate.leafIndex !== undefined &&
-          hex(candidate.tokenMint) === mint &&
-          candidate.amount === amount,
-      );
-      if (!note) return null;
-      const id = reservationId(`account-${this.#randomId()}`);
-      note.state = "reserved";
-      note.reservationId = id;
-      this.#snapshot.reservations.push({
-        reservationId: id,
-        noteCommitment: note.commitment,
-        proofHandle: `account-operation-${id}`,
-        createdAtMs: this.#now(),
-      });
-      await this.#save();
-      return { note: structuredClone(note), reservationId: id };
-    });
-  }
-
-  async selectMergeInputs(mint: string): Promise<readonly InventoryNote[]> {
-    fromHex32(mint, "merge mint");
-    return this.#serialized(async () => {
-      const candidates = this.#snapshot.notes
-        .filter(
-          (note) =>
-            note.state === "spendable" &&
-            note.leafIndex !== undefined &&
-            hex(note.tokenMint) === mint,
-        )
-        .sort(
-          (left, right) =>
-            (left.treeId ?? 0) - (right.treeId ?? 0) ||
-            (left.amount < right.amount
-              ? -1
-              : left.amount > right.amount
-                ? 1
-                : 0),
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        const note = this.#snapshot.notes.find(
+          (candidate) =>
+            candidate.state === "spendable" &&
+            candidate.leafIndex !== undefined &&
+            hex(candidate.tokenMint) === mint &&
+            candidate.amount === amount,
         );
-      for (let start = 0; start < candidates.length; start += 1) {
-        const treeId = candidates[start].treeId ?? 0;
-        const sameTree = candidates.filter(
-          (candidate) => (candidate.treeId ?? 0) === treeId,
-        );
-        if (sameTree.length >= 2) return structuredClone(sameTree.slice(0, 4));
-      }
-      return [];
-    });
-  }
-
-  async reserveAccountMerge(
-    mint: string,
-  ): Promise<readonly { note: InventoryNote; reservationId: string }[]> {
-    fromHex32(mint, "merge mint");
-    return this.#serialized(async () => {
-      const candidates = this.#snapshot.notes
-        .filter(
-          (note) =>
-            note.state === "spendable" &&
-            note.leafIndex !== undefined &&
-            hex(note.tokenMint) === mint,
-        )
-        .sort(
-          (left, right) =>
-            (left.treeId ?? 0) - (right.treeId ?? 0) ||
-            (left.amount < right.amount
-              ? -1
-              : left.amount > right.amount
-                ? 1
-                : 0),
-        );
-      const treeId = candidates.find(
-        (candidate) =>
-          candidates.filter(
-            (other) => (other.treeId ?? 0) === (candidate.treeId ?? 0),
-          ).length >= 2,
-      )?.treeId;
-      if (
-        treeId === undefined &&
-        candidates.every((note) => note.treeId !== undefined)
-      ) {
-        return [];
-      }
-      const selected = candidates
-        .filter((candidate) => (candidate.treeId ?? 0) === (treeId ?? 0))
-        .slice(0, 4);
-      if (selected.length < 2) return [];
-      const held = selected.map((note) => {
+        if (!note) return null;
         const id = reservationId(`account-${this.#randomId()}`);
         note.state = "reserved";
         note.reservationId = id;
@@ -623,10 +525,57 @@ export class BrowserInventory implements InventoryIntentPort {
           createdAtMs: this.#now(),
         });
         return { note: structuredClone(note), reservationId: id };
-      });
-      await this.#save();
-      return held;
-    });
+      }),
+    );
+  }
+
+  async reserveAccountMerge(
+    mint: string,
+  ): Promise<readonly { note: InventoryNote; reservationId: string }[]> {
+    fromHex32(mint, "merge mint");
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        const candidates = this.#snapshot.notes
+          .filter(
+            (note) =>
+              note.state === "spendable" &&
+              note.leafIndex !== undefined &&
+              hex(note.tokenMint) === mint,
+          )
+          .sort(
+            (left, right) =>
+              left.treeId - right.treeId ||
+              (left.amount < right.amount
+                ? -1
+                : left.amount > right.amount
+                  ? 1
+                  : 0),
+          );
+        const treeId = candidates.find(
+          (candidate) =>
+            candidates.filter((other) => other.treeId === candidate.treeId)
+              .length >= 2,
+        )?.treeId;
+        if (treeId === undefined) return [];
+        const selected = candidates
+          .filter((candidate) => candidate.treeId === treeId)
+          .slice(0, 4);
+        if (selected.length < 2) return [];
+        const held = selected.map((note) => {
+          const id = reservationId(`account-${this.#randomId()}`);
+          note.state = "reserved";
+          note.reservationId = id;
+          this.#snapshot.reservations.push({
+            reservationId: id,
+            noteCommitment: note.commitment,
+            proofHandle: `account-operation-${id}`,
+            createdAtMs: this.#now(),
+          });
+          return { note: structuredClone(note), reservationId: id };
+        });
+        return held;
+      }),
+    );
   }
 
   async assertAcceptedRoot(treeId: number, root: string): Promise<void> {
@@ -639,22 +588,23 @@ export class BrowserInventory implements InventoryIntentPort {
   }
 
   async bindReservationToOrder(record: BrowserOrderRecord): Promise<void> {
-    await this.#serialized(async () => {
-      const reservation = this.#snapshot.reservations.find(
-        (candidate) => candidate.reservationId === record.reservationId,
-      );
-      if (
-        !reservation ||
-        reservation.noteCommitment !== record.noteCommitment ||
-        this.#snapshot.orders.some(
-          (candidate) => candidate.orderId === record.orderId,
-        )
-      ) {
-        throw new Error("order does not match a live inventory reservation");
-      }
-      this.#snapshot.orders.push(structuredClone(record));
-      await this.#save();
-    });
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const reservation = this.#snapshot.reservations.find(
+          (candidate) => candidate.reservationId === record.reservationId,
+        );
+        if (
+          !reservation ||
+          reservation.noteCommitment !== record.noteCommitment ||
+          this.#snapshot.orders.some(
+            (candidate) => candidate.orderId === record.orderId,
+          )
+        ) {
+          throw new Error("order does not match a live inventory reservation");
+        }
+        this.#snapshot.orders.push(structuredClone(record));
+      }),
+    );
   }
 
   /** Burn and persist a strictly increasing nonce before asking the Worker to sign. */

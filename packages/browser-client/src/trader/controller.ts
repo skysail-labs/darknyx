@@ -20,6 +20,7 @@ import type {
   TraderShellSnapshot,
 } from "../ui/types.js";
 import { BrowserAccountOperations } from "../account/account-operations.js";
+import { inventoryStoreForVault } from "../inventory/browser-recovery.js";
 import {
   createBrowserPrivateRuntime,
   type BrowserPrivateRuntime,
@@ -148,6 +149,7 @@ export class BrowserTraderController {
   #runtime: BrowserPrivateRuntime | null = null;
   #account: BrowserAccountOperations | null = null;
   #accountOperation: TraderShellSnapshot["accountOperation"];
+  #accountOperationInFlight = false;
   #selectedSymbol: string | undefined;
   #venueError: string | undefined;
   #walletError: string | undefined;
@@ -155,7 +157,7 @@ export class BrowserTraderController {
   #snapshot: TraderShellSnapshot;
   #updatePromise: Promise<void> | null = null;
   #updateQueued = false;
-  #runtimePromise: Promise<void> | null = null;
+  #runtimePromise: Promise<BrowserPrivateRuntime | null> | null = null;
   #runtimeGeneration = 0;
 
   constructor(options: BrowserTraderControllerOptions) {
@@ -261,27 +263,26 @@ export class BrowserTraderController {
       });
       if (generation !== this.#runtimeGeneration || venue !== this.#venue) {
         runtime.close();
-        return;
+        return null;
       }
       this.#runtime = runtime;
+      return runtime;
     })().finally(() => {
       this.#runtimePromise = null;
     });
-    await this.#runtimePromise;
-    if (!this.#runtime || venue !== this.#venue) return;
+    const openedRuntime = await this.#runtimePromise;
+    if (!openedRuntime || venue !== this.#venue) return;
     this.#account = new BrowserAccountOperations({
       release: this.#options.release,
       venue,
       vault: this.#vault,
-      inventory: this.#runtime.inventory,
+      inventory: openedRuntime.inventory,
       prover: this.#options.prover,
       wallet: this.#wallet,
       onProgress: (kind, stage) => {
         this.#accountOperation = {
           kind,
-          state: stage as NonNullable<
-            TraderShellSnapshot["accountOperation"]
-          >["state"],
+          state: stage,
           message: stage.replaceAll("_", " "),
         };
         void this.#update();
@@ -480,6 +481,7 @@ export class BrowserTraderController {
     },
     exportBackup: (passphrase) => this.#vault.exportBackup(passphrase),
     restoreBackup: async (backup, passphrase) => {
+      this.#runtimeGeneration += 1;
       this.#runtime?.close();
       this.#runtime = null;
       this.#account = null;
@@ -488,6 +490,11 @@ export class BrowserTraderController {
         passphrase,
         "Restored Darknyx private vault",
       );
+      const store = await inventoryStoreForVault(
+        this.#vault,
+        this.#options.databaseName,
+      );
+      await store.clear();
       await this.#openRuntime();
       await this.#update();
     },
@@ -513,10 +520,12 @@ export class BrowserTraderController {
     kind: "deposit" | "withdraw",
     draft: { marketSymbol: string; asset: "base" | "quote"; amount: string },
   ): Promise<void> {
-    if (!this.#account || !this.#runtime)
-      throw new Error("unlock the private vault first");
-    const asset = this.#asset(draft.marketSymbol, draft.asset);
+    if (this.#accountOperationInFlight) return;
+    this.#accountOperationInFlight = true;
     try {
+      if (!this.#account || !this.#runtime)
+        throw new Error("unlock the private vault first");
+      const asset = this.#asset(draft.marketSymbol, draft.asset);
       const result = await this.#account[kind]({
         tokenMint: asset.mint,
         amount: decimalToAtoms(draft.amount, asset.decimals),
@@ -538,6 +547,7 @@ export class BrowserTraderController {
         message: error instanceof Error ? error.message : String(error),
       };
     } finally {
+      this.#accountOperationInFlight = false;
       await this.#update();
     }
   }
@@ -546,10 +556,12 @@ export class BrowserTraderController {
     marketSymbol: string,
     assetKind: "base" | "quote",
   ): Promise<void> {
-    if (!this.#account || !this.#runtime)
-      throw new Error("unlock the private vault first");
-    const asset = this.#asset(marketSymbol, assetKind);
+    if (this.#accountOperationInFlight) return;
+    this.#accountOperationInFlight = true;
     try {
+      if (!this.#account || !this.#runtime)
+        throw new Error("unlock the private vault first");
+      const asset = this.#asset(marketSymbol, assetKind);
       const result = await this.#account.merge(asset.mint);
       this.#accountOperation = {
         kind: "merge",
@@ -568,6 +580,7 @@ export class BrowserTraderController {
         message: error instanceof Error ? error.message : String(error),
       };
     } finally {
+      this.#accountOperationInFlight = false;
       await this.#update();
     }
   }

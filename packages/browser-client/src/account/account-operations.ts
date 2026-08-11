@@ -22,6 +22,7 @@ import {
   bn254ToBE32,
   pubkeyToFrPair,
 } from "@darknyx/sdk/browser-inventory-crypto";
+import bs58 from "bs58";
 
 import {
   requestVaultInternal,
@@ -37,23 +38,9 @@ import type {
 import type { ExternalWalletController } from "../wallet/wallet-standard.js";
 
 const HEX32 = /^[0-9a-f]{64}$/;
-const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 const hex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-function base58(bytes: Uint8Array): string {
-  let value = 0n;
-  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
-  let encoded = "";
-  while (value > 0n) {
-    encoded = BASE58[Number(value % 58n)] + encoded;
-    value /= 58n;
-  }
-  let zeros = 0;
-  while (zeros < bytes.length && bytes[zeros] === 0) zeros += 1;
-  return "1".repeat(zeros) + (encoded || (zeros === 0 ? "1" : ""));
-}
 
 interface Inclusion {
   root: string;
@@ -84,6 +71,11 @@ interface PreparedMerge {
 }
 
 export type AccountOperationKind = "deposit" | "withdraw" | "merge";
+export type AccountOperationProgressStage =
+  | "preparing"
+  | "proving"
+  | "wallet_approval"
+  | "finalizing";
 export type AccountOperationResult =
   | { status: "finalized"; signature: string }
   | { status: "ambiguous"; signature: string; message: string };
@@ -109,7 +101,11 @@ export interface BrowserAccountOperationsOptions {
   fetchImpl?: typeof fetch;
   /** Test/integration seam; production defaults to the release-pinned RPC. */
   connection?: Pick<Connection, "getLatestBlockhash" | "confirmTransaction">;
-  onProgress?(operation: AccountOperationKind, stage: string): void;
+  onProgress?(
+    operation: AccountOperationKind,
+    stage: AccountOperationProgressStage,
+  ): void;
+  requestTimeoutMs?: number;
 }
 
 /** Typed deposit/withdraw/merge composition; no generic prove/sign surface. */
@@ -120,12 +116,35 @@ export class BrowserAccountOperations {
     "getLatestBlockhash" | "confirmTransaction"
   >;
   readonly #programId: PublicKey;
+  readonly #requestTimeoutMs: number;
 
   constructor(options: BrowserAccountOperationsOptions) {
     this.#options = options;
     this.#connection =
       options.connection ?? new Connection(options.release.rpcUrl, "finalized");
     this.#programId = new PublicKey(options.release.vaultProgramId);
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? 20_000;
+    if (
+      !Number.isFinite(this.#requestTimeoutMs) ||
+      this.#requestTimeoutMs <= 0
+    ) {
+      throw new Error("account-operation request timeout must be positive");
+    }
+  }
+
+  async #bounded<T>(label: string, operation: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} timed out`)),
+        this.#requestTimeoutMs,
+      );
+    });
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   #walletAddress(): PublicKey {
@@ -135,14 +154,27 @@ export class BrowserAccountOperations {
   }
 
   async #inclusion(note: InventoryNote): Promise<Inclusion> {
-    const token = await this.#options.venue.token();
+    const token = await this.#bounded(
+      "session token",
+      this.#options.venue.token(),
+    );
     if (!token) throw new Error("session broker returned an empty token");
-    const url = new URL("/tree/inclusion", this.#options.release.gatewayUrl);
+    const gateway = new URL(this.#options.release.gatewayUrl);
+    if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
+    const url = new URL("tree/inclusion", gateway);
     url.searchParams.set("commitment", note.commitment);
-    url.searchParams.set("tree_id", String(note.treeId ?? 0));
-    const response = await (this.#options.fetchImpl ?? fetch)(url, {
-      headers: { authorization: `Bearer ${token}` },
-    });
+    url.searchParams.set("tree_id", String(note.treeId));
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), this.#requestTimeoutMs);
+    let response: Response;
+    try {
+      response = await (this.#options.fetchImpl ?? fetch)(url, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok)
       throw new Error(`tree inclusion failed (${response.status})`);
     const body = (await response.json()) as Record<string, unknown>;
@@ -161,7 +193,7 @@ export class BrowserAccountOperations {
       throw new Error("tree inclusion response is malformed");
     }
     await this.#options.inventory.assertAcceptedRoot(
-      note.treeId ?? 0,
+      note.treeId,
       body.merkle_root,
     );
     const leafIndex = body.leaf_index as number;
@@ -180,7 +212,10 @@ export class BrowserAccountOperations {
     instruction: TransactionInstruction,
   ): Promise<AccountOperationResult> {
     const payer = this.#walletAddress();
-    const latest = await this.#connection.getLatestBlockhash("finalized");
+    const latest = await this.#bounded(
+      "latest blockhash",
+      this.#connection.getLatestBlockhash("finalized"),
+    );
     const message = new TransactionMessage({
       payerKey: payer,
       recentBlockhash: latest.blockhash,
@@ -199,12 +234,15 @@ export class BrowserAccountOperations {
         error instanceof Error ? error.message : String(error),
       );
     }
-    const signature = base58(signatureBytes);
+    const signature = bs58.encode(signatureBytes);
     this.#options.onProgress?.(operation, "finalizing");
     try {
-      const confirmation = await this.#connection.confirmTransaction(
-        { signature, ...latest },
-        "finalized",
+      const confirmation = await this.#bounded(
+        "finalized transaction confirmation",
+        this.#connection.confirmTransaction(
+          { signature, ...latest },
+          "finalized",
+        ),
       );
       if (confirmation.value.err) {
         throw new Error(JSON.stringify(confirmation.value.err));
@@ -324,7 +362,7 @@ export class BrowserAccountOperations {
       ]);
       const instruction = buildWithdrawInstruction({
         programId: this.#programId,
-        treeId: held.note.treeId ?? 0,
+        treeId: held.note.treeId,
         payer: this.#walletAddress(),
         tokenMint: mint,
         destinationTokenAccount: destination,
@@ -337,10 +375,15 @@ export class BrowserAccountOperations {
       });
       result = await this.#sendFinalized(operation, instruction);
     } catch (error) {
-      // #sendFinalized turns every post-signature failure into an ambiguous
-      // result. A thrown error therefore proves that no transaction signature
-      // was returned and the note is safe to make spendable again.
-      await this.#options.inventory.releaseReservation(held.reservationId);
+      // Wallet Standard may reject after broadcasting but before returning a
+      // signature. Keep the reservation unless failure happened before wallet
+      // submission; finalized reconciliation decides the uncertain case.
+      if (
+        !(error instanceof AccountOperationError) ||
+        error.stage !== "wallet"
+      ) {
+        await this.#options.inventory.releaseReservation(held.reservationId);
+      }
       throw error;
     }
     if (result.status === "finalized") {
@@ -385,7 +428,7 @@ export class BrowserAccountOperations {
       ]);
       const instruction = buildMergeInstruction({
         programId: this.#programId,
-        treeId: held[0].note.treeId ?? 0,
+        treeId: held[0].note.treeId,
         payer: this.#walletAddress(),
         inputUseTags: prepared.inputUseTags,
         outputCommitment: prepared.outputCommitment,
@@ -396,11 +439,16 @@ export class BrowserAccountOperations {
       });
       result = await this.#sendFinalized(operation, instruction);
     } catch (error) {
-      await Promise.all(
-        held.map(({ reservationId }) =>
-          this.#options.inventory.releaseReservation(reservationId),
-        ),
-      );
+      if (
+        !(error instanceof AccountOperationError) ||
+        error.stage !== "wallet"
+      ) {
+        await Promise.all(
+          held.map(({ reservationId }) =>
+            this.#options.inventory.releaseReservation(reservationId),
+          ),
+        );
+      }
       throw error;
     }
     if (result.status === "finalized") {

@@ -77,12 +77,13 @@ describe("browser inventory plane", () => {
           load: async () =>
             ({
               format: "darknyx-browser-inventory",
-              version: 2,
+              version: 3,
               notes: [],
               proofs: [],
               reservations: [],
               roots: [],
               nextOrderIndex: 1,
+              nextDepositIndex: 0,
               orders: [
                 {
                   orderId: "ab".repeat(16),
@@ -145,6 +146,40 @@ describe("browser inventory plane", () => {
       provingKeyVersion: "pk-1",
     });
     await expect(reloaded.allocateDepositIndex()).resolves.toBe(2);
+  });
+
+  it("rolls an account reservation back when durable persistence fails", async () => {
+    const backing = new InMemoryInventoryStore();
+    let rejectSave = false;
+    const inventory = await BrowserInventory.create({
+      store: {
+        load: () => backing.load(),
+        save: async (snapshot) => {
+          if (rejectSave) throw new Error("durable save failed");
+          await backing.save(snapshot);
+        },
+        clear: () => backing.clear(),
+      },
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("account-reservation"),
+    });
+    const spendable = await note(mint(0x9e), 500n, 41n, 2n);
+    await inventory.recover(report([spendable]), async () => false);
+    rejectSave = true;
+
+    await expect(
+      inventory.reserveAccountExact(market.quoteMintHex, 500n),
+    ).rejects.toThrow("durable save failed");
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "500",
+        reservedAtoms: "0",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
   });
 
   it("revalidates recovered openings and chain consumption before exposing balances", async () => {

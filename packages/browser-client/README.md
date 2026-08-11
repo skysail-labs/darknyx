@@ -83,10 +83,11 @@ withdraw and merge witnesses are likewise prepared there. The adapter compares
 all Groth16 public inputs with the exact instruction fields before giving a
 bounded versioned transaction to Wallet Standard. A withdrawal intentionally
 consumes one exact note. If no note equals the requested amount, the account UI
-asks the user to consolidate two to four notes on one Merkle shard first. A
-wallet rejection releases the reservation, while any transaction for which the
-wallet returned a signature remains reserved until finalized reconciliation
-decides it. The UI therefore never treats an RPC timeout as proof of failure.
+asks the user to consolidate two to four notes of the same mint on one Merkle
+shard first. Wallet errors do not prove that a transaction was not broadcast,
+so those reservations—and any transaction whose signature cannot be finalized—
+remain unavailable until finalized reconciliation decides the outcome. The UI
+therefore never treats an RPC timeout or wallet exception as proof of failure.
 
 Account recovery uses the existing encrypted version-2 seed envelope. Export
 downloads ciphertext JSON only; restore is available only for an unprovisioned

@@ -12,15 +12,23 @@ proving, and the focused frontend/supply-chain review remain release gates.
 The implementation is one linear stack. Every PR targets the branch immediately
 below it, shows only its own layer, and stays open until explicitly approved.
 
-| Layer           | Scope                                                                             | Must prove before the next layer                                                                                                     |
-| --------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 1. Foundation   | Typed public/core contracts, intent/inventory separation, stack-aware CI          | UI has no generic sign/prove, raw-seed, witness, or note-record capability; ambiguous submissions retain reservations                |
-| 2. Custody      | Production Worker, WebAuthn PRF wrapping, ciphertext-only IndexedDB, backup v2    | No spike test hooks or attack module in the product bundle; inactivity, tamper, restore, and unsupported-PRF tests pass              |
-| 3. Prover       | Browser Worker prover suite, signed/pinned artifact manifest, local verification  | All six client circuits prove and verify; artifact/version mismatch fails closed; UI thread stays responsive                         |
-| 4. Inventory    | Chain/tree sync, aggregate balances, note manager, proof cache, recovery          | Finalized-root verification, root-expiry refresh, reservation safety, and seed-plus-chain recovery pass                              |
-| 5. Trader shell | Dedicated-origin UI, attestation, external wallet, order/fill lifecycle           | Physical passkey matrix, Phantom under COOP/COEP, CSP/Trusted Types, reconnect/recovery, and adversarial frontend review pass        |
-| 6. Account UX   | Typed deposit, exact-note withdrawal, consolidation, and encrypted backup UX      | Public-input substitution fails closed; wallet rejection releases reservations; signed-but-unfinalized transactions remain ambiguous |
-| 7. Release host | Same-origin session broker, immutable assets, production headers and release pins | No long-lived CVM secret reaches the browser; deploy/header tests and the launch qualification matrix pass                           |
+No layer is launch-qualified until all cross-layer gates are recorded: the full
+local/CI suite; physical platform-passkey and roaming-key coverage; Phantom and
+at least one additional wallet under COOP/COEP; x86 proving distributions;
+real devnet deposit/withdraw/merge/order/settle and interrupted-recovery runs;
+immutable host/artifact provenance and rollback rehearsal; hostile-frontend and
+supply-chain review; third-party license clearance; and the applicable external
+audit, ceremony, governance, and mainnet controls tracked under `audits/`.
+
+| Layer           | Scope                                                                             | Must prove before the next layer                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Foundation   | Typed public/core contracts, intent/inventory separation, stack-aware CI          | UI has no generic sign/prove, raw-seed, witness, or note-record capability; ambiguous submissions retain reservations                         |
+| 2. Custody      | Production Worker, WebAuthn PRF wrapping, ciphertext-only IndexedDB, backup v2    | No spike test hooks or attack module in the product bundle; inactivity, tamper, restore, and unsupported-PRF tests pass                       |
+| 3. Prover       | Browser Worker prover suite, signed/pinned artifact manifest, local verification  | All six client circuits prove and verify; artifact/version mismatch fails closed; UI thread stays responsive                                  |
+| 4. Inventory    | Chain/tree sync, aggregate balances, note manager, proof cache, recovery          | Finalized-root verification, root-expiry refresh, reservation safety, and seed-plus-chain recovery pass                                       |
+| 5. Trader shell | Dedicated-origin UI, attestation, external wallet, order/fill lifecycle           | Physical passkey matrix, Phantom under COOP/COEP, CSP/Trusted Types, reconnect/recovery, and adversarial frontend review pass                 |
+| 6. Account UX   | Typed deposit, exact-note withdrawal, consolidation, and encrypted backup UX      | Public-input substitution fails closed; uncertain wallet broadcasts retain reservations; signed-but-unfinalized transactions remain ambiguous |
+| 7. Release host | Same-origin session broker, immutable assets, production headers and release pins | No long-lived CVM secret reaches the browser; deploy/header tests and the launch qualification matrix pass                                    |
 
 ## Layer evidence
 
@@ -70,7 +78,7 @@ below it, shows only its own layer, and stays open until explicitly approved.
   server-side. Wallet Standard discovery and sign-and-send are constrained to
   bounded Solana transaction bytes. The visual workspace and typed
   order/lifecycle composition remain stacked above it.
-- **Layer 5b — implementation complete and locally qualified:** the Warm Horizon trader
+- **Layer 5b — code complete, launch qualification pending:** the Warm Horizon trader
   workspace now exposes attestation, venue-local readiness, external wallet,
   vault, aggregate private balances, proof readiness, order entry, and durable
   settlement lifecycle states at desktop/tablet/mobile breakpoints. It imports
@@ -83,7 +91,7 @@ below it, shows only its own layer, and stays open until explicitly approved.
   Exact Chromium emulation at 375, 768, and 1280 CSS pixels confirms no
   page-level horizontal overflow; the narrow lifecycle table alone remains an
   intentional swipe/scroll region.
-- **Layer 5c — implementation complete and locally qualified:** the observable
+- **Layer 5c — code complete, launch qualification pending:** the observable
   controller now boots the finalized-governance/TDX trust chain before opening
   private state, converts human decimals to exact governed atomic units, and
   composes the custody Worker, encrypted inventory, background VALID_INPUT
@@ -101,7 +109,7 @@ below it, shows only its own layer, and stays open until explicitly approved.
   COOP/COEP, CSP, Trusted Types, and WebAuthn PRF. Physical-device, real-wallet,
   hostile-delivery, and live-venue checks remain launch gates, not implied by
   this local result.
-- **Layer 6 — implementation complete and locally qualified:** deposit,
+- **Layer 6 — code complete, launch qualification pending:** deposit,
   withdrawal, and note consolidation are typed account operations behind the
   trusted composition entrypoint. Seed-derived deposit secrets and spend/merge
   witnesses are prepared in the custody Worker; every locally produced proof's
@@ -110,10 +118,13 @@ below it, shows only its own layer, and stays open until explicitly approved.
   durable, never-reused recovery index. Withdrawals require one exact spendable
   note; users consolidate two to four same-mint, same-shard notes when they need
   a combined amount. Finalized transactions update encrypted inventory,
-  wallet rejection releases preflight reservations, and a returned signature
-  whose finality cannot be established remains reserved and visible as
-  ambiguous. Backup v2 export/restore is present in the account surface, but
+  an uncertain wallet broadcast retains preflight reservations, and a returned
+  signature whose finality cannot be established remains reserved and visible
+  as ambiguous. Backup v2 export/restore is present in the account surface, but
   plaintext seed material and generic prove/sign APIs remain absent from React.
+  This code is not qualified until the complete everything-green gate, real
+  wallet/passkey matrix, live devnet/CVM account flows, reconnect/recovery drill,
+  and focused frontend/supply-chain review have all produced recorded evidence.
 - **Layer 7 — pending:** the deployable dedicated-origin host, server-held
   session broker, immutable release manifest, production security headers, and
   launch-qualification record are the final implementation slice. Physical

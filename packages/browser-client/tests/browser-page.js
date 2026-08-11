@@ -281,6 +281,23 @@ async function supported() {
   if (!mismatchedOrderRejected) {
     throw new Error("custody Worker signed a mismatched order/index pair");
   }
+  let duplicateMergeRejected = false;
+  try {
+    const inclusion = {
+      root: acceptedRoot,
+      siblings: Array(20).fill("00".repeat(32)),
+      pathIndices: Array(20).fill(0),
+    };
+    await requestVaultInternal(vault, "prepareMerge", {
+      inputs: [recovered.notes[0], recovered.notes[0]],
+      inclusions: [inclusion, inclusion],
+    });
+  } catch (error) {
+    duplicateMergeRejected = /distinct notes/.test(String(error));
+  }
+  if (!duplicateMergeRejected) {
+    throw new Error("custody Worker accepted duplicate merge inputs");
+  }
   status.textContent = "preparing-deposit";
   let depositWitnessChecked = false;
   const accountOperations = new BrowserAccountOperations({
@@ -303,7 +320,10 @@ async function supported() {
       deposit: {
         prove: async (witness) => {
           depositWitnessChecked =
-            witness.amount === 123n && witness.noteSecret !== 0n;
+            witness.amount === 123n &&
+            witness.noteSecret !== 0n &&
+            witness.noteCommitment !== 0n &&
+            witness.recoveryNonce !== 0n;
           return {
             piA: new Uint8Array(64).fill(1),
             piB: new Uint8Array(128).fill(2),

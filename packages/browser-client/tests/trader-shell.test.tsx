@@ -162,5 +162,13 @@ describe("trader workspace", () => {
     expect(html).toContain("Withdrawals consume one exact note");
     expect(html).toContain("Portable recovery");
     expect(html).toContain('href="#account"');
+    const buttons = [...html.matchAll(/<button\b[^>]*>.*?<\/button>/g)].map(
+      ([markup]) => markup,
+    );
+    for (const label of ["Deposit", "Withdraw", "Consolidate"]) {
+      const button = buttons.find((markup) => markup.includes(label));
+      expect(button, `${label} action exists`).toBeDefined();
+      expect(button, `${label} action stays gated`).toContain('disabled=""');
+    }
   });
 });

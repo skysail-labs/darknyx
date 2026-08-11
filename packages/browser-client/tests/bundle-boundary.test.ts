@@ -43,6 +43,7 @@ describe("browser custody product boundary", () => {
     }
     expect(worker).toContain("darknyx/master-seed-backup/v2");
     expect(worker).toContain("browser vault is locked");
+    expect(entry).toContain("BrowserVault");
     expect(entry).not.toContain("BrowserProverSuite");
     expect(entry).not.toContain("proveValidInput");
     expect(entry).not.toContain("BrowserInventory");
