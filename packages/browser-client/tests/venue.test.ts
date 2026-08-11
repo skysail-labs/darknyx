@@ -5,7 +5,7 @@ import {
   vaultConfigPda,
   type TeeAttestation,
 } from "@darknyx/sdk/browser-attestation";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   bootstrapTrustedVenue,
@@ -209,6 +209,8 @@ describe("strict browser venue bootstrap", () => {
 });
 
 describe("same-origin token broker", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("rejects a credential broker on another origin", () => {
     expect(
       () =>
@@ -237,5 +239,21 @@ describe("same-origin token broker", () => {
     now += 240_001;
     expect(await broker.token()).toBe("t".repeat(64));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("binds the browser-native fetch receiver", async () => {
+    const nativeLike = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(
+        json({ access_token: "t".repeat(64), expires_in: 300 }),
+      );
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", nativeLike);
+    const broker = new SameOriginSessionBroker({
+      venueId: "primary",
+      origin: "https://app.example",
+    });
+    expect(await broker.token()).toBe("t".repeat(64));
+    expect(nativeLike).toHaveBeenCalledTimes(1);
   });
 });

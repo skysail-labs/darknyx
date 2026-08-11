@@ -21,6 +21,7 @@
  * fills-channel push remains only the low-latency fast path.
  */
 
+import { apiUrl } from "../api-url.js";
 import { deriveOrderId } from "../keys/key-generators.js";
 
 /** One located fill as served by the indexer's `GET /fills`.
@@ -65,8 +66,8 @@ export async function fetchOrderFills(
   orderId: string,
   opts: { since?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<IndexerFill[]> {
-  const f = opts.fetchImpl ?? fetch;
-  const url = new URL("/fills", baseUrl);
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const url = apiUrl(baseUrl, "fills");
   url.searchParams.set("order_id", orderId);
   if (opts.since) url.searchParams.set("since", String(opts.since));
   const res = await f(url.toString());

@@ -33,6 +33,7 @@
     "test:unit": "npm run build && vitest run",
     "test:custody": "node tests/browser-runner.mjs",
     "test:prover": "npm run build && node scripts/verify-artifact-payload.mjs && node tests/prover-browser-runner.mjs",
+    "test:live-cvm": "node tests/live-production-runner.mjs",
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {

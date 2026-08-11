@@ -311,6 +311,7 @@ describe("release host", () => {
     const csp = String(page.headers.get("content-security-policy"));
     expect(csp).toContain("require-trusted-types-for 'script'");
     expect(csp).toContain("https://artifacts.example");
+    expect(csp).toContain("https://pccs.phala.network");
     expect(csp).not.toContain("unsafe-inline");
     expect(csp).not.toContain("preload");
     const etag = page.headers.get("etag");

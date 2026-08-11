@@ -114,7 +114,9 @@ async function instruments(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<WireInstrument[]> {
-  const response = await fetchImpl(new URL("/instruments", gatewayUrl), {
+  const gateway = new URL(gatewayUrl);
+  if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
+  const response = await fetchImpl(new URL("instruments", gateway), {
     signal,
   });
   if (!response.ok) throw new Error(`/instruments failed (${response.status})`);
@@ -137,7 +139,7 @@ export async function bootstrapTrustedVenue(
   if (!release.expectedComposeHash) {
     throw new Error("release is missing the audited compose-hash pin");
   }
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const broker = new SameOriginSessionBroker({
     venueId: release.venueId,
     endpoint: release.sessionEndpoint,

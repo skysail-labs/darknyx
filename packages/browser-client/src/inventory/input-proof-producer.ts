@@ -63,7 +63,7 @@ export class BrowserInputProofProducer {
     if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
     this.#gatewayUrl = gateway.href;
     this.#tokenProvider = options.tokenProvider;
-    this.#fetch = options.fetchImpl ?? fetch;
+    this.#fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 10_000;
     if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
       throw new Error("inclusion timeout must be a positive number");

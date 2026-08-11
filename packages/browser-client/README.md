@@ -74,6 +74,20 @@ overwrite an existing artifact directory, so a release always starts from a
 fresh content-addressed application build. The private key is accepted only as
 `DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64` and is zeroed after signing.
 
+With that assembled release served by the standalone trader host, the explicit
+live browser gate is:
+
+```sh
+RUN_CVM_BROWSER_E2E=1 \
+  DARKNYX_TRADER_LIVE_ORIGIN=https://trade.example \
+  npm -w @darknyx/browser-client run test:live-cvm
+```
+
+It launches real Chrome and succeeds only after the production bundle verifies
+the TDX quote, signed compose measurement, finalized signer/config accounts,
+and live governed markets. It does not provision custody or ask for a passkey;
+the separate browser-custody suite covers that permissioned flow.
+
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,
 checks every recovered opening and tag, filters historical ancestors through
@@ -138,11 +152,12 @@ also require `worker-src 'self' blob:` and the
 Worker. Nested concurrency is capped at four.
 
 The same CSP should set `default-src 'none'`, `script-src 'self'
-'wasm-unsafe-eval'`, `worker-src 'self' blob:`, `connect-src 'self'`,
-`style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `form-action
-'none'`, `base-uri 'none'`, `object-src 'none'`, `frame-ancestors 'none'`, and
-`require-trusted-types-for 'script'`. A wildcard is not an acceptable
-substitute.
+'wasm-unsafe-eval'`, `worker-src 'self' blob:`, `connect-src 'self'
+https://pccs.phala.network`, `style-src 'self'`, `font-src 'self'`, `img-src
+'self' data:`, `form-action 'none'`, `base-uri 'none'`, `object-src 'none'`,
+`frame-ancestors 'none'`, and `require-trusted-types-for 'script'`. The fixed
+PCCS origin supplies Intel collateral to the browser's pinned
+`@phala/dcap-qvl`; a wildcard is not an acceptable substitute.
 
 `artifacts/client-artifacts.v1.payload.json` is the reviewed release payload.
 `scripts/verify-artifact-payload.mjs` checks it against all six local build

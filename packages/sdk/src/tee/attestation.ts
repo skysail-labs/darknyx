@@ -143,12 +143,14 @@ export async function verifyTeeAttestation(
       "pin_required",
     );
   }
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const verifier =
     opts.quoteVerifier ?? createDcapQuoteVerifier({ pccsUrl: opts.pccsUrl });
   const nonce = crypto.getRandomValues(new Uint8Array(32));
 
-  const attUrl = new URL("/attestation", apiBaseUrl);
+  const apiBase = new URL(apiBaseUrl);
+  if (!apiBase.pathname.endsWith("/")) apiBase.pathname += "/";
+  const attUrl = new URL("attestation", apiBase);
   attUrl.searchParams.set("reportData", toHex(nonce));
   const att = await getJson<{
     quote: string;
@@ -164,7 +166,7 @@ export async function verifyTeeAttestation(
     tee_pubkey: string;
     tee_pubkeys?: string[];
     boot_session_id: string;
-  }>(new URL("/info", apiBaseUrl).toString(), opts.token, fetchImpl);
+  }>(new URL("info", apiBase).toString(), opts.token, fetchImpl);
   if (info.tee_pubkey !== att.tee_pubkey) {
     throw new AttestationError(
       "/info tee_pubkey != /attestation tee_pubkey",

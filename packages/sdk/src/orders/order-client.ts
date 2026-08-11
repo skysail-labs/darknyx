@@ -9,6 +9,7 @@
 
 import { cancelCanonicalDigest } from "./canonical.js";
 import type { PlaceOrderRequest, OrderSigner } from "./build-order.js";
+import { apiUrl } from "../api-url.js";
 
 const toHex = (b: Uint8Array): string =>
   Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -96,8 +97,8 @@ export async function placeOrder(
   opts: OrderClientOptions,
   order: PlaceOrderRequest,
 ): Promise<PlaceOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(new URL("/orders", opts.baseUrl).toString(), {
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, "orders"), {
     method: "POST",
     headers: authHeaders(opts.token),
     body: JSON.stringify(order),
@@ -111,15 +112,12 @@ export async function cancelOrder(
   orderIdHex: string,
   cancel: CancelOrderRequest,
 ): Promise<CancelOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${orderIdHex}`, opts.baseUrl).toString(),
-    {
-      method: "DELETE",
-      headers: authHeaders(opts.token),
-      body: JSON.stringify(cancel),
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
+    method: "DELETE",
+    headers: authHeaders(opts.token),
+    body: JSON.stringify(cancel),
+  });
   return decode<CancelOrderResponse>(res);
 }
 
@@ -129,15 +127,12 @@ export async function modifyOrder(
   oldOrderIdHex: string,
   modify: ModifyOrderRequest,
 ): Promise<ModifyOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${oldOrderIdHex}`, opts.baseUrl).toString(),
-    {
-      method: "PUT",
-      headers: authHeaders(opts.token),
-      body: JSON.stringify(modify),
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${oldOrderIdHex}`), {
+    method: "PUT",
+    headers: authHeaders(opts.token),
+    body: JSON.stringify(modify),
+  });
   return decode<ModifyOrderResponse>(res);
 }
 
@@ -146,13 +141,10 @@ export async function getOrder(
   opts: OrderClientOptions,
   orderIdHex: string,
 ): Promise<unknown> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${orderIdHex}`, opts.baseUrl).toString(),
-    {
-      headers: { authorization: `Bearer ${opts.token}` },
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
+    headers: { authorization: `Bearer ${opts.token}` },
+  });
   return decode<unknown>(res);
 }
 
