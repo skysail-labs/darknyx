@@ -27,6 +27,7 @@
   "scripts": {
     "build": "node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
     "build:preview": "DARKNYX_UI_PREVIEW=1 npm run build",
+    "build:app": "node scripts/build-production-app.mjs && node scripts/verify-production-app.mjs",
     "test": "npm run test:unit && npm run test:custody && npm run test:prover",
     "test:unit": "npm run build && vitest run",
     "test:custody": "node tests/browser-runner.mjs",

@@ -671,6 +671,9 @@ jobs:
       - name: Browser-client unit and bundle-boundary tests
         run: npm exec -- vitest run --root packages/browser-client
 
+      - name: Build and verify production trader application
+        run: npm -w @darknyx/browser-client run build:app
+
       - name: Production browser custody lifecycle
         run: npm -w @darknyx/browser-client run test:custody
 

@@ -53,6 +53,15 @@ workspace fixture. The preview build emits both `dist/ui-preview.js` and
 `dist/ui-preview.css`; production consumers still import the separate
 `@darknyx/browser-client/ui` and `@darknyx/browser-client/ui.css` exports.
 
+`npm -w @darknyx/browser-client run build:app` builds the real product
+composition—not the preview fixture—into `.devnet/trader-static` by default.
+It instantiates the release-pinned prover, WebAuthn vault, Wallet Standard
+adapter, finalized multi-market recovery, venue attestation, order stream, and
+typed account operations. The emitted application, stylesheet, and both
+Workers use content-addressed filenames; the build verifier rejects source maps,
+unhashed executable assets, inline scripts, and secret-shaped RPC URLs. Set
+`DARKNYX_TRADER_STATIC_ROOT` to choose a deployment staging directory.
+
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,
 checks every recovered opening and tag, filters historical ancestors through
