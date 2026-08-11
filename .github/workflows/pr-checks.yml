@@ -578,12 +578,9 @@ jobs:
           for pkg in sdk daemon indexer trader-host; do
             cfg="packages/$pkg/tsconfig.test.json"
             test -f "$cfg" || { echo "::error::$cfg is missing"; fail=1; continue; }
-            if ! grep -q '"tests/\*\*/\*"' "$cfg"; then
-              echo "::error::$cfg no longer includes tests/**/* — the typecheck would skip test files"
-              fail=1
-            fi
-            # And prove tsc really loaded a test file, rather than matching a
-            # pattern that resolves to nothing.
+            # Prove tsc really loaded a test file. Inspecting the resolved file
+            # set accepts equivalent narrow globs such as `tests/**/*.ts`
+            # without weakening the guard to a brittle config-text match.
             n=$(node node_modules/typescript/bin/tsc -p "$cfg" --listFiles --noEmit \
                   | grep -c "/packages/$pkg/tests/" || true)
             if [ "$n" -eq 0 ]; then
