@@ -46,9 +46,14 @@ export class IndexedDbVaultStore implements VaultRecordStore {
         }
       };
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () =>
+      request.onerror = () => {
+        this.#databasePromise = null;
         reject(request.error ?? new Error("IndexedDB open failed"));
-      request.onblocked = () => reject(new Error("IndexedDB upgrade blocked"));
+      };
+      request.onblocked = () => {
+        this.#databasePromise = null;
+        reject(new Error("IndexedDB upgrade blocked"));
+      };
     });
     return this.#databasePromise;
   }

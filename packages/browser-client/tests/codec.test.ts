@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aadForHeader,
   fromBase64Url,
   randomBytes,
   toBase64Url,
@@ -15,6 +16,34 @@ describe("browser vault record codec", () => {
     expect(encoded).toBe("AAECf4D_");
     expect(fromBase64Url(encoded)).toEqual(bytes);
     expect(() => fromBase64Url(`${encoded}=`)).toThrow(/invalid base64url/);
+    expect(() => fromBase64Url("AR")).toThrow(/non-canonical base64url/);
+  });
+
+  it("pins the vault-record authenticated-data domain and field order", () => {
+    const header = vaultHeader("AQ", new Uint8Array(32), new Uint8Array(32));
+    expect(new TextDecoder().decode(aadForHeader(header))).toBe(
+      [
+        "darknyx/browser-vault/v1",
+        "darknyx-browser-vault",
+        "1",
+        "webauthn-prf-v1",
+        "AQ",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      ].join("\n"),
+    );
+  });
+
+  it("rejects malformed nested backup parameters", async () => {
+    const { validateBackup } = await import("../src/custody/codec.js");
+    expect(() =>
+      validateBackup({
+        format: "darknyx-master-seed-backup",
+        version: 2,
+        kdf: null,
+        cipher: [],
+      }),
+    ).toThrow(/unsupported encrypted seed-backup format/);
   });
 
   it("accepts only exact versioned ciphertext records", () => {

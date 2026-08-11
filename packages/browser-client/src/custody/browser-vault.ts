@@ -43,8 +43,13 @@ export interface BrowserVaultOptions {
 let workerUrlPolicy:
   | { canonical: string; policy: { createScriptURL(value: string): unknown } }
   | undefined;
+let canonicalWorkerUrl: string | undefined;
 
 function trustedVaultWorkerUrl(canonical: string): string | URL {
+  if (canonicalWorkerUrl && canonicalWorkerUrl !== canonical) {
+    throw new Error("only one canonical browser-vault Worker URL is allowed");
+  }
+  canonicalWorkerUrl = canonical;
   const trustedTypes = (
     globalThis as typeof globalThis & {
       trustedTypes?: TrustedTypesFactoryLike;
@@ -63,9 +68,6 @@ function trustedVaultWorkerUrl(canonical: string): string | URL {
         },
       }),
     };
-  }
-  if (workerUrlPolicy.canonical !== canonical) {
-    throw new Error("only one canonical browser-vault Worker URL is allowed");
   }
   return workerUrlPolicy.policy.createScriptURL(canonical) as string;
 }
@@ -240,6 +242,17 @@ export class BrowserVault implements VaultLifecyclePort {
     }
     await this.#request("lock");
     this.#cachedState = "locked";
+  }
+
+  async reset(confirmation: "DELETE_LOCAL_VAULT"): Promise<void> {
+    if (confirmation !== "DELETE_LOCAL_VAULT") {
+      throw new Error("explicit vault reset confirmation is required");
+    }
+    await this.#exclusive("restore", async () => {
+      await this.#request("lock");
+      this.#cachedState = "locked";
+      await this.#store.clear();
+    });
   }
 
   async exportBackup(passphrase: string): Promise<EncryptedSeedBackupV2> {

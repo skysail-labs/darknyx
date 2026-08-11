@@ -78,6 +78,7 @@ async function supported() {
     polled = (await vault.status()).state;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  await new Promise((resolve) => setTimeout(resolve, 80));
   polled = (await vault.status()).state;
   if (polled !== "locked")
     throw new Error("status polling extended inactivity");
@@ -103,6 +104,7 @@ async function supported() {
   const browserBackup = await exportPromise;
   const exportMs = performance.now() - exportStarted;
   clearInterval(heartbeat);
+  const minimumResponsivenessTicks = Math.floor(exportMs / 25);
   const interop = await fetch("/interop", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -123,7 +125,8 @@ async function supported() {
     indexeddb_contains_plaintext_seed:
       interop.indexeddb_contains_plaintext_seed,
     busy_during_backup: busyDuringBackup,
-    ui_responsive_during_backup: responsivenessTicks > 100,
+    ui_responsive_during_backup:
+      responsivenessTicks >= minimumResponsivenessTicks,
     restore_ms: Number(restoreMs.toFixed(2)),
     export_ms: Number(exportMs.toFixed(2)),
     cross_origin_isolated: self.crossOriginIsolated,

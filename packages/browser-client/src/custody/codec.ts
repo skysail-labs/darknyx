@@ -164,5 +164,35 @@ export function validateBackup(value: unknown): EncryptedSeedBackupV2 {
   ) {
     throw new Error("unsupported encrypted seed-backup format");
   }
-  return value as EncryptedSeedBackupV2;
+  const candidate = value as Record<string, unknown>;
+  const kdf = candidate.kdf;
+  const cipher = candidate.cipher;
+  if (
+    candidate.format !== "darknyx-master-seed-backup" ||
+    candidate.version !== 2 ||
+    !kdf ||
+    typeof kdf !== "object" ||
+    Array.isArray(kdf) ||
+    !cipher ||
+    typeof cipher !== "object" ||
+    Array.isArray(cipher)
+  ) {
+    throw new Error("unsupported encrypted seed-backup format");
+  }
+  const kdfRecord = kdf as Record<string, unknown>;
+  const cipherRecord = cipher as Record<string, unknown>;
+  if (
+    kdfRecord.name !== "scrypt" ||
+    typeof kdfRecord.n !== "number" ||
+    typeof kdfRecord.r !== "number" ||
+    typeof kdfRecord.p !== "number" ||
+    typeof kdfRecord.salt !== "string" ||
+    cipherRecord.name !== "aes-256-gcm" ||
+    typeof cipherRecord.iv !== "string" ||
+    typeof cipherRecord.ciphertext !== "string" ||
+    typeof cipherRecord.tag !== "string"
+  ) {
+    throw new Error("unsupported encrypted seed-backup format");
+  }
+  return candidate as unknown as EncryptedSeedBackupV2;
 }

@@ -366,12 +366,7 @@ async function handleMessage(data: WorkerRequest): Promise<void> {
   const passive = PASSIVE_COMMANDS.has(data.type);
   const previousDeadline = inactivityDeadline;
   try {
-    if (
-      passive &&
-      seed &&
-      previousDeadline > 0 &&
-      performance.now() >= previousDeadline
-    ) {
+    if (seed && previousDeadline > 0 && performance.now() >= previousDeadline) {
       clearSeed("inactivity");
     }
     if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -402,5 +397,5 @@ async function handleMessage(data: WorkerRequest): Promise<void> {
 // Serialize them so lock/restore cannot zero or replace an in-use seed.
 let commandQueue = Promise.resolve();
 workerScope.onmessage = ({ data }) => {
-  commandQueue = commandQueue.then(() => handleMessage(data));
+  commandQueue = commandQueue.then(() => handleMessage(data)).catch(() => undefined);
 };
