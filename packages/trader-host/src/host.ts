@@ -155,6 +155,20 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
         response.writeHead(400, { "cache-control": "no-store" });
         return response.end();
       }
+      if (url.pathname === "/healthz" && !url.search) {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.writeHead(405, { ...headers, "cache-control": "no-store" });
+          return response.end();
+        }
+        const body = Buffer.from("ok\n");
+        response.writeHead(200, {
+          ...headers,
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": String(body.length),
+          "cache-control": "no-store",
+        });
+        return response.end(request.method === "HEAD" ? undefined : body);
+      }
       if (url.pathname === "/api/darknyx/session/start") {
         await handleSession(request, response, normalized, state, false);
         return;

@@ -155,6 +155,8 @@ jobs:
               - '.github/workflows/pr-checks.yml'
             trader_host:
               - 'packages/trader-host/**'
+              - 'deploy/trader-host/**'
+              - '.dockerignore'
               - 'package.json'
               - 'package-lock.json'
               - '.github/workflows/pr-checks.yml'
@@ -717,6 +719,9 @@ jobs:
 
       - name: Production release-host security integration
         run: npm run test:trader-host
+
+      - name: Build the non-root trader-host container
+        run: docker build -f packages/trader-host/Dockerfile -t darknyx-trader-host:ci .
 
   daemon:
     name: Daemon — keystore, lifecycle, attestation (vitest)

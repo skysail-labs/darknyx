@@ -5,8 +5,13 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "darknyx-trader-host": "dist/bin.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/bin.js",
+    "check-config": "node dist/bin.js --check-config",
     "test": "vitest run",
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },

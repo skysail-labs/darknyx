@@ -337,6 +337,13 @@ describe("release host", () => {
     expect(await pins.json()).toEqual(release);
     const asset = await fetch(`${base}/app.${"a".repeat(16)}.js`);
     expect(asset.headers.get("cache-control")).toContain("immutable");
+    const health = await fetch(`${base}/healthz`);
+    expect(health.status).toBe(200);
+    expect(await health.text()).toBe("ok\n");
+    expect(health.headers.get("cache-control")).toBe("no-store");
+    expect((await fetch(`${base}/healthz`, { method: "POST" })).status).toBe(
+      405,
+    );
 
     const outside = join(
       await mkdtemp(join(tmpdir(), "darknyx-outside-")),

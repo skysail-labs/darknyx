@@ -66,3 +66,13 @@ This package is the host contract, not a claim of launch qualification. A
 release still needs physical-passkey coverage, the real wallet matrix under
 COOP/COEP, x86 proving distributions, an external frontend/supply-chain review,
 and a live venue recovery drill.
+
+The production executable is `darknyx-trader-host` (`npm -w
+@darknyx/trader-host run start`). It loads one strict public release, the static
+root, the CVM upstream, and bounded runtime limits from `DARKNYX_TRADER_*`
+configuration. The Helius URL, two independent 32-byte host keys, and CVM admin
+credentials are accepted only through owner-only regular files; unknown
+trader-host variables fail startup so a misspelling cannot silently select a
+default. `--check-config` performs the same release, key, endpoint, static-root,
+and limit validation without listening. The container and devnet topology are
+documented in `deploy/trader-host/README.md`.
