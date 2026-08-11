@@ -3,7 +3,21 @@
 Production-origin boundary for the Darknyx browser trader. It serves a reviewed
 static build and `release.json`, applies the required cross-origin isolation,
 CSP/Trusted Types, HSTS and browser capability headers, and owns the same-origin
-`POST /api/darknyx/session` endpoint.
+session plus live-data boundary.
+
+The public release points the browser at same-origin `/api/darknyx/venue/` and
+`/api/darknyx/rpc` URLs. The host proxies only an explicit allowlist of user CVM
+routes, finalized/read-only Solana JSON-RPC methods, the shared `/v1/stream`
+WebSocket, and signature-status subscriptions. The private Helius query key and
+the assigned CVM endpoint remain server-side; admin CVM routes and transaction
+submission through the RPC proxy are rejected. Configure both upstreams or
+neither—there is no partial proxy mode.
+
+`POST /api/darknyx/session/start` creates only a signed HttpOnly browser
+session, allowing finalized governance and attestation reads through those
+proxies. It does not provision a CVM account. The browser calls
+`POST /api/darknyx/session` for a bearer token only after those trust checks
+pass.
 
 The host intentionally does **not** accept one CVM API key/secret/passphrase
 from environment variables. TEE order and fill streams are account-scoped, so a

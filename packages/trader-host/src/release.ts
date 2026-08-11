@@ -30,8 +30,9 @@ function httpsUrl(value: unknown, label: string): string {
   } catch {
     throw new Error(`${label} must be a valid HTTPS URL`);
   }
+  const local = url.protocol === "http:" && url.hostname === "localhost";
   if (
-    url.protocol !== "https:" ||
+    (url.protocol !== "https:" && !local) ||
     url.username ||
     url.password ||
     url.search ||

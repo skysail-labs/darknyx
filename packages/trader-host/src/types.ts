@@ -66,4 +66,9 @@ export interface ReleaseHostOptions {
     conflictingAccountId?: string;
   }) => void | Promise<void>;
   onError?: (error: unknown) => void;
+  /** Server-only upstreams. Set both to enable the same-origin live proxy. */
+  gatewayUpstreamUrl?: string;
+  rpcUpstreamUrl?: string;
+  proxyTimeoutMs?: number;
+  maxProxyRequestsPerMinute?: number;
 }

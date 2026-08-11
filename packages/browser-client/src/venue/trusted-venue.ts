@@ -144,6 +144,10 @@ export async function bootstrapTrustedVenue(
     fetchImpl,
     origin: options.origin,
   });
+  // Establish only the signed HttpOnly host session before same-origin proxy
+  // reads. The CVM account and bearer token remain unprovisioned until every
+  // finalized-governance and attestation check below succeeds.
+  await broker.establish();
   const programId = new PublicKey(release.vaultProgramId);
   const [vaultConfig] = vaultConfigPda(programId);
   const governance = await finalizedAccount(

@@ -14,8 +14,9 @@ origin; origin and release integrity remain part of the browser custody model.
 The package deliberately exports no raw seed, generic signing, arbitrary
 proving, note-opening, or witness API.
 
-The trusted product-composition entrypoint establishes venue identity before it
-requests a trading token. It reads `VaultConfig` and every advertised
+The trusted product-composition entrypoint establishes a signed, authority-free
+host session and then establishes venue identity before it requests a trading
+token. It reads `VaultConfig` and every advertised
 `MarketConfig` at finalized commitment, verifies the TDX quote against the
 release-pinned compose hash and finalized shard-0 key, requires exact equality
 between the quote-bound and governed signer sets, and rejects instrument fields
@@ -23,10 +24,12 @@ that differ from governance. The SDK attestation core uses environment-neutral
 noble SHA-256/SHA-384 primitives; this is a real browser path, not a Node crypto
 polyfill.
 
-The browser never receives a CVM API secret or passphrase. A relative,
-same-origin `/api/darknyx/session` broker maps the release's opaque `venue_id`
-to server-held credentials and returns only a short-lived bearer token. The
-broker endpoint cannot be configured cross-origin. External wallets are
+The browser never receives a CVM endpoint, Helius key, CVM API secret, or
+passphrase. Relative same-origin venue/RPC proxies expose only allowlisted user
+reads and streams. After trust checks pass, `/api/darknyx/session` maps the
+release's opaque `venue_id` to server-held credentials and returns only a
+short-lived bearer token. These endpoints cannot be configured cross-origin.
+External wallets are
 discovered through Wallet Standard and are used only for bounded, explicitly
 user-approved Solana transactions; they are not the Darknyx note seed or a
 generic message signer.
@@ -126,12 +129,10 @@ also require `worker-src 'self' blob:` and the
 Worker. Nested concurrency is capped at four.
 
 The same CSP should set `default-src 'none'`, `script-src 'self'
-'wasm-unsafe-eval'`, `worker-src 'self' blob:`, `connect-src 'self'
-https://<pinned-gateway> https://<pinned-rpc>`, `style-src 'self'`, `font-src
-'self'`, `img-src 'self' data:`, `form-action 'none'`, `base-uri 'none'`,
-`object-src 'none'`, `frame-ancestors 'none'`, and
-`require-trusted-types-for 'script'`. Deployment must replace the endpoint
-placeholders with the reviewed release pins; a wildcard is not an acceptable
+'wasm-unsafe-eval'`, `worker-src 'self' blob:`, `connect-src 'self'`,
+`style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `form-action
+'none'`, `base-uri 'none'`, `object-src 'none'`, `frame-ancestors 'none'`, and
+`require-trusted-types-for 'script'`. A wildcard is not an acceptable
 substitute.
 
 `artifacts/client-artifacts.v1.payload.json` is the reviewed release payload.

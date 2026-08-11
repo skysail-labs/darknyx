@@ -5,6 +5,7 @@ import { extname, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 import { publicReleaseJson } from "./release.js";
+import { createLiveProxy } from "./live-proxy.js";
 import { securityHeaders } from "./security.js";
 import { handleSession, type SessionRuntimeState } from "./session.js";
 import type { ReleaseHostOptions } from "./types.js";
@@ -113,6 +114,18 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
     1,
     1_000_000,
   );
+  validateInteger(
+    options.proxyTimeoutMs ?? 20_000,
+    "proxyTimeoutMs",
+    1_000,
+    60_000,
+  );
+  validateInteger(
+    options.maxProxyRequestsPerMinute ?? 600,
+    "maxProxyRequestsPerMinute",
+    1,
+    10_000,
+  );
 
   const staticRoot = realpathSync(options.staticRoot);
   if (!statSync(staticRoot).isDirectory()) {
@@ -120,6 +133,7 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
   }
   const headers = securityHeaders(origin, options.release);
   const releaseBytes = publicReleaseJson(options.release);
+  const liveProxy = createLiveProxy(normalized);
   const state: SessionRuntimeState = {
     accountBySession: new Map(),
     sessionByAccount: new Map(),
@@ -137,13 +151,25 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
         response.writeHead(400, { "cache-control": "no-store" });
         return response.end();
       }
-      if (url.origin !== canonicalOrigin || url.search) {
+      if (url.origin !== canonicalOrigin) {
         response.writeHead(400, { "cache-control": "no-store" });
         return response.end();
+      }
+      if (url.pathname === "/api/darknyx/session/start") {
+        await handleSession(request, response, normalized, state, false);
+        return;
       }
       if (url.pathname === "/api/darknyx/session") {
         await handleSession(request, response, normalized, state);
         return;
+      }
+      if (liveProxy?.handles(url.pathname)) {
+        await liveProxy.handleHttp(request, response, url);
+        return;
+      }
+      if (url.search) {
+        response.writeHead(400, { "cache-control": "no-store" });
+        return response.end();
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         response.writeHead(405, { "cache-control": "no-store" });
@@ -213,5 +239,6 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
       }
     });
   });
+  liveProxy?.install(server);
   return server;
 }

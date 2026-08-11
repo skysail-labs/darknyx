@@ -119,6 +119,9 @@ function venueFetch(
         version: "test",
       });
     }
+    if (url === "https://app.example/api/darknyx/session/start") {
+      return new Response(null, { status: 204 });
+    }
     if (url === "https://app.example/api/darknyx/session") {
       return json({ access_token: "x".repeat(64), expires_in: 3600 });
     }
@@ -167,13 +170,21 @@ describe("strict browser venue bootstrap", () => {
   });
 
   it("fails closed when venue market metadata differs from governance", async () => {
+    const fetchImpl = venueFetch({ mismatchedTick: true });
     await expect(
       bootstrapTrustedVenue(RELEASE, {
-        fetchImpl: venueFetch({ mismatchedTick: true }),
+        fetchImpl,
         origin: "https://app.example",
         attestationVerifier: async () => attestation(),
       }),
     ).rejects.toThrow("disagrees with finalized governance");
+    expect(
+      vi
+        .mocked(fetchImpl)
+        .mock.calls.some(([input]) =>
+          String(input).endsWith("/api/darknyx/session"),
+        ),
+    ).toBe(false);
   });
 
   it("fails closed on signer-set drift and a disabled governed market", async () => {

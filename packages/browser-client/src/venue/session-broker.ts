@@ -53,6 +53,27 @@ export class SameOriginSessionBroker {
     }
   }
 
+  async establish(): Promise<void> {
+    const endpoint = new URL(
+      `${this.#endpoint.pathname}/start`,
+      this.#endpoint,
+    );
+    const response = await this.#fetch(endpoint, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-darknyx-client": "browser-v1",
+      },
+      body: JSON.stringify({ venue_id: this.#venueId }),
+      signal: AbortSignal.timeout(this.#timeoutMs),
+    });
+    if (response.status !== 204) {
+      throw new Error(`session bootstrap refused access (${response.status})`);
+    }
+  }
+
   async token(): Promise<string> {
     if (this.#token && this.#now() < this.#refreshAtMs) return this.#token;
     if (this.#inFlight) return this.#inFlight;

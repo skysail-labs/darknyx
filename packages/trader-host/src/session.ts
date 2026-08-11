@@ -104,6 +104,20 @@ function existingSession(
   };
 }
 
+export function authenticatedSessionId(
+  request: IncomingMessage,
+  options: ReleaseHostOptions,
+): string | null {
+  return (
+    existingSession(
+      request,
+      options.cookieKey,
+      options.now?.() ?? Date.now(),
+      options.sessionTtlSeconds ?? 7 * 24 * 60 * 60,
+    )?.id ?? null
+  );
+}
+
 async function body(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -167,6 +181,7 @@ export async function handleSession(
   response: ServerResponse,
   options: ReleaseHostOptions,
   state: SessionRuntimeState,
+  issueCredentials = true,
 ): Promise<void> {
   if (request.method !== "POST")
     return json(response, 405, { error: "method_not_allowed" });
@@ -242,6 +257,19 @@ export async function handleSession(
       "set-cookie",
       `${COOKIE}=${sessionId}.${issuedAt}.${mac(options.cookieKey, sessionId, issuedAt)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ttlSeconds}`,
     );
+  }
+
+  // Trust bootstrap needs only the signed HttpOnly cookie so same-origin
+  // venue/RPC reads can pass through the proxy. Do not provision a CVM
+  // account or mint a bearer token until attestation and finalized governance
+  // have both passed in the browser.
+  if (!issueCredentials) {
+    response.writeHead(204, {
+      "cache-control": "no-store",
+      pragma: "no-cache",
+    });
+    response.end();
+    return;
   }
 
   if (!state.tokenRate.has(session.id) && state.tokenRate.size >= maxTracked) {

@@ -79,8 +79,10 @@ export async function readJsonBounded(
 
 export function gatewayBase(value: string): URL {
   const gateway = new URL(value);
+  const local =
+    gateway.protocol === "http:" && gateway.hostname === "localhost";
   if (
-    gateway.protocol !== "https:" ||
+    (gateway.protocol !== "https:" && !local) ||
     gateway.username ||
     gateway.password ||
     gateway.search ||
