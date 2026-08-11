@@ -77,6 +77,28 @@ export function validateIntentDraft(
   if (draft.side !== "bid" && draft.side !== "ask") {
     throw new IntentValidationError("side");
   }
+  const baseAmountAtoms = canonicalU64(
+    draft.baseAmountAtoms,
+    "baseAmountAtoms",
+    false,
+  );
+  const limitPriceTicks = canonicalU64(
+    draft.limitPriceTicks,
+    "limitPriceTicks",
+    true,
+  );
+  let serializedAttributes: string | undefined;
+  try {
+    serializedAttributes = JSON.stringify(draft.attributes);
+  } catch {
+    throw new IntentValidationError("attributes");
+  }
+  if (
+    serializedAttributes === undefined ||
+    new TextEncoder().encode(serializedAttributes).length > MAX_ATTRIBUTES_BYTES
+  ) {
+    throw new IntentValidationError("attributes");
+  }
   const attributes = copyJson(draft.attributes, 0, "attributes");
   if (
     Array.isArray(attributes) ||
@@ -86,26 +108,12 @@ export function validateIntentDraft(
     throw new IntentValidationError("attributes");
   }
   const attributeObject = attributes as Readonly<Record<string, JsonValue>>;
-  if (
-    new TextEncoder().encode(JSON.stringify(attributeObject)).length >
-    MAX_ATTRIBUTES_BYTES
-  ) {
-    throw new IntentValidationError("attributes");
-  }
   return Object.freeze({
     protocolVersion: draft.protocolVersion,
     marketSymbol: draft.marketSymbol,
     side: draft.side,
-    baseAmountAtoms: canonicalU64(
-      draft.baseAmountAtoms,
-      "baseAmountAtoms",
-      false,
-    ),
-    limitPriceTicks: canonicalU64(
-      draft.limitPriceTicks,
-      "limitPriceTicks",
-      true,
-    ),
+    baseAmountAtoms,
+    limitPriceTicks,
     attributes: attributeObject,
   });
 }

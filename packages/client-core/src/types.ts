@@ -6,16 +6,19 @@ export type JsonValue =
 
 export interface TraderIntentDraft {
   /** Canonical order-schema version understood by the selected CVM. */
-  protocolVersion: number;
+  readonly protocolVersion: number;
   /** Uppercase base-quote symbol, for example `SOL-USDC`. */
-  marketSymbol: string;
-  side: "bid" | "ask";
+  readonly marketSymbol: string;
+  readonly side: "bid" | "ask";
   /** Positive canonical u64 string in base-token atomic units. */
-  baseAmountAtoms: string;
-  /** Canonical u64 string in the market's configured price ticks. */
-  limitPriceTicks: string;
+  readonly baseAmountAtoms: string;
+  /**
+   * Canonical u64 string in the market's configured price ticks. Ask-side
+   * market orders use `"0"` as the sentinel for selling at any clearing price.
+   */
+  readonly limitPriceTicks: string;
   /** Versioned extension surface. Unknown keys are preserved, never dropped. */
-  attributes: Readonly<Record<string, JsonValue>>;
+  readonly attributes: Readonly<Record<string, JsonValue>>;
 }
 
 export interface BalanceView {
@@ -36,8 +39,7 @@ export interface ProofReadinessView {
 export type IntentRejectionCode =
   | "INVALID_INTENT"
   | "AUTHORIZATION_FAILED"
-  | "VENUE_REJECTED"
-  | "LOCAL_RECONCILIATION_REQUIRED";
+  | "VENUE_REJECTED";
 
 export type IntentPendingReason =
   | "PROOF_NOT_READY"

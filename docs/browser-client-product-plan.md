@@ -32,6 +32,9 @@ stack only on explicit owner direction.
 - Authorization is a typed intent operation, never `sign(bytes)`.
 - A transport exception after submission starts is ambiguous. It is reconciled;
   its collateral is not automatically released or rebooked.
+- A compromised enclave can repeatedly select a colluding market maker. Launch
+  qualification therefore requires publishing per-MM execution-quality
+  statistics so persistent adverse selection is observable.
 - The market-maker daemon remains native/headless. Browser-first applies to the
   ordinary trader product, not persistent MM or flags-only block-flow liveness.
 - Tauri remains the compatible fallback if launch qualification rejects the
