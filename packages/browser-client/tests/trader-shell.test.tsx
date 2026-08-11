@@ -117,6 +117,7 @@ describe("trader workspace", () => {
     );
     expect(html).toContain("Reconciling");
     expect(html).toContain("status-dot is-pending");
+    expect(html).not.toContain("status-dot is-bad");
     expect(html).not.toContain(">Cancel<");
   });
 });

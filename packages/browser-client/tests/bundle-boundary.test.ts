@@ -66,6 +66,10 @@ describe("browser custody product boundary", () => {
       new URL("../dist/ui.css", import.meta.url),
       "utf8",
     );
+    const preview = await readFile(
+      new URL("./ui-preview.html", import.meta.url),
+      "utf8",
+    );
     expect(manifest.exports["./ui"]).toEqual({
       types: "./dist/ui/index.d.ts",
       default: "./dist/ui.js",
@@ -76,6 +80,8 @@ describe("browser custody product boundary", () => {
     );
     expect(ui).toContain("Venue identity");
     expect(ui).toContain("Place order");
+    expect(preview).toContain('rel="stylesheet" href="/dist/ui-preview.css"');
+    expect(preview).toContain('src="/dist/ui-preview.js"');
     expect(css).toContain(".darknyx-product");
     expect(css).toContain("--darknyx-ink");
     expect(ui).not.toContain("--darknyx-ink");
