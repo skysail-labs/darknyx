@@ -43,6 +43,7 @@ export interface BrowserInputProofProducerOptions {
   gatewayUrl: string;
   token: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }
 
 /** Production VALID_INPUT producer used only by the inventory scheduler. */
@@ -52,23 +53,31 @@ export class BrowserInputProofProducer {
   readonly #gatewayUrl: string;
   readonly #token: string;
   readonly #fetch: typeof fetch;
+  readonly #timeoutMs: number;
 
   constructor(options: BrowserInputProofProducerOptions) {
     this.#vault = options.vault;
     this.#prover = options.prover;
-    this.#gatewayUrl = new URL(options.gatewayUrl).href;
+    const gateway = new URL(options.gatewayUrl);
+    if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
+    this.#gatewayUrl = gateway.href;
     this.#token = options.token;
     this.#fetch = options.fetchImpl ?? fetch;
+    this.#timeoutMs = options.timeoutMs ?? 10_000;
+    if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
+      throw new Error("inclusion timeout must be a positive number");
+    }
   }
 
   produce: InputProofProducer = async (
     request: InputProofRequest,
   ): Promise<InputProofResult> => {
-    const url = new URL("/tree/inclusion", this.#gatewayUrl);
+    const url = new URL("tree/inclusion", this.#gatewayUrl);
     url.searchParams.set("commitment", request.note.commitment);
     url.searchParams.set("tree_id", String(request.treeId));
     const response = await this.#fetch(url, {
       headers: { authorization: `Bearer ${this.#token}` },
+      signal: AbortSignal.timeout(this.#timeoutMs),
     });
     if (!response.ok) {
       throw new Error(`tree inclusion request failed with ${response.status}`);
@@ -77,11 +86,15 @@ export class BrowserInputProofProducer {
       leaf_index?: unknown;
       merkle_root?: unknown;
       siblings?: unknown;
+      note_commitment?: unknown;
     };
     if (
       !Number.isSafeInteger(body.leaf_index) ||
       (body.leaf_index as number) < 0 ||
       (body.leaf_index as number) >= 1 << 20 ||
+      body.leaf_index !== Number(request.note.leafIndex) ||
+      normalizeHex32(body.note_commitment, "Note commitment") !==
+        request.note.commitment ||
       !Array.isArray(body.siblings) ||
       body.siblings.length !== 20
     ) {

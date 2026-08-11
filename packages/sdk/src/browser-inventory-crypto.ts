@@ -11,3 +11,4 @@ export {
   pubkeyToFrPair,
 } from "./utxo/note.js";
 export type { StoredNote } from "./utxo/note-store.js";
+export { consumedNotePda, merkleTreePda } from "./idl/vault-client.js";

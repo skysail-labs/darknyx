@@ -79,6 +79,8 @@ export type InputProofProducer = (
 ) => Promise<InputProofResult>;
 
 export interface RecoveryReport {
+  /** Full scans replace absent notes; cursor-based scans merge their delta. */
+  fullScan: boolean;
   notes: StoredNote[];
   recovered: {
     deposits: number;

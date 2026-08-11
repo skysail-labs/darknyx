@@ -30,13 +30,18 @@ export async function recoverBrowserInventory(
   const transactions: RawSettleTx[] = await options.scan({
     sinceSlot: options.sinceSlot,
   });
-  return requestVaultInternal<RecoveryReport>(options.vault, "recoverNotes", {
+  const report = await requestVaultInternal<RecoveryReport>(
+    options.vault,
+    "recoverNotes",
+    {
     programId: options.programId,
     baseMint: hex(options.baseMint),
     quoteMint: hex(options.quoteMint),
     transactions,
     sinceSlot: options.sinceSlot,
-  });
+    },
+  );
+  return { ...report, fullScan: options.sinceSlot === undefined };
 }
 
 /** Build the durable encrypted store from a key that never becomes extractable. */

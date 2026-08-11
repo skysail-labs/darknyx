@@ -1,4 +1,5 @@
 import { fromBase64Url, toBase64Url } from "../custody/codec.js";
+import { BROWSER_VAULT_LOCKED_ERROR } from "../custody/errors.js";
 import type { InventorySnapshot } from "./types.js";
 
 const DATABASE = "darknyx-browser-inventory";
@@ -150,10 +151,26 @@ export class EncryptedIndexedDbInventoryStore implements InventorySnapshotStore 
           request.result.createObjectStore(STORE);
         }
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () =>
+      request.onsuccess = () => {
+        const database = request.result;
+        const invalidate = () => {
+          if (this.#databasePromise) this.#databasePromise = null;
+        };
+        database.onclose = invalidate;
+        database.onversionchange = () => {
+          invalidate();
+          database.close();
+        };
+        resolve(database);
+      };
+      request.onerror = () => {
+        this.#databasePromise = null;
         reject(request.error ?? new Error("IndexedDB open failed"));
-      request.onblocked = () => reject(new Error("IndexedDB upgrade blocked"));
+      };
+      request.onblocked = () => {
+        this.#databasePromise = null;
+        reject(new Error("IndexedDB upgrade blocked"));
+      };
     });
     return this.#databasePromise;
   }
@@ -182,7 +199,7 @@ export class EncryptedIndexedDbInventoryStore implements InventorySnapshotStore 
       if (
         error instanceof Error &&
         (error.message.includes("snapshot") ||
-          error.message === "browser vault is locked")
+          error.message === BROWSER_VAULT_LOCKED_ERROR)
       ) {
         throw error;
       }

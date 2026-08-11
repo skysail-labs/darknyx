@@ -61,6 +61,7 @@ describe("browser VALID_INPUT producer", () => {
         new Response(
           JSON.stringify({
             leaf_index: 3,
+            note_commitment: note.commitment,
             merkle_root: target,
             siblings: Array.from({ length: 20 }, () => "55".repeat(32)),
           }),
@@ -75,17 +76,28 @@ describe("browser VALID_INPUT producer", () => {
       fetchImpl,
     });
 
-    await expect(
-      producer.produce({
+    const result = await producer.produce({
         note,
         root: target,
         treeId: 0,
         circuitVersion: "v3",
         provingKeyVersion: "pk1",
-      }),
-    ).resolves.toEqual({ proofBytes: expect.any(Uint8Array) });
+      });
+    expect(result.proofBytes).toEqual(expect.any(Uint8Array));
+    expect(result.proofBytes.slice(0, 64)).toEqual(new Uint8Array(64).fill(1));
+    expect(result.proofBytes.slice(64, 192)).toEqual(
+      new Uint8Array(128).fill(2),
+    );
+    expect(result.proofBytes.slice(192)).toEqual(new Uint8Array(64).fill(3));
     expect(worker.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "validInputWitness" }),
+      expect.objectContaining({
+        type: "validInputWitness",
+        payload: expect.objectContaining({
+          merkleRoot: target,
+          siblings: Array.from({ length: 20 }, () => "55".repeat(32)),
+          pathIndices: [1, 1, ...Array.from({ length: 18 }, () => 0)],
+        }),
+      }),
     );
     expect(proveValidInput).toHaveBeenCalledOnce();
     vault.destroy();
@@ -110,7 +122,8 @@ describe("browser VALID_INPUT producer", () => {
       fetchImpl: async () =>
         new Response(
           JSON.stringify({
-            leaf_index: 0,
+            leaf_index: 3,
+            note_commitment: note.commitment,
             merkle_root: "66".repeat(32),
             siblings: Array.from({ length: 20 }, () => "55".repeat(32)),
           }),

@@ -1,10 +1,11 @@
 import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  consumedNotePda,
+  merkleTreePda,
+} from "@darknyx/sdk/browser-inventory-crypto";
 import { parseMerkleRootRing } from "@darknyx/sdk/merkle-root-ring";
 
 import type { FinalizedRootRing } from "./types.js";
-
-const MERKLE_TREE_SEED = new TextEncoder().encode("merkle_tree");
-const CONSUMED_NOTE_SEED = new TextEncoder().encode("consumed_note");
 
 const hex = (value: Uint8Array): string =>
   Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -24,10 +25,7 @@ export class SolanaFinalizedRootSource {
         if (!Number.isInteger(treeId) || treeId < 0 || treeId > 255) {
           throw new Error(`tree id must be a u8, got ${treeId}`);
         }
-        const [address] = PublicKey.findProgramAddressSync(
-          [MERKLE_TREE_SEED, new Uint8Array([treeId])],
-          this.#programId,
-        );
+        const [address] = merkleTreePda(this.#programId, treeId);
         const response = await this.#connection.getAccountInfoAndContext(
           address,
           "finalized",
@@ -56,10 +54,7 @@ export class SolanaFinalizedRootSource {
     const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
       Number.parseInt(byte, 16),
     );
-    const [address] = PublicKey.findProgramAddressSync(
-      [CONSUMED_NOTE_SEED, tag],
-      this.#programId,
-    );
+    const [address] = consumedNotePda(this.#programId, tag);
     const account = await this.#connection.getAccountInfo(address, "finalized");
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {

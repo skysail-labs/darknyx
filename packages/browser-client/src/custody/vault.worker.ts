@@ -25,6 +25,7 @@ import {
   validateBackup,
   type BrowserVaultRecord,
 } from "./codec.js";
+import { BROWSER_VAULT_LOCKED_ERROR } from "./errors.js";
 
 const encoder = new TextEncoder();
 const BACKUP_FORMAT = "darknyx-master-seed-backup";
@@ -140,7 +141,7 @@ function rearmUntil(deadline: number): void {
 }
 
 function requireSeed(): Uint8Array<ArrayBuffer> {
-  if (!seed) throw new Error("browser vault is locked");
+  if (!seed) throw new Error(BROWSER_VAULT_LOCKED_ERROR);
   return seed;
 }
 

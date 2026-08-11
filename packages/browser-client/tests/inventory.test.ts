@@ -49,6 +49,7 @@ async function note(
 }
 
 const report = (notes: StoredNote[]): RecoveryReport => ({
+  fullScan: true,
   notes,
   recovered: { deposits: notes.length, trade: 0, change: 0, merges: 0 },
   unresolvedSettlements: 0,
@@ -104,7 +105,7 @@ describe("browser inventory plane", () => {
       provingKeyVersion: "pk-1",
       randomId: ids("proof-a", "reservation-a"),
     });
-    const collateral = await note(mint(0x9e), 101n, 51n, 4n);
+    const collateral = await note(mint(0x9e), 103n, 51n, 4n);
     await first.recover(report([collateral]), async () => false);
     await first.synchronizeFinalizedRoots([ring(root(1))]);
     await first.cacheReadyProof(collateral.commitment, root(1), proof());
@@ -113,7 +114,7 @@ describe("browser inventory plane", () => {
       marketSymbol: "SOL-USDC",
       side: "bid" as const,
       baseAmountAtoms: "100",
-      limitPriceTicks: "100",
+      limitPriceTicks: "101",
       attributes: {},
     };
 
@@ -134,7 +135,7 @@ describe("browser inventory plane", () => {
       {
         mint: market.quoteMintHex,
         spendableAtoms: "0",
-        reservedAtoms: "101",
+        reservedAtoms: "103",
         pendingSettlementAtoms: "0",
       },
     ]);

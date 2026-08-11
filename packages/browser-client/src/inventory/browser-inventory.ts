@@ -63,6 +63,10 @@ function canonicalU64(value: string, label: string): bigint {
   return parsed;
 }
 
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
+}
+
 function validateMarket(market: BrowserMarketInventoryConfig): void {
   if (!/^[A-Z0-9]+-[A-Z0-9]+$/.test(market.symbol)) {
     throw new Error(`invalid market symbol ${market.symbol}`);
@@ -111,8 +115,8 @@ function requiredCollateral(
     throw new Error("bid limit price must be positive");
   }
   const nominal =
-    draft.side === "bid" ? (base * price) / market.priceScale : base;
-  const fee = (nominal * market.feeRateBps) / BPS_SCALE;
+    draft.side === "bid" ? ceilDiv(base * price, market.priceScale) : base;
+  const fee = ceilDiv(nominal * market.feeRateBps, BPS_SCALE);
   const amount = nominal + fee;
   if (amount > U64_MAX) throw new Error("fee-inclusive collateral exceeds u64");
   return {
@@ -302,6 +306,50 @@ export class BrowserInventory implements InventoryIntentPort {
     await this.#store.save(this.#snapshot);
   }
 
+  async #mutate<T>(operation: () => T | Promise<T>): Promise<T> {
+    const previous = structuredClone(this.#snapshot);
+    try {
+      const result = await operation();
+      await this.#save();
+      return result;
+    } catch (error) {
+      this.#snapshot = previous;
+      throw error;
+    }
+  }
+
+  #pruneProofs(noteCommitment: string): void {
+    const held = new Set(
+      this.#snapshot.reservations
+        .filter((reservation) => reservation.noteCommitment === noteCommitment)
+        .map((reservation) => reservation.proofHandle),
+    );
+    const readyToKeep = new Set(
+      this.#snapshot.proofs
+        .filter(
+          (proof) =>
+            proof.noteCommitment === noteCommitment && proof.state === "ready",
+        )
+        .sort((left, right) =>
+          left.rootHistoryPosition !== right.rootHistoryPosition
+            ? left.rootHistoryPosition - right.rootHistoryPosition
+            : right.createdAtMs - left.createdAtMs,
+        )
+        .slice(0, 2)
+        .map((proof) => proof.handle),
+    );
+    this.#snapshot.proofs = this.#snapshot.proofs.filter((proof) => {
+      if (proof.noteCommitment !== noteCommitment) return true;
+      if (held.has(proof.handle) || readyToKeep.has(proof.handle)) return true;
+      if (proof.state === "ready") return false;
+      return (
+        !["root_evicted", "artifact_changed", "note_consumed"].includes(
+          proof.invalidationReason ?? "",
+        )
+      );
+    });
+  }
+
   async listBalances(): Promise<readonly BalanceView[]> {
     return this.#serialized(async () => {
       const totals = new Map<
@@ -353,7 +401,7 @@ export class BrowserInventory implements InventoryIntentPort {
   async synchronizeFinalizedRoots(
     rings: readonly FinalizedRootRing[],
   ): Promise<void> {
-    await this.#serialized(async () => {
+    await this.#serialized(() => this.#mutate(async () => {
       const next = rings.map(validateRootRing);
       const ids = new Set<number>();
       for (const ring of next) {
@@ -384,8 +432,7 @@ export class BrowserInventory implements InventoryIntentPort {
           proof.rootHistoryPosition = position;
         }
       }
-      await this.#save();
-    });
+    }));
   }
 
   async cacheReadyProof(
@@ -393,7 +440,7 @@ export class BrowserInventory implements InventoryIntentPort {
     merkleRoot: string,
     proofBytes: Uint8Array,
   ): Promise<string> {
-    return this.#serialized(async () => {
+    return this.#serialized(() => this.#mutate(async () => {
       const note = this.#snapshot.notes.find(
         (candidate) => candidate.commitment === noteCommitment,
       );
@@ -426,7 +473,7 @@ export class BrowserInventory implements InventoryIntentPort {
         existing.rootHistoryPosition = position;
         existing.state = "ready";
         delete existing.invalidationReason;
-        await this.#save();
+        this.#pruneProofs(noteCommitment);
         return existing.handle;
       }
       const handle = readyProofHandle(`proof-${this.#randomId()}`);
@@ -439,15 +486,15 @@ export class BrowserInventory implements InventoryIntentPort {
         rootHistoryPosition: position,
         state: "ready",
       });
-      await this.#save();
+      this.#pruneProofs(noteCommitment);
       return handle;
-    });
+    }));
   }
 
   async reserveReadyIntent(
     draft: TraderIntentDraft,
   ): Promise<ReservationOutcome> {
-    return this.#serialized(async () => {
+    return this.#serialized(() => this.#mutate(async () => {
       const market = this.#markets.get(draft.marketSymbol);
       if (!market) throw new Error(`unsupported market ${draft.marketSymbol}`);
       const required = requiredCollateral(draft, market);
@@ -490,7 +537,6 @@ export class BrowserInventory implements InventoryIntentPort {
           proofHandle: proof.handle,
           createdAtMs: this.#now(),
         });
-        await this.#save();
         return {
           status: "ready",
           reservation: {
@@ -500,11 +546,11 @@ export class BrowserInventory implements InventoryIntentPort {
         };
       }
       return { status: "not_ready", retryAfterMs: 250 };
-    });
+    }));
   }
 
   async releaseReservation(id: string): Promise<void> {
-    await this.#serialized(async () => {
+    await this.#serialized(() => this.#mutate(async () => {
       const index = this.#snapshot.reservations.findIndex(
         (candidate) => candidate.reservationId === id,
       );
@@ -521,12 +567,11 @@ export class BrowserInventory implements InventoryIntentPort {
         note.state = "spendable";
         delete note.reservationId;
       }
-      await this.#save();
-    });
+    }));
   }
 
   async markPendingSettlement(id: string): Promise<void> {
-    await this.#serialized(async () => {
+    await this.#serialized(() => this.#mutate(async () => {
       const reservation = this.#snapshot.reservations.find(
         (candidate) => candidate.reservationId === id,
       );
@@ -538,12 +583,11 @@ export class BrowserInventory implements InventoryIntentPort {
         throw new Error("inventory reservation is inconsistent");
       }
       note.state = "pending_settlement";
-      await this.#save();
-    });
+    }));
   }
 
   async markConsumed(noteCommitment: string): Promise<void> {
-    await this.#serialized(async () => {
+    await this.#serialized(() => this.#mutate(async () => {
       const note = this.#snapshot.notes.find(
         (candidate) => candidate.commitment === noteCommitment,
       );
@@ -559,8 +603,8 @@ export class BrowserInventory implements InventoryIntentPort {
           proof.invalidationReason = "note_consumed";
         }
       }
-      await this.#save();
-    });
+      this.#pruneProofs(noteCommitment);
+    }));
   }
 
   async resolveReservedProof(
@@ -601,37 +645,39 @@ export class BrowserInventory implements InventoryIntentPort {
     if (report.unresolvedSettlements > 0 || report.unresolvedMerges > 0) {
       throw new Error("seed-plus-chain recovery has unresolved owned outputs");
     }
-    const verified: InventoryNote[] = [];
-    for (const candidate of report.notes) {
-      const commitment = await noteCommitmentV2(candidate);
-      if (
-        !same(
-          commitment,
-          fromHex32(candidate.commitment, "recovered commitment"),
-        )
-      ) {
-        throw new Error("recovered note opening does not match its commitment");
+    await this.#serialized(() => this.#mutate(async () => {
+      const verified: InventoryNote[] = [];
+      for (const candidate of report.notes) {
+        const commitment = await noteCommitmentV2(candidate);
+        if (
+          !same(
+            commitment,
+            fromHex32(candidate.commitment, "recovered commitment"),
+          )
+        ) {
+          throw new Error(
+            "recovered note opening does not match its commitment",
+          );
+        }
+        const tag = hex(
+          await deriveNoteUseTag(commitment, bn254ToBE32(candidate.innerHash)),
+        );
+        const treeId = candidate.treeId ?? 0;
+        const consumed = await isConsumed(tag, treeId);
+        verified.push({
+          ...structuredClone(candidate),
+          noteUseTag: tag,
+          state: consumed
+            ? "consumed"
+            : candidate.leafIndex === undefined
+              ? "locked"
+              : "spendable",
+        });
       }
-      const tag = hex(
-        await deriveNoteUseTag(commitment, bn254ToBE32(candidate.innerHash)),
-      );
-      const treeId = candidate.treeId ?? 0;
-      const consumed = await isConsumed(tag, treeId);
-      verified.push({
-        ...structuredClone(candidate),
-        noteUseTag: tag,
-        state: consumed
-          ? "consumed"
-          : candidate.leafIndex === undefined
-            ? "locked"
-            : "spendable",
-      });
-    }
-    await this.#serialized(async () => {
       const priorByCommitment = new Map(
         this.#snapshot.notes.map((note) => [note.commitment, note]),
       );
-      this.#snapshot.notes = verified.map((note) => {
+      const recovered = verified.map((note) => {
         const prior = priorByCommitment.get(note.commitment);
         if (
           prior &&
@@ -646,6 +692,17 @@ export class BrowserInventory implements InventoryIntentPort {
         }
         return note;
       });
+      this.#snapshot.notes = report.fullScan
+        ? recovered
+        : [
+            ...this.#snapshot.notes.filter(
+              (note) =>
+                !recovered.some(
+                  (candidate) => candidate.commitment === note.commitment,
+                ),
+            ),
+            ...recovered,
+          ];
       const present = new Set(
         this.#snapshot.notes
           .filter((note) => note.reservationId !== undefined)
@@ -668,8 +725,7 @@ export class BrowserInventory implements InventoryIntentPort {
           proof.invalidationReason = "note_consumed";
         }
       }
-      await this.#save();
-    });
+    }));
   }
 
   async refreshExpiringProofs(produce: InputProofProducer): Promise<number> {
