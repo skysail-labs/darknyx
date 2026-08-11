@@ -168,7 +168,9 @@ export class BrowserAccountOperations {
     const timer = setTimeout(() => abort.abort(), this.#requestTimeoutMs);
     let response: Response;
     try {
-      response = await (this.#options.fetchImpl ?? fetch)(url, {
+      response = await (
+        this.#options.fetchImpl ?? globalThis.fetch.bind(globalThis)
+      )(url, {
         headers: { authorization: `Bearer ${token}` },
         signal: abort.signal,
       });

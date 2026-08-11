@@ -335,7 +335,9 @@ export async function loadSignedArtifactManifest(
   ) {
     throw new Error("artifact manifest requires HTTPS or localhost");
   }
-  const response = await (policy.fetchImpl ?? fetch)(manifestUrl, {
+  const response = await (
+    policy.fetchImpl ?? globalThis.fetch.bind(globalThis)
+  )(manifestUrl, {
     cache: "no-store",
     credentials: "omit",
     redirect: "error",
@@ -401,7 +403,7 @@ export async function fetchVerifiedArtifact(
   manifestUrl: string,
   artifactSetId: string,
   descriptor: ArtifactDescriptor,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Promise<Uint8Array<ArrayBuffer>> {
   const url = new URL(descriptor.path, manifestUrl);
   if (url.origin !== new URL(manifestUrl).origin) {

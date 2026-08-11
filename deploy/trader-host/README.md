@@ -76,6 +76,20 @@ docker compose -f deploy/trader-host/docker-compose.devnet.yaml up -d trader-hos
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
+For a live devnet rehearsal, first run the env-gated host integration test. It
+creates one isolated CVM account and proves the same-origin cookie, token
+exchange, finalized RPC proxy, instrument/status reads, and `/v1/stream` login
+round trip:
+
+```sh
+RUN_CVM_BROWSER_E2E=1 DARKNYX_TRADER_LIVE_ORIGIN=http://localhost:8080 \
+  npm -w @darknyx/trader-host test -- --run tests/live-cvm.test.ts
+```
+
+Then run the production Chrome gate documented in
+`packages/browser-client/README.md`. Both are intentionally opt-in and require
+the separately deployed CVM to be running.
+
 For production, build `packages/trader-host/Dockerfile` from the repository
 root, publish it under a unique release tag, resolve the manifest digest, and
 deploy only `image@sha256:…`. The development compose's local `build:` is not a

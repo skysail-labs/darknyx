@@ -19,6 +19,7 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 
+import { apiUrl } from "../api-url.js";
 import { formatGroth16ForOnChain } from "./groth16-format.js";
 import {
   noteCommitmentV2,
@@ -143,8 +144,8 @@ export async function fetchInclusionProof(
   opts: InclusionFetchOptions,
   noteCommitmentHex: string,
 ): Promise<InclusionWitness> {
-  const f = opts.fetchImpl ?? fetch;
-  const url = new URL("/tree/inclusion", opts.baseUrl);
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const url = apiUrl(opts.baseUrl, "tree/inclusion");
   // The TEE `/tree/inclusion` query param is `commitment` (see vault tree API);
   // `note_commitment` is the RESPONSE field, not the request param.
   url.searchParams.set("commitment", noteCommitmentHex);

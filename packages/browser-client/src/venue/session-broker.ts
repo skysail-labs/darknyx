@@ -45,7 +45,7 @@ export class SameOriginSessionBroker {
     }
     this.#venueId = options.venueId;
     this.#endpoint = endpoint;
-    this.#fetch = options.fetchImpl ?? fetch;
+    this.#fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.#now = options.now ?? Date.now;
     this.#timeoutMs = options.timeoutMs ?? 10_000;
     if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {

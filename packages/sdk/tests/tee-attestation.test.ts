@@ -53,7 +53,10 @@ const RTMR3 = replayEventLogRtmr(EVENT_LOG, 3);
 function fakeFetch(opts: { composeHash?: string } = {}): typeof fetch {
   return vi.fn(async (input: string | URL) => {
     const url = new URL(String(input));
-    if (url.pathname === "/attestation") {
+    if (
+      url.pathname === "/attestation" ||
+      url.pathname === "/api/darknyx/venue/attestation"
+    ) {
       const nonce = Buffer.from(
         url.searchParams.get("reportData") ?? "",
         "hex",
@@ -71,7 +74,10 @@ function fakeFetch(opts: { composeHash?: string } = {}): typeof fetch {
         { status: 200 },
       );
     }
-    if (url.pathname === "/info") {
+    if (
+      url.pathname === "/info" ||
+      url.pathname === "/api/darknyx/venue/info"
+    ) {
       return new Response(
         JSON.stringify({
           compose_hash: opts.composeHash ?? COMPOSE,
@@ -112,6 +118,29 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
     expect(r.composeHash).toBe(COMPOSE);
     expect(r.mrtd).toBe(MRTD);
     expect(r.bootSessionId).toBe("5a".repeat(32));
+  });
+
+  it("preserves a same-origin gateway path prefix", async () => {
+    const fetchImpl = fakeFetch();
+    await verifyTeeAttestation(
+      "https://app.example/api/darknyx/venue/",
+      COMPOSE,
+      {
+        quoteVerifier: goodVerifier(),
+        fetchImpl,
+        expectedTeePubkey: TEE_B58,
+      },
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/api/darknyx/venue/attestation?"),
+      expect.any(Object),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "https://app.example/api/darknyx/venue/info",
+      expect.any(Object),
+    );
   });
 
   it("refuses an unpinned build (empty expectedComposeHash)", async () => {

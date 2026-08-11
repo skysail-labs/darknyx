@@ -136,7 +136,7 @@ export function decodeReleasePublicKey(value: string): Uint8Array<ArrayBuffer> {
 }
 
 export async function fetchBrowserApplicationRelease(
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Promise<BrowserApplicationRelease> {
   const response = await fetchImpl("/release.json", {
     cache: "no-store",

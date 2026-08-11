@@ -1,5 +1,9 @@
 import type { PublicRelease } from "./types.js";
 
+// Must match @phala/dcap-qvl's pinned PHALA_PCCS_URL. Browser-side quote
+// verification fetches Intel collateral here; it is not gateway-controlled.
+const PHALA_PCCS_ORIGIN = "https://pccs.phala.network";
+
 function wsOrigin(value: string): string {
   const url = new URL(value);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -16,6 +20,7 @@ export function securityHeaders(
     wsOrigin(release.gateway_url),
     new URL(release.rpc_url).origin,
     new URL(release.artifact_manifest_url).origin,
+    PHALA_PCCS_ORIGIN,
   ].join(" ");
   const csp = [
     "default-src 'none'",

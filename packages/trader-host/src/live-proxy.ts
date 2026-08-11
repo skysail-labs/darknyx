@@ -265,15 +265,23 @@ function queryAllowed(pathname: string, search: URLSearchParams): boolean {
   const path = pathname.slice(VENUE_PREFIX.length);
   if (search.size === 0) return true;
   const allowed =
-    path === "/tree/inclusion"
-      ? new Set(["commitment", "tree_id"])
-      : path === "/tree/leaves"
-        ? new Set(["tree_id", "start", "limit"])
-        : path === "/tree/root"
-          ? new Set(["tree_id"])
-          : null;
+    path === "/attestation"
+      ? new Set(["reportData"])
+      : path === "/tree/inclusion"
+        ? new Set(["commitment", "tree_id"])
+        : path === "/tree/leaves"
+          ? new Set(["tree_id", "start", "limit"])
+          : path === "/tree/root"
+            ? new Set(["tree_id"])
+            : null;
   if (!allowed || [...search.keys()].some((key) => !allowed.has(key))) {
     return false;
+  }
+  if (path === "/attestation") {
+    return (
+      search.size === 1 &&
+      /^[0-9a-f]{64}$/.test(search.get("reportData") ?? "")
+    );
   }
   return [...search.values()].every((value) => /^[0-9a-f]{1,128}$/.test(value));
 }

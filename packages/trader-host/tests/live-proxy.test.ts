@@ -263,6 +263,32 @@ describe("same-origin live proxy", () => {
     expect(await rejected.json()).toEqual({ error: "rpc_method_rejected" });
   });
 
+  it("forwards only the attestation reportData nonce", async () => {
+    const { base, cookie, upstreamRequests } = await setup();
+    const nonce = "ab".repeat(32);
+    const accepted = await fetch(
+      `${base}/api/darknyx/venue/attestation?reportData=${nonce}`,
+      { headers: hostHeaders(cookie) },
+    );
+    expect(accepted.status).toBe(200);
+    expect(upstreamRequests.at(-1)?.path).toBe(
+      `/gateway/attestation?reportData=${nonce}`,
+    );
+    for (const query of [
+      `report_data=${nonce}`,
+      `reportData=${nonce}&extra=1`,
+      "reportData=ab",
+      "reportData=not-hex",
+    ]) {
+      const rejected = await fetch(
+        `${base}/api/darknyx/venue/attestation?${query}`,
+        { headers: hostHeaders(cookie) },
+      );
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({ error: "query_rejected" });
+    }
+  });
+
   it("bridges only the venue stream and allowlisted Solana subscriptions", async () => {
     const { base, cookie } = await setup();
     const wsBase = base.replace("http://", "ws://");
