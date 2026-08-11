@@ -9,6 +9,7 @@ export interface SessionBrokerOptions {
   fetchImpl?: typeof fetch;
   now?: () => number;
   origin?: string;
+  timeoutMs?: number;
 }
 
 /**
@@ -20,9 +21,11 @@ export class SameOriginSessionBroker {
   readonly #endpoint: URL;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
+  readonly #timeoutMs: number;
   #token = "";
   #refreshAtMs = 0;
   #inFlight: Promise<string> | null = null;
+  #generation = 0;
 
   constructor(options: SessionBrokerOptions) {
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(options.venueId)) {
@@ -44,25 +47,33 @@ export class SameOriginSessionBroker {
     this.#endpoint = endpoint;
     this.#fetch = options.fetchImpl ?? fetch;
     this.#now = options.now ?? Date.now;
+    this.#timeoutMs = options.timeoutMs ?? 10_000;
+    if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
+      throw new Error("session broker timeout must be a positive number");
+    }
   }
 
   async token(): Promise<string> {
     if (this.#token && this.#now() < this.#refreshAtMs) return this.#token;
     if (this.#inFlight) return this.#inFlight;
-    this.#inFlight = this.#refresh();
+    const generation = this.#generation;
+    const refresh = this.#refresh(generation);
+    this.#inFlight = refresh;
     try {
-      return await this.#inFlight;
+      return await refresh;
     } finally {
-      this.#inFlight = null;
+      if (this.#inFlight === refresh) this.#inFlight = null;
     }
   }
 
   invalidate(): void {
+    this.#generation += 1;
     this.#token = "";
     this.#refreshAtMs = 0;
+    this.#inFlight = null;
   }
 
-  async #refresh(): Promise<string> {
+  async #refresh(generation: number): Promise<string> {
     const response = await this.#fetch(this.#endpoint, {
       method: "POST",
       credentials: "same-origin",
@@ -72,6 +83,7 @@ export class SameOriginSessionBroker {
         "x-darknyx-client": "browser-v1",
       },
       body: JSON.stringify({ venue_id: this.#venueId }),
+      signal: AbortSignal.timeout(this.#timeoutMs),
     });
     if (!response.ok) {
       throw new Error(`session broker refused access (${response.status})`);
@@ -87,6 +99,9 @@ export class SameOriginSessionBroker {
       body.expires_in > 3_600
     ) {
       throw new Error("session broker returned a malformed token envelope");
+    }
+    if (generation !== this.#generation) {
+      throw new Error("session token refresh was invalidated");
     }
     this.#token = body.access_token;
     // Refresh after 80% of the advertised lifetime; a reconnect never races

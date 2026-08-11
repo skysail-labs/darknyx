@@ -33,6 +33,14 @@ interface WireInstrument {
   oracle?: { type?: unknown; pubkey?: unknown };
 }
 
+interface ValidatedWireInstrument {
+  symbol: string;
+  tickSize: string;
+  minOrderSize: string;
+  tradingEnabled: boolean;
+  oracleFeed: string;
+}
+
 export interface BootstrapTrustedVenueOptions {
   fetchImpl?: typeof fetch;
   origin?: string;
@@ -41,6 +49,7 @@ export interface BootstrapTrustedVenueOptions {
     expectedComposeHash: string,
     options: VerifyTeeAttestationOptions,
   ) => Promise<TeeAttestation>;
+  signal?: AbortSignal;
 }
 
 function base64Bytes(value: string): Uint8Array {
@@ -63,6 +72,7 @@ async function finalizedAccount(
   rpcUrl: string,
   address: PublicKey,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<{ data: Uint8Array; slot: number }> {
   const response = await fetchImpl(rpcUrl, {
     method: "POST",
@@ -79,6 +89,7 @@ async function finalizedAccount(
         },
       ],
     }),
+    signal,
   });
   if (!response.ok)
     throw new Error(`finalized RPC read failed (${response.status})`);
@@ -100,8 +111,11 @@ async function finalizedAccount(
 async function instruments(
   gatewayUrl: string,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<WireInstrument[]> {
-  const response = await fetchImpl(new URL("/instruments", gatewayUrl));
+  const response = await fetchImpl(new URL("/instruments", gatewayUrl), {
+    signal,
+  });
   if (!response.ok) throw new Error(`/instruments failed (${response.status})`);
   const body = (await response.json()) as unknown;
   if (!Array.isArray(body) || body.length === 0 || body.length > 64) {
@@ -123,12 +137,19 @@ export async function bootstrapTrustedVenue(
     throw new Error("release is missing the audited compose-hash pin");
   }
   const fetchImpl = options.fetchImpl ?? fetch;
+  const broker = new SameOriginSessionBroker({
+    venueId: release.venueId,
+    endpoint: release.sessionEndpoint,
+    fetchImpl,
+    origin: options.origin,
+  });
   const programId = new PublicKey(release.vaultProgramId);
   const [vaultConfig] = vaultConfigPda(programId);
   const governance = await finalizedAccount(
     release.rpcUrl,
     vaultConfig,
     fetchImpl,
+    options.signal,
   );
   const onchainSigners = vaultConfigTeePubkeys(governance.data);
 
@@ -144,19 +165,24 @@ export async function bootstrapTrustedVenue(
   );
   assertTeePubkeysMatch(attestation.teePubkeys, onchainSigners);
 
-  const wireInstruments = await instruments(release.gatewayUrl, fetchImpl);
+  const wireInstruments = await instruments(
+    release.gatewayUrl,
+    fetchImpl,
+    options.signal,
+  );
   const seen = new Set<string>();
-  const trusted: TrustedInstrument[] = [];
-  let finalizedGovernanceSlot = governance.slot;
-  for (const wire of wireInstruments) {
+  const parsed = wireInstruments.map((wire) => {
     if (
       typeof wire.symbol !== "string" ||
       !/^[A-Z0-9]{2,16}-[A-Z0-9]{2,16}$/.test(wire.symbol) ||
       typeof wire.base_mint !== "string" ||
       typeof wire.quote_mint !== "string" ||
+      typeof wire.tick_size !== "string" ||
+      typeof wire.min_order_size !== "string" ||
       typeof wire.trading_enabled !== "boolean" ||
       wire.oracle?.type !== "pyth_pull_v2" ||
-      typeof wire.oracle.pubkey !== "string"
+      typeof wire.oracle.pubkey !== "string" ||
+      !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey)
     ) {
       throw new Error("venue returned a malformed instrument");
     }
@@ -166,16 +192,38 @@ export async function bootstrapTrustedVenue(
     const base = new PublicKey(wire.base_mint);
     const quote = new PublicKey(wire.quote_mint);
     const [marketAddress] = marketConfigPda(programId, base, quote);
-    const account = await finalizedAccount(
-      release.rpcUrl,
+    return {
+      wire: {
+        symbol: wire.symbol,
+        tickSize: wire.tick_size,
+        minOrderSize: wire.min_order_size,
+        tradingEnabled: wire.trading_enabled,
+        oracleFeed: wire.oracle.pubkey,
+      } satisfies ValidatedWireInstrument,
+      base,
+      quote,
       marketAddress,
-      fetchImpl,
-    );
+    };
+  });
+  const accounts = await Promise.all(
+    parsed.map(({ marketAddress }) =>
+      finalizedAccount(
+        release.rpcUrl,
+        marketAddress,
+        fetchImpl,
+        options.signal,
+      ),
+    ),
+  );
+  const trusted: TrustedInstrument[] = [];
+  let finalizedGovernanceSlot = governance.slot;
+  for (const [index, { wire, base, quote }] of parsed.entries()) {
+    const account = accounts[index];
     finalizedGovernanceSlot = Math.min(finalizedGovernanceSlot, account.slot);
     const market = decodeMarketConfig(account.data);
-    const tickSize = strictU64(wire.tick_size, `${wire.symbol}.tick_size`);
+    const tickSize = strictU64(wire.tickSize, `${wire.symbol}.tick_size`);
     const minOrderSize = strictU64(
-      wire.min_order_size,
+      wire.minOrderSize,
       `${wire.symbol}.min_order_size`,
     );
     if (
@@ -183,7 +231,7 @@ export async function bootstrapTrustedVenue(
       !market.quoteMint.equals(quote) ||
       market.tickSize !== tickSize ||
       market.minOrderSize !== minOrderSize ||
-      (wire.trading_enabled && !market.enabled)
+      (wire.tradingEnabled && !market.enabled)
     ) {
       throw new Error(
         `instrument ${wire.symbol} disagrees with finalized governance`,
@@ -198,18 +246,12 @@ export async function bootstrapTrustedVenue(
       priceScale: market.priceScale,
       tickSize,
       minOrderSize,
-      tradingEnabled: wire.trading_enabled && market.enabled,
-      oracleFeed: wire.oracle.pubkey,
+      tradingEnabled: wire.tradingEnabled && market.enabled,
+      oracleFeed: wire.oracleFeed,
     });
   }
 
   const status = await fetchSystemStatus(release.gatewayUrl, { fetchImpl });
-  const broker = new SameOriginSessionBroker({
-    venueId: release.venueId,
-    endpoint: release.sessionEndpoint,
-    fetchImpl,
-    origin: options.origin,
-  });
   return Object.freeze({
     attestation,
     finalizedGovernanceSlot,

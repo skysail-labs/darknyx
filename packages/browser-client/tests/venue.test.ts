@@ -34,7 +34,7 @@ function vaultConfig(): Uint8Array {
   return data;
 }
 
-function marketConfig(tick = 100n): Uint8Array {
+function marketConfig(tick = 100n, enabled = true): Uint8Array {
   const data = new Uint8Array(108);
   data.set(discriminator("MarketConfig"));
   data.set(BASE.toBytes(), 8);
@@ -45,13 +45,13 @@ function marketConfig(tick = 100n): Uint8Array {
   u64(data, 96, 1_000n);
   data[104] = 9;
   data[105] = 6;
-  data[106] = 1;
+  data[106] = enabled ? 1 : 0;
   data[107] = 255;
   return data;
 }
 
 function b64(data: Uint8Array): string {
-  return Buffer.from(data).toString("base64");
+  return btoa(String.fromCharCode(...data));
 }
 
 function json(body: unknown, status = 200): Response {
@@ -72,7 +72,9 @@ function attestation(): TeeAttestation {
   };
 }
 
-function venueFetch(options: { mismatchedTick?: boolean } = {}): typeof fetch {
+function venueFetch(
+  options: { mismatchedTick?: boolean; marketEnabled?: boolean } = {},
+): typeof fetch {
   const [vault] = vaultConfigPda(PROGRAM);
   const [market] = marketConfigPda(PROGRAM, BASE, QUOTE);
   return vi.fn(async (input, init) => {
@@ -85,7 +87,7 @@ function venueFetch(options: { mismatchedTick?: boolean } = {}): typeof fetch {
         request.params[0] === vault.toBase58()
           ? vaultConfig()
           : request.params[0] === market.toBase58()
-            ? marketConfig()
+            ? marketConfig(100n, options.marketEnabled ?? true)
             : undefined;
       return json({
         result: {
@@ -173,6 +175,26 @@ describe("strict browser venue bootstrap", () => {
       }),
     ).rejects.toThrow("disagrees with finalized governance");
   });
+
+  it("fails closed on signer-set drift and a disabled governed market", async () => {
+    await expect(
+      bootstrapTrustedVenue(RELEASE, {
+        fetchImpl: venueFetch(),
+        origin: "https://app.example",
+        attestationVerifier: async () => ({
+          ...attestation(),
+          teePubkeys: [new PublicKey(new Uint8Array(32).fill(6)).toBase58()],
+        }),
+      }),
+    ).rejects.toThrow(/attested tee_pubkeys.*on-chain/i);
+    await expect(
+      bootstrapTrustedVenue(RELEASE, {
+        fetchImpl: venueFetch({ marketEnabled: false }),
+        origin: "https://app.example",
+        attestationVerifier: async () => attestation(),
+      }),
+    ).rejects.toThrow("disagrees with finalized governance");
+  });
 });
 
 describe("same-origin token broker", () => {
@@ -188,6 +210,7 @@ describe("same-origin token broker", () => {
   });
 
   it("caches a short-lived token and never accepts long-lived credentials", async () => {
+    let now = 1_000;
     const fetchImpl = vi.fn(async () =>
       json({ access_token: "t".repeat(64), expires_in: 300 }),
     );
@@ -195,9 +218,13 @@ describe("same-origin token broker", () => {
       venueId: "primary",
       origin: "https://app.example",
       fetchImpl,
+      now: () => now,
     });
     expect(await broker.token()).toBe("t".repeat(64));
     expect(await broker.token()).toBe("t".repeat(64));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    now += 240_001;
+    expect(await broker.token()).toBe("t".repeat(64));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

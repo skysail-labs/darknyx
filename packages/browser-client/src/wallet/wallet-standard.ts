@@ -43,6 +43,8 @@ export class ExternalWalletController {
   readonly #chain: `solana:${string}`;
   #wallet: SolanaWallet | null = null;
   #account: WalletAccount | null = null;
+  readonly #listeners = new Set<() => void>();
+  readonly #offUnregister: () => void;
 
   constructor(
     options: {
@@ -52,6 +54,13 @@ export class ExternalWalletController {
   ) {
     this.#chain = options.chain ?? "solana:devnet";
     this.#wallets = options.wallets ?? getWallets();
+    this.#offUnregister = this.#wallets.on("unregister", (...removed) => {
+      if (this.#wallet && removed.includes(this.#wallet)) {
+        this.#wallet = null;
+        this.#account = null;
+      }
+      for (const listener of this.#listeners) listener();
+    });
   }
 
   available(): readonly { name: string; icon: string }[] {
@@ -76,6 +85,8 @@ export class ExternalWalletController {
     }
     if (!wallet)
       throw new Error("selected wallet is unavailable or incompatible");
+    if (this.#wallet === wallet && this.#account) return this.current()!;
+    if (this.#wallet) await this.disconnect();
     const { accounts } = await wallet.features[StandardConnect].connect();
     const account = accounts.find(
       (candidate) =>
@@ -91,12 +102,12 @@ export class ExternalWalletController {
 
   async disconnect(): Promise<void> {
     const wallet = this.#wallet;
-    this.#wallet = null;
-    this.#account = null;
     const disconnect = wallet?.features[StandardDisconnect];
     if (disconnect) {
       await disconnect.disconnect();
     }
+    this.#wallet = null;
+    this.#account = null;
   }
 
   async signAndSendTransaction(transaction: Uint8Array): Promise<Uint8Array> {
@@ -121,16 +132,15 @@ export class ExternalWalletController {
 
   subscribe(listener: () => void): () => void {
     const offRegister = this.#wallets.on("register", listener);
-    const offUnregister = this.#wallets.on("unregister", (...removed) => {
-      if (this.#wallet && removed.includes(this.#wallet)) {
-        this.#wallet = null;
-        this.#account = null;
-      }
-      listener();
-    });
+    this.#listeners.add(listener);
     return () => {
       offRegister();
-      offUnregister();
+      this.#listeners.delete(listener);
     };
+  }
+
+  destroy(): void {
+    this.#offUnregister();
+    this.#listeners.clear();
   }
 }

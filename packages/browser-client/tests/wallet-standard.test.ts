@@ -66,4 +66,43 @@ describe("external Wallet Standard boundary", () => {
     await controller.disconnect();
     expect(controller.current()).toBeNull();
   });
+
+  it("clears an unregistered active wallet without requiring a subscription", async () => {
+    const candidate = wallet();
+    let unregister: ((...wallets: Wallet[]) => void) | undefined;
+    const controller = new ExternalWalletController({
+      wallets: {
+        get: () => [candidate],
+        on: (event, listener) => {
+          if (event === "unregister") unregister = listener;
+          return () => undefined;
+        },
+        register: () => () => undefined,
+      },
+    });
+    await controller.connect("Test Wallet");
+    unregister?.(candidate);
+    expect(controller.current()).toBeNull();
+    controller.destroy();
+  });
+
+  it("retains the active wallet when its disconnect cleanup rejects", async () => {
+    const candidate = wallet();
+    vi.mocked(
+      candidate.features[StandardDisconnect]!.disconnect,
+    ).mockRejectedValueOnce(new Error("wallet refused disconnect"));
+    const controller = new ExternalWalletController({
+      wallets: {
+        get: () => [candidate],
+        on: () => () => undefined,
+        register: () => () => undefined,
+      },
+    });
+    await controller.connect("Test Wallet");
+    await expect(controller.disconnect()).rejects.toThrow(
+      "wallet refused disconnect",
+    );
+    expect(controller.current()?.walletName).toBe("Test Wallet");
+    controller.destroy();
+  });
 });
