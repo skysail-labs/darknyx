@@ -12,6 +12,7 @@ export {
 export {
   assertTeePubkeysMatch,
   vaultConfigTeePubkeys,
+  vaultConfigTradingParameters,
 } from "./tee/vault-config.js";
 export {
   decodeMarketConfig,

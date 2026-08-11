@@ -32,6 +32,8 @@ export interface TrustedInstrument {
 export interface TrustedVenueIdentity {
   attestation: TeeAttestation;
   finalizedGovernanceSlot: number;
+  feeRateBps: number;
+  numTrees: number;
   instruments: readonly TrustedInstrument[];
   status: SystemStatus;
 }

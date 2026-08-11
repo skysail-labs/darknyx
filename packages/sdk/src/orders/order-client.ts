@@ -10,7 +10,8 @@
 import { cancelCanonicalDigest } from "./canonical.js";
 import type { PlaceOrderRequest, OrderSigner } from "./build-order.js";
 
-const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
+const toHex = (b: Uint8Array): string =>
+  Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** A structured API error (mirrors the REST error envelope `{ code, message }`
  *  + the `x-request-id` correlation header). */

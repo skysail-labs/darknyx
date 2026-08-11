@@ -7,6 +7,7 @@ export {
   BrowserInventory,
   type BrowserInventoryOptions,
   type RecoveryConsumptionVerifier,
+  type RecoveryLockVerifier,
 } from "./inventory/browser-inventory.js";
 export {
   EncryptedIndexedDbInventoryStore,
@@ -49,3 +50,26 @@ export {
   ExternalWalletController,
   type ConnectedWalletView,
 } from "./wallet/wallet-standard.js";
+export {
+  BrowserIntentAuthorizer,
+  type BrowserIntentAuthorizerOptions,
+} from "./trader/intent-authorizer.js";
+export {
+  BrowserOrderTransport,
+  type BrowserTradingTransport,
+} from "./trader/order-transport.js";
+export {
+  BrowserLifecycleStream,
+  type BrowserLifecycleStreamOptions,
+} from "./trader/lifecycle-stream.js";
+export {
+  createBrowserPrivateRuntime,
+  type BrowserPrivateRuntime,
+  type BrowserPrivateRuntimeOptions,
+} from "./trader/runtime.js";
+export {
+  BrowserTraderController,
+  decimalToAtoms,
+  decimalToPriceTicks,
+  type BrowserTraderControllerOptions,
+} from "./trader/controller.js";

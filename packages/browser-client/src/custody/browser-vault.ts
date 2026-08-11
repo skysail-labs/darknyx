@@ -31,7 +31,9 @@ type InternalRequest = <T>(
     | "inventorySeal"
     | "inventoryOpen"
     | "recoverNotes"
-    | "validInputWitness",
+    | "validInputWitness"
+    | "authorizeIntent"
+    | "authorizeCancel",
   payload?: Record<string, unknown>,
 ) => Promise<T>;
 
@@ -325,7 +327,9 @@ export function requestVaultInternal<T>(
     | "inventorySeal"
     | "inventoryOpen"
     | "recoverNotes"
-    | "validInputWitness",
+    | "validInputWitness"
+    | "authorizeIntent"
+    | "authorizeCancel",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const request = internalRequests.get(vault);

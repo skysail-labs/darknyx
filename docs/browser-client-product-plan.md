@@ -75,12 +75,30 @@ below it, shows only its own layer, and stays open until explicitly approved.
   only page-safe view/action contracts; decimal-to-atom conversion and typed
   intent authorization stay behind the action adapter. Failed trust and paused
   markets disable submission with a durable explanation, while ambiguous
-  transport remains “Reconciling.” The final Layer 5c composition will wire
-  these actions to the encrypted inventory, custody Worker, authenticated
-  stream, and chain reconciliation before physical-device qualification.
+  transport remains “Reconciling.” Layer 5c below wires these actions to the
+  encrypted inventory, custody Worker, authenticated stream, and chain
+  reconciliation before physical-device qualification.
   Exact Chromium emulation at 375, 768, and 1280 CSS pixels confirms no
   page-level horizontal overflow; the narrow lifecycle table alone remains an
   intentional swipe/scroll region.
+- **Layer 5c — implementation complete and locally qualified:** the observable
+  controller now boots the finalized-governance/TDX trust chain before opening
+  private state, converts human decimals to exact governed atomic units, and
+  composes the custody Worker, encrypted inventory, background VALID_INPUT
+  cache, authenticated `/v1/stream`, typed intent coordinator, and finalized
+  chain recovery. HD order indices are persisted before signing and are never
+  reused. Order and cancel signatures are created inside the Worker; the React
+  bridge receives only snapshots and narrow actions. Order and fill messages
+  share one reconnecting stream, but remain notifications: malformed frames,
+  unknown orders, fills, sequence gaps, and lag closures invoke a deduplicated
+  finalized-chain reconciliation. Recovery checks both tag-keyed
+  `ConsumedNoteEntry` and `NoteLock` PDAs, so a relocked continuation or failed
+  input cannot reappear as spendable collateral. Chrome product qualification
+  restored a known backup, recovered a seed-derived deposit, cached an input
+  proof, and produced canonical order/cancel signatures inside the Worker under
+  COOP/COEP, CSP, Trusted Types, and WebAuthn PRF. Physical-device, real-wallet,
+  hostile-delivery, and live-venue checks remain launch gates, not implied by
+  this local result.
 
 The production Worker currently bundles snarkjs, whose package declares
 GPL-3.0. Before distributing the browser application, obtain a focused license-

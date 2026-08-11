@@ -2,6 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import {
   consumedNotePda,
   merkleTreePda,
+  noteLockPda,
 } from "@darknyx/sdk/browser-inventory-crypto";
 import { parseMerkleRootRing } from "@darknyx/sdk/merkle-root-ring";
 
@@ -59,6 +60,23 @@ export class SolanaFinalizedRootSource {
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {
       throw new Error("consumed-note PDA has the wrong owner");
+    }
+    return true;
+  }
+
+  /** Finalized lock guard: recovered continuations and failed inputs stay unavailable. */
+  async isLocked(noteUseTag: string, _treeId: number): Promise<boolean> {
+    if (!/^[0-9a-f]{64}$/.test(noteUseTag)) {
+      throw new Error("note-use tag must be lowercase 32-byte hex");
+    }
+    const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
+      Number.parseInt(byte, 16),
+    );
+    const [address] = noteLockPda(this.#programId, tag);
+    const account = await this.#connection.getAccountInfo(address, "finalized");
+    if (!account) return false;
+    if (!account.owner.equals(this.#programId)) {
+      throw new Error("note-lock PDA has the wrong owner");
     }
     return true;
   }

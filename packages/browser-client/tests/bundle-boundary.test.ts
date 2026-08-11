@@ -26,6 +26,10 @@ describe("browser custody product boundary", () => {
       new URL("../dist/prover.worker.js", import.meta.url),
       "utf8",
     );
+    const internal = await readFile(
+      new URL("../dist/internal.js", import.meta.url),
+      "utf8",
+    );
 
     for (const forbidden of [
       "testOnly",
@@ -44,6 +48,11 @@ describe("browser custody product boundary", () => {
     expect(entry).not.toContain("BrowserInventory");
     expect(entry).not.toContain("validInputWitness");
     expect(entry).not.toContain("recoverNotes");
+    expect(entry).not.toContain("authorizeIntent");
+    expect(entry).not.toContain("BrowserTraderController");
+    expect(internal).toContain("BrowserTraderController");
+    expect(internal).toContain("BrowserLifecycleStream");
+    expect(worker).toContain("authorizeIntent");
     expect(proverWorker).toContain("artifact manifest signature is invalid");
     expect(proverWorker).toContain(
       "browser proof failed mandatory local verification",
@@ -75,9 +84,11 @@ describe("browser custody product boundary", () => {
       default: "./dist/ui.js",
     });
     expect(manifest.exports["./ui.css"]).toBe("./dist/ui.css");
-    expect(manifest.scripts["build:preview"]).toContain(
-      "DARKNYX_UI_PREVIEW=1",
-    );
+    expect(manifest.exports["./internal"]).toEqual({
+      types: "./dist/internal.d.ts",
+      default: "./dist/internal.js",
+    });
+    expect(manifest.scripts["build:preview"]).toContain("DARKNYX_UI_PREVIEW=1");
     expect(ui).toContain("Venue identity");
     expect(ui).toContain("Place order");
     expect(preview).toContain('rel="stylesheet" href="/dist/ui-preview.css"');

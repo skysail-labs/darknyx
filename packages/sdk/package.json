@@ -26,6 +26,10 @@
     "./browser-attestation": {
       "types": "./dist/browser-attestation.d.ts",
       "default": "./dist/browser-attestation.js"
+    },
+    "./browser-orders": {
+      "types": "./dist/browser-orders.d.ts",
+      "default": "./dist/browser-orders.js"
     }
   },
   "files": [

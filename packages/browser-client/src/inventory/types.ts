@@ -44,13 +44,45 @@ export interface InventoryReservation {
   createdAtMs: number;
 }
 
+export type BrowserOrderKind =
+  | "submitting"
+  | "open"
+  | "pending_settlement"
+  | "partially_filled"
+  | "fully_filled"
+  | "settlement_failed"
+  | "cancelled"
+  | "expired"
+  | "ambiguous"
+  | "rejected";
+
+/** Encrypted lifecycle state. Raw note openings remain in the note collection. */
+export interface BrowserOrderRecord {
+  orderId: string;
+  reservationId: string;
+  noteCommitment: string;
+  tradingIndex: number;
+  marketSymbol: string;
+  side: "bid" | "ask";
+  baseAmountAtoms: string;
+  limitPriceTicks: string;
+  kind: BrowserOrderKind;
+  filledAtoms?: string;
+  reason?: string;
+  lockExpirySlot?: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface InventorySnapshot {
   format: "darknyx-browser-inventory";
-  version: 1;
+  version: 2;
   notes: InventoryNote[];
   proofs: CachedInputProof[];
   reservations: InventoryReservation[];
   roots: FinalizedRootRing[];
+  orders: BrowserOrderRecord[];
+  nextOrderIndex: number;
 }
 
 export interface BrowserMarketInventoryConfig {

@@ -19,6 +19,8 @@ import type {
 import type { InventorySnapshotStore } from "./inventory-store.js";
 import type {
   BrowserMarketInventoryConfig,
+  BrowserOrderKind,
+  BrowserOrderRecord,
   CachedInputProof,
   FinalizedRootRing,
   InputProofProducer,
@@ -33,11 +35,13 @@ const HEX32 = /^[0-9a-f]{64}$/;
 
 const emptySnapshot = (): InventorySnapshot => ({
   format: "darknyx-browser-inventory",
-  version: 1,
+  version: 2,
   notes: [],
   proofs: [],
   reservations: [],
   roots: [],
+  orders: [],
+  nextOrderIndex: 0,
 });
 
 const hex = (value: Uint8Array): string =>
@@ -170,6 +174,10 @@ export type RecoveryConsumptionVerifier = (
   noteUseTag: string,
   treeId: number,
 ) => Promise<boolean>;
+export type RecoveryLockVerifier = (
+  noteUseTag: string,
+  treeId: number,
+) => Promise<boolean>;
 
 /**
  * Trusted inventory-plane coordinator. It is deliberately exported only from
@@ -250,7 +258,7 @@ export class BrowserInventory implements InventoryIntentPort {
   #validateSnapshot(): void {
     if (
       this.#snapshot.format !== "darknyx-browser-inventory" ||
-      this.#snapshot.version !== 1
+      this.#snapshot.version !== 2
     ) {
       throw new Error("unsupported browser inventory snapshot");
     }
@@ -298,6 +306,35 @@ export class BrowserInventory implements InventoryIntentPort {
       ) {
         throw new Error("inventory note has no durable reservation");
       }
+    }
+    if (
+      !Number.isSafeInteger(this.#snapshot.nextOrderIndex) ||
+      this.#snapshot.nextOrderIndex < 0 ||
+      this.#snapshot.nextOrderIndex > 0xffff_ffff
+    ) {
+      throw new Error("inventory order index is invalid");
+    }
+    const orderIds = new Set<string>();
+    const tradingIndices = new Set<number>();
+    for (const order of this.#snapshot.orders) {
+      if (!/^[0-9a-f]{32}$/.test(order.orderId)) {
+        throw new Error("inventory order id must be lowercase 16-byte hex");
+      }
+      if (orderIds.has(order.orderId))
+        throw new Error("duplicate inventory order");
+      if (
+        !Number.isSafeInteger(order.tradingIndex) ||
+        order.tradingIndex < 0 ||
+        order.tradingIndex >= this.#snapshot.nextOrderIndex
+      ) {
+        throw new Error("inventory trading index is invalid");
+      }
+      if (tradingIndices.has(order.tradingIndex)) {
+        throw new Error("trading index cannot be reused");
+      }
+      fromHex32(order.noteCommitment, "order note commitment");
+      orderIds.add(order.orderId);
+      tradingIndices.add(order.tradingIndex);
     }
   }
 
@@ -395,6 +432,104 @@ export class BrowserInventory implements InventoryIntentPort {
         proving: this.#proving.size,
         stale,
       };
+    });
+  }
+
+  /** Allocate a never-reused HD order/trading-key index and persist it first. */
+  async allocateOrderIndex(): Promise<number> {
+    return this.#serialized(async () => {
+      if (this.#snapshot.nextOrderIndex > 0xffff_fffe) {
+        throw new Error("browser order sequence is exhausted");
+      }
+      const index = this.#snapshot.nextOrderIndex;
+      this.#snapshot.nextOrderIndex += 1;
+      await this.#save();
+      return index;
+    });
+  }
+
+  async bindReservationToOrder(record: BrowserOrderRecord): Promise<void> {
+    await this.#serialized(async () => {
+      const reservation = this.#snapshot.reservations.find(
+        (candidate) => candidate.reservationId === record.reservationId,
+      );
+      if (
+        !reservation ||
+        reservation.noteCommitment !== record.noteCommitment ||
+        this.#snapshot.orders.some(
+          (candidate) => candidate.orderId === record.orderId,
+        )
+      ) {
+        throw new Error("order does not match a live inventory reservation");
+      }
+      this.#snapshot.orders.push(structuredClone(record));
+      await this.#save();
+    });
+  }
+
+  async listOrders(): Promise<readonly BrowserOrderRecord[]> {
+    return this.#serialized(async () =>
+      structuredClone(
+        [...this.#snapshot.orders].sort(
+          (left, right) => right.updatedAtMs - left.updatedAtMs,
+        ),
+      ),
+    );
+  }
+
+  async order(orderId: string): Promise<BrowserOrderRecord | null> {
+    return this.#serialized(async () => {
+      const found = this.#snapshot.orders.find(
+        (candidate) => candidate.orderId === orderId,
+      );
+      return found ? structuredClone(found) : null;
+    });
+  }
+
+  async updateOrder(
+    orderId: string,
+    update: {
+      kind: BrowserOrderKind;
+      filledAtoms?: string;
+      reason?: string;
+      lockExpirySlot?: string;
+    },
+  ): Promise<void> {
+    await this.#serialized(async () => {
+      const order = this.#snapshot.orders.find(
+        (candidate) => candidate.orderId === orderId,
+      );
+      if (!order) throw new Error("unknown browser order");
+      order.kind = update.kind;
+      order.updatedAtMs = this.#now();
+      if (update.filledAtoms !== undefined)
+        order.filledAtoms = update.filledAtoms;
+      if (update.reason !== undefined) order.reason = update.reason;
+      if (update.lockExpirySlot !== undefined) {
+        order.lockExpirySlot = update.lockExpirySlot;
+      }
+      await this.#save();
+    });
+  }
+
+  /** Settlement failure leaves an on-chain lock but no reusable reservation. */
+  async markOrderLocked(orderId: string): Promise<void> {
+    await this.#serialized(async () => {
+      const order = this.#snapshot.orders.find(
+        (candidate) => candidate.orderId === orderId,
+      );
+      if (!order) throw new Error("unknown browser order");
+      const note = this.#snapshot.notes.find(
+        (candidate) => candidate.commitment === order.noteCommitment,
+      );
+      if (note && note.state !== "consumed") {
+        note.state = "locked";
+        delete note.reservationId;
+      }
+      this.#snapshot.reservations = this.#snapshot.reservations.filter(
+        (candidate) => candidate.reservationId !== order.reservationId,
+      );
+      await this.#save();
     });
   }
 
@@ -579,7 +714,11 @@ export class BrowserInventory implements InventoryIntentPort {
       const note = this.#snapshot.notes.find(
         (candidate) => candidate.commitment === reservation.noteCommitment,
       );
-      if (!note || note.state !== "reserved" || note.reservationId !== id) {
+      if (
+        !note ||
+        (note.state !== "reserved" && note.state !== "pending_settlement") ||
+        note.reservationId !== id
+      ) {
         throw new Error("inventory reservation is inconsistent");
       }
       note.state = "pending_settlement";
@@ -641,6 +780,7 @@ export class BrowserInventory implements InventoryIntentPort {
   async recover(
     report: RecoveryReport,
     isConsumed: RecoveryConsumptionVerifier,
+    isLocked?: RecoveryLockVerifier,
   ): Promise<void> {
     if (report.unresolvedSettlements > 0 || report.unresolvedMerges > 0) {
       throw new Error("seed-plus-chain recovery has unresolved owned outputs");
@@ -664,12 +804,13 @@ export class BrowserInventory implements InventoryIntentPort {
         );
         const treeId = candidate.treeId ?? 0;
         const consumed = await isConsumed(tag, treeId);
+        const locked = !consumed && (await isLocked?.(tag, treeId)) === true;
         verified.push({
           ...structuredClone(candidate),
           noteUseTag: tag,
           state: consumed
             ? "consumed"
-            : candidate.leafIndex === undefined
+            : locked || candidate.leafIndex === undefined
               ? "locked"
               : "spendable",
         });
@@ -681,7 +822,7 @@ export class BrowserInventory implements InventoryIntentPort {
         const prior = priorByCommitment.get(note.commitment);
         if (
           prior &&
-          note.state !== "consumed" &&
+          note.state === "spendable" &&
           (prior.state === "reserved" || prior.state === "pending_settlement")
         ) {
           return {
@@ -724,6 +865,58 @@ export class BrowserInventory implements InventoryIntentPort {
           proof.state = "stale";
           proof.invalidationReason = "note_consumed";
         }
+      }
+      // A stream gap may hide one or several confirmed fills. Settlement
+      // outputs are seed-recovered with both `orderId` and the exact
+      // `consumedCommitment`, so walk that private continuation chain and move
+      // the journal's current collateral pointer forward. The collateral mint
+      // distinguishes a partial-fill continuation from the trade output.
+      for (const order of this.#snapshot.orders) {
+        if (
+          order.kind === "fully_filled" ||
+          order.kind === "settlement_failed" ||
+          order.kind === "cancelled" ||
+          order.kind === "expired" ||
+          order.kind === "rejected"
+        ) {
+          continue;
+        }
+        const market = this.#markets.get(order.marketSymbol);
+        if (!market) continue;
+        const collateralMint =
+          order.side === "bid" ? market.quoteMintHex : market.baseMintHex;
+        let current = order.noteCommitment;
+        let changed = false;
+        for (let depth = 0; depth <= verified.length; depth += 1) {
+          const outputs = verified.filter(
+            (note) =>
+              note.orderId?.toLowerCase() === order.orderId &&
+              note.consumedCommitment?.toLowerCase() === current,
+          );
+          if (outputs.length === 0) break;
+          const continuation = outputs.find(
+            (note) => hex(note.tokenMint) === collateralMint,
+          );
+          changed = true;
+          if (!continuation) {
+            order.kind = "fully_filled";
+            break;
+          }
+          order.kind = "partially_filled";
+          current = continuation.commitment;
+          order.noteCommitment = current;
+          const continuationNote = this.#snapshot.notes.find(
+            (note) => note.commitment === current,
+          );
+          if (continuationNote) {
+            continuationNote.state = "locked";
+            delete continuationNote.reservationId;
+            this.#snapshot.reservations = this.#snapshot.reservations.filter(
+              (reservation) => reservation.noteCommitment !== current,
+            );
+          }
+        }
+        if (changed) order.updatedAtMs = this.#now();
       }
     }));
   }

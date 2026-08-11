@@ -6,6 +6,7 @@ import {
   marketConfigPda,
   vaultConfigPda,
   vaultConfigTeePubkeys,
+  vaultConfigTradingParameters,
   verifyTeeAttestation,
   type TeeAttestation,
   type VerifyTeeAttestationOptions,
@@ -152,6 +153,7 @@ export async function bootstrapTrustedVenue(
     options.signal,
   );
   const onchainSigners = vaultConfigTeePubkeys(governance.data);
+  const tradingParameters = vaultConfigTradingParameters(governance.data);
 
   const attest = options.attestationVerifier ?? verifyTeeAttestation;
   const attestation = await attest(
@@ -255,6 +257,8 @@ export async function bootstrapTrustedVenue(
   return Object.freeze({
     attestation,
     finalizedGovernanceSlot,
+    feeRateBps: tradingParameters.feeRateBps,
+    numTrees: tradingParameters.numTrees,
     instruments: Object.freeze(trusted),
     status,
     token: () => broker.token(),

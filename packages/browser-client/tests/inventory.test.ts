@@ -1,4 +1,6 @@
 import {
+  bn254ToBE32,
+  deriveNoteUseTag,
   noteCommitmentV2,
   type StoredNote,
 } from "@darknyx/sdk/browser-inventory-crypto";
@@ -141,6 +143,101 @@ describe("browser inventory plane", () => {
     ]);
   });
 
+  it("reconciles a missed partial-fill continuation chain from finalized outputs", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-chain", "reservation-chain"),
+      now: () => 500,
+    });
+    const input = await note(mint(0x9e), 1_000n, 52n, 10n);
+    await inventory.recover(report([input]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    const proofHandle = await inventory.cacheReadyProof(
+      input.commitment,
+      root(1),
+      proof(),
+    );
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    const orderId = "ab".repeat(16);
+    const tradingIndex = await inventory.allocateOrderIndex();
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: input.commitment,
+      tradingIndex,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "open",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+    expect(reserved.reservation.proof).toBe(proofHandle);
+
+    const trade = await note(mint(0xb1), 40n, 53n, 11n);
+    trade.orderId = orderId;
+    trade.consumedCommitment = input.commitment;
+    const continuation = await note(mint(0x9e), 600n, 54n, 12n);
+    continuation.orderId = orderId;
+    continuation.consumedCommitment = input.commitment;
+    const inputTag = Array.from(
+      await deriveNoteUseTag(
+        Uint8Array.from(input.commitment.match(/../g) ?? [], (byte) =>
+          Number.parseInt(byte, 16),
+        ),
+        bn254ToBE32(input.innerHash),
+      ),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    await inventory.recover(
+      report([input, trade, continuation]),
+      async (tag) => tag === inputTag,
+      async (_tag, _tree) => false,
+    );
+    expect(await inventory.order(orderId)).toMatchObject({
+      kind: "partially_filled",
+      noteCommitment: continuation.commitment,
+    });
+
+    const finalTrade = await note(mint(0xb1), 60n, 55n, 13n);
+    finalTrade.orderId = orderId;
+    finalTrade.consumedCommitment = continuation.commitment;
+    const consumedTags = new Set<string>();
+    for (const consumed of [input, continuation]) {
+      consumedTags.add(
+        Array.from(
+          await deriveNoteUseTag(
+            Uint8Array.from(consumed.commitment.match(/../g) ?? [], (byte) =>
+              Number.parseInt(byte, 16),
+            ),
+            bn254ToBE32(consumed.innerHash),
+          ),
+          (byte) => byte.toString(16).padStart(2, "0"),
+        ).join(""),
+      );
+    }
+    await inventory.recover(
+      report([input, trade, continuation, finalTrade]),
+      async (tag) => consumedTags.has(tag),
+    );
+    expect(await inventory.order(orderId)).toMatchObject({
+      kind: "fully_filled",
+      noteCommitment: continuation.commitment,
+    });
+  });
+
   it("refreshes an ageing accepted-root proof before eviction and stales evicted roots", async () => {
     const inventory = await BrowserInventory.create({
       store: new InMemoryInventoryStore(),
@@ -210,6 +307,29 @@ describe("browser inventory plane", () => {
         mint: market.quoteMintHex,
         spendableAtoms: "0",
         reservedAtoms: "10",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("keeps an unconsumed recovered note unavailable while its NoteLock exists", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const relocked = await note(mint(0x9e), 250n, 75n, 9n);
+    await inventory.recover(
+      report([relocked]),
+      async () => false,
+      async () => true,
+    );
+    expect(await inventory.listBalances()).toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "250",
         pendingSettlementAtoms: "0",
       },
     ]);

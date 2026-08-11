@@ -72,7 +72,7 @@ describe("browser VALID_INPUT producer", () => {
       vault,
       prover: { proveValidInput } as never,
       gatewayUrl: "https://cvm.example",
-      token: "secret-token",
+      tokenProvider: async () => "secret-token",
       fetchImpl,
     });
 
@@ -118,7 +118,7 @@ describe("browser VALID_INPUT producer", () => {
       vault,
       prover: { proveValidInput } as never,
       gatewayUrl: "https://cvm.example",
-      token: "secret-token",
+      tokenProvider: async () => "secret-token",
       fetchImpl: async () =>
         new Response(
           JSON.stringify({

@@ -1,6 +1,7 @@
 import { BrowserVault, IndexedDbVaultStore } from "/dist/index.js";
 import {
   BrowserInventory,
+  BrowserIntentAuthorizer,
   inventoryStoreForVault,
   recoverBrowserInventory,
 } from "/dist/internal.js";
@@ -200,6 +201,47 @@ async function supported() {
   ) {
     throw new Error("encrypted inventory did not round-trip");
   }
+  status.textContent = "authorizing-order";
+  const acceptedRoot = "44".repeat(32);
+  await reloaded.synchronizeFinalizedRoots([
+    { treeId: 0, finalizedSlot: 101, acceptedRoots: [acceptedRoot] },
+  ]);
+  await reloaded.cacheReadyProof(
+    recovered.notes[0].commitment,
+    acceptedRoot,
+    new Uint8Array(256).fill(7),
+  );
+  const draft = {
+    protocolVersion: 1,
+    marketSymbol: "SOL-USDC",
+    side: "bid",
+    baseAmountAtoms: "100",
+    limitPriceTicks: "1000000",
+    attributes: { orderType: "limit", expirySlot: "0", minFillSize: "0" },
+  };
+  const reservation = await reloaded.reserveReadyIntent(draft);
+  if (reservation.status !== "ready") throw new Error("proof was not reservable");
+  const authorizer = new BrowserIntentAuthorizer({
+    vault,
+    inventory: reloaded,
+    bootSessionId: "11".repeat(32),
+  });
+  const envelope = await authorizer.authorizeIntent(draft, reservation.reservation);
+  const orderBody = JSON.parse(new TextDecoder().decode(envelope.body));
+  if (
+    orderBody.order_id !== envelope.clientOrderId ||
+    orderBody.trading_key_signature.length !== 128 ||
+    orderBody.session_id !== "11".repeat(32)
+  ) {
+    throw new Error("custody Worker returned a malformed signed order");
+  }
+  const cancelBody = await authorizer.authorizeCancel(envelope.clientOrderId);
+  if (
+    cancelBody.trading_key_signature.length !== 128 ||
+    cancelBody.session_id !== "11".repeat(32)
+  ) {
+    throw new Error("custody Worker returned a malformed signed cancel");
+  }
   status.textContent = "testing-inventory-lock";
   await vault.lock();
   let inventoryLocked = false;
@@ -259,6 +301,7 @@ async function supported() {
     browser_seed_chain_recovery: recovered.recovered.deposits === 1,
     inventory_revoked_on_lock: inventoryLocked,
     inventory_tamper_rejected: inventoryTamperRejected,
+    worker_held_order_authorization: true,
     busy_during_backup: busyDuringBackup,
     ui_responsive_during_backup:
       responsivenessTicks >= minimumResponsivenessTicks,

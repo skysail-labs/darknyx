@@ -70,6 +70,22 @@ the TEE inclusion response must equal the finalized refresh target before any
 private witness is built. Reservation writes are serialized and durable before
 authorization, including across reloads and ambiguous transport outcomes.
 
+The `@darknyx/browser-client/internal` entrypoint is for the trusted product
+composition only. It persists a never-reused HD order index before asking the
+custody Worker for a typed order or cancel signature, then stores the order
+lifecycle in the same encrypted inventory. The React-facing `TraderProduct`
+observes only `TraderShellSnapshot` plus narrow actions; it never receives the
+inventory, prover, note openings, witnesses, or signing keys.
+
+Orders and fills use one in-band-authenticated `/v1/stream` connection with
+short-lived token refresh and cancel-on-disconnect. Stream updates are treated
+as notifications rather than durable authority: fills, unknown updates,
+sequence gaps, and lag closures trigger a deduplicated finalized-chain
+reconciliation. Recovery checks both `ConsumedNoteEntry` and `NoteLock` PDAs in
+the note-use-tag namespace. This keeps confirmed ancestors consumed and keeps
+partial-fill continuations or failed-settlement inputs unavailable until their
+on-chain locks are actually gone.
+
 The internal product-composition bundle also supplies all six client Groth16
 provers. It accepts only an Ed25519-signed artifact manifest matching the exact
 release-pinned signer key, artifact-set ID, protocol version, circuit set, and

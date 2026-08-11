@@ -27,6 +27,8 @@ const MAX_TEE_KEYS = 16;
 export const NUM_TEE_KEYS_OFFSET = 1258;
 /** Offset of `num_trees: u8`. */
 export const NUM_TREES_OFFSET = 1259;
+/** Offset of global `fee_rate_bps: u16` (little-endian). */
+export const FEE_RATE_BPS_OFFSET = 1256;
 export const VAULT_CONFIG_ACCOUNT_LEN = 1264;
 
 const VAULT_CONFIG_DISCRIMINATOR = sha256(
@@ -72,6 +74,23 @@ export function vaultConfigTeePubkeys(data: Uint8Array): string[] {
     throw new Error("vault_config tee_pubkeys are zero or duplicated");
   }
   return out;
+}
+
+/** Parse the proof-bound global fee and shard count from finalized governance. */
+export function vaultConfigTradingParameters(data: Uint8Array): {
+  feeRateBps: number;
+  numTrees: number;
+} {
+  // Reuse the strict length/discriminator/signer-count validation above.
+  vaultConfigTeePubkeys(data);
+  const feeRateBps = new DataView(
+    data.buffer,
+    data.byteOffset,
+    data.byteLength,
+  ).getUint16(FEE_RATE_BPS_OFFSET, true);
+  if (feeRateBps > 10_000)
+    throw new Error("vault_config fee rate exceeds 100%");
+  return { feeRateBps, numTrees: data[NUM_TREES_OFFSET] };
 }
 
 /**

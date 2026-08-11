@@ -25,6 +25,7 @@ import { HorizonMark } from "./mark.js";
 import type { OrderLifecycleKind, TraderShellProps } from "./types.js";
 
 const lifecycleCopy: Record<OrderLifecycleKind, string> = {
+  submitting: "Submitting",
   open: "Open",
   pending_settlement: "Pending settlement",
   partially_filled: "Partially filled",
@@ -33,6 +34,7 @@ const lifecycleCopy: Record<OrderLifecycleKind, string> = {
   cancelled: "Cancelled",
   expired: "Expired",
   ambiguous: "Reconciling",
+  rejected: "Rejected",
 };
 
 function short(value: string, head = 5, tail = 4): string {
@@ -45,6 +47,7 @@ function stateTone(kind: OrderLifecycleKind): string {
   if (kind === "fully_filled") return "good";
   if (
     kind === "settlement_failed" ||
+    kind === "rejected" ||
     kind === "cancelled" ||
     kind === "expired"
   )

@@ -50,6 +50,7 @@ export interface VenueView {
 }
 
 export type OrderLifecycleKind =
+  | "submitting"
   | "open"
   | "pending_settlement"
   | "partially_filled"
@@ -57,7 +58,8 @@ export type OrderLifecycleKind =
   | "settlement_failed"
   | "cancelled"
   | "expired"
-  | "ambiguous";
+  | "ambiguous"
+  | "rejected";
 
 export interface OrderLifecycleView {
   orderId: string;
@@ -99,4 +101,12 @@ export interface TraderShellActions {
 export interface TraderShellProps {
   snapshot: TraderShellSnapshot;
   actions: TraderShellActions;
+}
+
+/** Narrow observable surface; privileged runtime objects never enter React. */
+export interface TraderShellController {
+  readonly actions: TraderShellActions;
+  snapshot(): TraderShellSnapshot;
+  subscribe(listener: (snapshot: TraderShellSnapshot) => void): () => void;
+  start(): Promise<void>;
 }

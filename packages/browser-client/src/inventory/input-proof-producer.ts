@@ -41,7 +41,8 @@ export interface BrowserInputProofProducerOptions {
   vault: BrowserVault;
   prover: BrowserProverSuite;
   gatewayUrl: string;
-  token: string;
+  /** Fresh short-lived bearer token; called for every authenticated read. */
+  tokenProvider: () => Promise<string>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -51,7 +52,7 @@ export class BrowserInputProofProducer {
   readonly #vault: BrowserVault;
   readonly #prover: BrowserProverSuite;
   readonly #gatewayUrl: string;
-  readonly #token: string;
+  readonly #tokenProvider: () => Promise<string>;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
 
@@ -61,7 +62,7 @@ export class BrowserInputProofProducer {
     const gateway = new URL(options.gatewayUrl);
     if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
     this.#gatewayUrl = gateway.href;
-    this.#token = options.token;
+    this.#tokenProvider = options.tokenProvider;
     this.#fetch = options.fetchImpl ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 10_000;
     if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
@@ -75,8 +76,10 @@ export class BrowserInputProofProducer {
     const url = new URL("tree/inclusion", this.#gatewayUrl);
     url.searchParams.set("commitment", request.note.commitment);
     url.searchParams.set("tree_id", String(request.treeId));
+    const token = await this.#tokenProvider();
+    if (!token) throw new Error("session broker returned an empty token");
     const response = await this.#fetch(url, {
-      headers: { authorization: `Bearer ${this.#token}` },
+      headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(this.#timeoutMs),
     });
     if (!response.ok) {

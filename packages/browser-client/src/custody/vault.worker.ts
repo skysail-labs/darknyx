@@ -1,4 +1,8 @@
-import type { EncryptedSeedBackupV2, VaultStatus } from "@darknyx/client-core";
+import type {
+  EncryptedSeedBackupV2,
+  TraderIntentDraft,
+  VaultStatus,
+} from "@darknyx/client-core";
 import { PublicKey } from "@solana/web3.js";
 import {
   recoverNotesFromChain,
@@ -13,7 +17,16 @@ import {
   ownerCommitment,
   pubkeyToFrPair,
 } from "@darknyx/sdk/browser-inventory-crypto";
+import {
+  buildCancel,
+  buildOrder,
+  deriveOrderId,
+  deriveTradingKeyAtOffset,
+  OrderSide,
+  OrderType,
+} from "@darknyx/sdk/browser-orders";
 import { scrypt } from "scrypt-js";
+import nacl from "tweetnacl";
 
 import {
   aadForHeader,
@@ -39,6 +52,7 @@ const INVENTORY_KEY_INFO = new TextEncoder().encode(
   "darknyx/browser-inventory-key/v1",
 );
 const INVENTORY_AAD = new TextEncoder().encode("darknyx/browser-inventory/v1");
+const U64_MAX = (1n << 64n) - 1n;
 
 type VaultHeader = Omit<BrowserVaultRecord, "cipher">;
 type Cipher = BrowserVaultRecord["cipher"];
@@ -99,6 +113,22 @@ function fromHex(
   return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
     Number.parseInt(byte, 16),
   );
+}
+
+function canonicalU64(value: unknown, label: string): bigint {
+  if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value)) {
+    throw new Error(`${label} must be a canonical u64 string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > U64_MAX) throw new Error(`${label} exceeds u64`);
+  return parsed;
+}
+
+function orderType(value: unknown): OrderType {
+  if (value === "limit") return OrderType.Limit;
+  if (value === "ioc") return OrderType.Ioc;
+  if (value === "fok") return OrderType.Fok;
+  throw new Error("unsupported browser order type");
 }
 
 function clearSeed(reason: "explicit" | "inactivity" = "explicit"): void {
@@ -399,6 +429,143 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     } catch (error) {
       clearSeed();
       throw error;
+    }
+  },
+  async authorizeIntent({ draft, note, proof, sessionId, orderIndex }) {
+    if (
+      !draft ||
+      typeof draft !== "object" ||
+      !note ||
+      typeof note !== "object" ||
+      !proof ||
+      typeof proof !== "object" ||
+      !Number.isInteger(orderIndex) ||
+      (orderIndex as number) < 0 ||
+      (orderIndex as number) > 0xffff_ffff
+    ) {
+      throw new Error("malformed browser intent authorization request");
+    }
+    const intent = draft as TraderIntentDraft;
+    const opening = note as Record<string, unknown>;
+    const readyProof = proof as Record<string, unknown>;
+    if (
+      !/^[A-Z0-9]{2,16}-[A-Z0-9]{2,16}$/.test(intent.marketSymbol) ||
+      (intent.side !== "bid" && intent.side !== "ask") ||
+      typeof opening.commitment !== "string" ||
+      !(opening.tokenMint instanceof Uint8Array) ||
+      opening.tokenMint.length !== 32 ||
+      typeof opening.amount !== "bigint" ||
+      typeof opening.ownerCommitment !== "bigint" ||
+      typeof opening.innerHash !== "bigint" ||
+      typeof readyProof.merkleRoot !== "string" ||
+      !(readyProof.proofBytes instanceof Uint8Array) ||
+      readyProof.proofBytes.length !== 256
+    ) {
+      throw new Error("malformed reserved note or VALID_INPUT proof");
+    }
+    const attributes = intent.attributes as Record<string, unknown>;
+    const amount = canonicalU64(intent.baseAmountAtoms, "base amount");
+    const price = canonicalU64(intent.limitPriceTicks, "limit price");
+    const expirySlot = canonicalU64(
+      attributes.expirySlot ?? "0",
+      "expiry slot",
+    );
+    const minFillSize = canonicalU64(
+      attributes.minFillSize ?? "0",
+      "minimum fill size",
+    );
+    const session = fromHex(sessionId, 32, "boot session id");
+    const commitment = fromHex(opening.commitment, 32, "note commitment");
+    const merkleRoot = fromHex(readyProof.merkleRoot, 32, "Merkle root");
+    const currentSeed = requireSeed();
+    const spendingKey = deriveSpendingKey(currentSeed);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
+    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    if (expectedOwner !== opening.ownerCommitment) {
+      throw new Error("reserved note is not owned by this browser vault");
+    }
+    const expectedCommitment = await noteCommitmentV2({
+      tokenMint: opening.tokenMint,
+      amount: opening.amount,
+      ownerCommitment: expectedOwner,
+      innerHash: opening.innerHash,
+    });
+    if (!equalBytes(expectedCommitment, commitment)) {
+      throw new Error("reserved note opening does not match its commitment");
+    }
+
+    const rawTrading = deriveTradingKeyAtOffset(
+      currentSeed,
+      BigInt(orderIndex as number),
+    ).secretKey;
+    const keypair = nacl.sign.keyPair.fromSeed(rawTrading);
+    try {
+      const orderId = deriveOrderId(currentSeed, orderIndex as number);
+      const request = await buildOrder({
+        masterSeed: currentSeed,
+        ownerCommitment: expectedOwner,
+        tradingKey: keypair.publicKey,
+        sign: (digest) => nacl.sign.detached(digest, keypair.secretKey),
+        note: {
+          commitment,
+          innerHash: opening.innerHash,
+          amount: opening.amount,
+        },
+        validInput: {
+          proofBytes: readyProof.proofBytes,
+          merkleRoot,
+        },
+        symbol: intent.marketSymbol,
+        side: intent.side === "bid" ? OrderSide.Bid : OrderSide.Ask,
+        policy: {
+          orderType: orderType(attributes.orderType),
+          priceLimit: price,
+          minFillSize,
+          expirySlot,
+        },
+        amount,
+        orderId,
+        sessionId: session,
+        arrivalNonce: 1n,
+        collateralAmount: opening.amount,
+        treeId: typeof opening.treeId === "number" ? opening.treeId : undefined,
+      });
+      return {
+        body: encoder.encode(JSON.stringify(request)),
+        clientOrderId: toHex(orderId),
+      };
+    } finally {
+      rawTrading.fill(0);
+      keypair.secretKey.fill(0);
+    }
+  },
+  async authorizeCancel({ orderId, tradingIndex, cancelNonce, sessionId }) {
+    if (
+      !Number.isInteger(tradingIndex) ||
+      (tradingIndex as number) < 0 ||
+      (tradingIndex as number) > 0xffff_ffff
+    ) {
+      throw new Error("cancel trading index must be a u32");
+    }
+    const id = fromHex(orderId, 16, "order id");
+    const session = fromHex(sessionId, 32, "boot session id");
+    const nonce = canonicalU64(cancelNonce, "cancel nonce");
+    const rawTrading = deriveTradingKeyAtOffset(
+      requireSeed(),
+      BigInt(tradingIndex as number),
+    ).secretKey;
+    const keypair = nacl.sign.keyPair.fromSeed(rawTrading);
+    try {
+      return buildCancel({
+        orderId: id,
+        tradingKey: keypair.publicKey,
+        cancelNonce: nonce,
+        sessionId: session,
+        sign: (digest) => nacl.sign.detached(digest, keypair.secretKey),
+      });
+    } finally {
+      rawTrading.fill(0);
+      keypair.secretKey.fill(0);
     }
   },
   async inventorySeal({ plaintext }) {
