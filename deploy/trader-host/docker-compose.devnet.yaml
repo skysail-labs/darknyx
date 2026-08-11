@@ -1,0 +1,34 @@
+services:
+  trader-host:
+    # Devnet builds locally. Production publishes this Dockerfile and pins the
+    # resulting ghcr image by digest in the external deployment manifest.
+    build:
+      context: ../..
+      dockerfile: packages/trader-host/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    user: "1101:1101"
+    ports:
+      - "127.0.0.1:8080:8080"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=0700,uid=1101,gid=1101,noexec,nosuid
+    environment:
+      DARKNYX_TRADER_ORIGIN: ${DARKNYX_TRADER_ORIGIN:?set the public HTTPS origin}
+      DARKNYX_TRADER_STATIC_ROOT: /srv/darknyx/static
+      DARKNYX_TRADER_RELEASE_FILE: /srv/darknyx/static/release.json
+      DARKNYX_TRADER_CVM_GATEWAY_UPSTREAM: ${DARKNYX_TRADER_CVM_GATEWAY_UPSTREAM:?set the assigned CVM gateway}
+      DARKNYX_TRADER_RPC_UPSTREAM_FILE: /run/secrets/darknyx/rpc.url
+      DARKNYX_TRADER_COOKIE_KEY_FILE: /run/secrets/darknyx/cookie.key
+      DARKNYX_TRADER_ACCOUNT_STORE_KEY_FILE: /run/secrets/darknyx/account-store.key
+      DARKNYX_TRADER_ADMIN_CREDENTIALS_FILE: /run/secrets/darknyx/admin.json
+      DARKNYX_TRADER_ACCOUNT_STORE: /var/lib/darknyx-trader/accounts.enc.json
+      DARKNYX_TRADER_LISTEN_HOST: 0.0.0.0
+      DARKNYX_TRADER_PORT: "8080"
+    volumes:
+      - ${DARKNYX_TRADER_STATIC_ROOT:?set the assembled release directory}:/srv/darknyx/static:ro
+      - ${DARKNYX_TRADER_SECRETS_ROOT:?set the owner-only secrets directory}:/run/secrets/darknyx:ro
+      - ${DARKNYX_TRADER_STATE_ROOT:?set the owner-only state directory}:/var/lib/darknyx-trader

@@ -11,6 +11,10 @@ export { parsePublicRelease, publicReleaseJson } from "./release.js";
 export { securityHeaders } from "./security.js";
 export { fetchBounded, gatewayBase, readJsonBounded } from "./http.js";
 export { createLiveProxy } from "./live-proxy.js";
+export {
+  loadTraderHostRuntimeConfig,
+  type TraderHostRuntimeConfig,
+} from "./runtime-config.js";
 export type {
   IsolatedToken,
   IsolatedTokenIssuer,

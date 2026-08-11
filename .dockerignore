@@ -1,4 +1,5 @@
-# Root build-context allowlist for deploy/Dockerfile.
+# Root build-context allowlist for deploy/Dockerfile and the separate
+# packages/trader-host/Dockerfile.
 #
 # Docker reads the .dockerignore at the CONTEXT root (the repo root,
 # since the Dockerfile COPYs Cargo.toml / crates/ / programs/ from
@@ -11,8 +12,14 @@
 *
 !Cargo.toml
 !Cargo.lock
+!package.json
+!package-lock.json
 !crates
 !programs
+!packages
+packages/*
+!packages/trader-host
+packages/trader-host/dist
 
 # N=16 settle-prover artifacts, copied into the runtime image (the
 # prover reads /circuits/build/match_batch_n16/). Ladder-include ONLY
