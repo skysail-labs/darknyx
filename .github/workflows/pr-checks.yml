@@ -171,6 +171,7 @@ jobs:
               - 'packages/browser-client/tests/groth16-format-parity.test.ts'
               - 'packages/browser-client/scripts/verify-artifact-payload.mjs'
               - 'packages/browser-client/scripts/sign-artifact-manifest.mjs'
+              - 'packages/browser-client/scripts/assemble-production-release.mjs'
               - 'packages/browser-client/scripts/build.mjs'
               - 'packages/browser-client/package.json'
               - 'package.json'
@@ -688,7 +689,19 @@ jobs:
 
       - name: Signed-manifest hashes + all-six browser proofs
         if: needs.changes.outputs.browser_prover == 'true'
-        run: npm -w @darknyx/browser-client run test:prover
+        run: |
+          export DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64="$(node --input-type=module -e \
+            'import {generateKeyPairSync} from "node:crypto"; const {privateKey}=generateKeyPairSync("ed25519"); process.stdout.write(privateKey.export({format:"der",type:"pkcs8"}).toString("base64"))')"
+          npm -w @darknyx/browser-client run assemble:release -- \
+            --origin=http://localhost:8080 \
+            --release-id=ci-browser-release \
+            --venue-id=ci \
+            --vault-program-id=C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx \
+            --expected-compose-hash=abababababababababababababababababababababababababababababababab \
+            --artifact-key-id=ci-release-v1 \
+            --circuit-version=note-use-v1 \
+            --proving-key-version=phase2-v1
+          npm -w @darknyx/browser-client run test:prover
 
   trader-host:
     name: Trader host — release and session security
