@@ -578,7 +578,7 @@ components:
       required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
         trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
-        cancel_nonce: { type: integer, format: uint64 }
+        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients. }
         session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. It is not quote-bound; substitution causes rejection. }
         trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
 
@@ -594,7 +594,7 @@ components:
       required: [cancel_signature, cancel_nonce, replacement]
       properties:
         cancel_signature: { type: string, description: 64-byte signature over the old order's canonical cancel body. }
-        cancel_nonce: { type: integer, format: uint64 }
+        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string. }
         replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
     ModifyOrderResponse:
@@ -2358,7 +2358,7 @@ x-websocket:
             required: [trading_key, cancel_nonce, session_id, trading_key_signature]
             properties:
               trading_key: { type: string }
-              cancel_nonce: { type: integer }
+              cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
               session_id: { type: string, description: Current 32-byte /info.boot_session_id, hex. Not quote-bound; substitution causes intake rejection. }
               trading_key_signature: { type: string }
 
@@ -2379,7 +2379,7 @@ x-websocket:
             required: [cancel_signature, cancel_nonce, replacement]
             properties:
               cancel_signature: { type: string }
-              cancel_nonce: { type: integer }
+              cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
               replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
   server_channels:

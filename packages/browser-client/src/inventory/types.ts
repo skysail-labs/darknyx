@@ -7,7 +7,9 @@ export type InventoryNoteState =
   | "locked"
   | "consumed";
 
-export interface InventoryNote extends StoredNote {
+export interface InventoryNote extends Omit<StoredNote, "treeId"> {
+  /** Browser inventory never guesses a shard; recovery must provide it. */
+  treeId: number;
   /** Public consumption handle, derived and verified when the note enters inventory. */
   noteUseTag: string;
   state: InventoryNoteState;
@@ -62,6 +64,8 @@ export interface BrowserOrderRecord {
   reservationId: string;
   noteCommitment: string;
   tradingIndex: number;
+  /** Next strictly increasing u64 to burn before signing a cancellation. */
+  nextCancelNonce: string;
   marketSymbol: string;
   side: "bid" | "ask";
   baseAmountAtoms: string;

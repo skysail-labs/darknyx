@@ -68,11 +68,20 @@ export class BrowserOrderTransport implements IntentTransportPort {
       });
       return { status: "accepted", orderId: result.order_id };
     } catch (error) {
-      if (error instanceof DarknyxApiError) {
+      if (
+        error instanceof DarknyxApiError &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 429
+      ) {
         await this.inventory.updateOrder(envelope.clientOrderId, {
           kind: "rejected",
           reason: error.message,
         });
+        const order = await this.inventory.order(envelope.clientOrderId);
+        if (order) {
+          await this.inventory.releaseReservation(order.reservationId);
+        }
         return { status: "rejected" };
       }
       await this.inventory.updateOrder(envelope.clientOrderId, {
@@ -89,13 +98,30 @@ export class BrowserOrderTransport implements IntentTransportPort {
   ): Promise<"cancelled" | "ambiguous"> {
     try {
       const result = await this.client.cancel(orderId, request);
-      if (result.order_id !== orderId) throw new Error("cancel id mismatch");
+      if (result.order_id !== orderId || result.status !== "cancelled") {
+        const reason =
+          result.order_id !== orderId
+            ? "Venue returned an inconsistent cancellation order identifier"
+            : `Venue returned unexpected cancellation status ${result.status}`;
+        await this.inventory.updateOrder(orderId, {
+          kind: "ambiguous",
+          reason,
+        });
+        return "ambiguous";
+      }
       await this.inventory.updateOrder(orderId, { kind: "cancelled" });
       const order = await this.inventory.order(orderId);
       if (order) await this.inventory.releaseReservation(order.reservationId);
       return "cancelled";
     } catch (error) {
-      if (error instanceof DarknyxApiError) throw error;
+      if (
+        error instanceof DarknyxApiError &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 429
+      ) {
+        throw error;
+      }
       await this.inventory.updateOrder(orderId, {
         kind: "ambiguous",
         reason: "Cancellation response was not observed; reconciling",

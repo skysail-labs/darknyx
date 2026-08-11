@@ -2,7 +2,6 @@
 description: "Replace a resting order atomically with an in-place cancel-and-replace, leaving no window where you hold neither order."
 ---
 
-
 # Modify Order
 
 {% hint style="info" %}
@@ -25,15 +24,15 @@ order and a full new order), both from the **same** trading key.
 ## Why modify instead of cancel-then-place
 
 Cancelling and re-placing as two separate calls leaves a gap: between the cancel
-landing and the new order arriving, you have *no* order resting, and a batch may
+landing and the new order arriving, you have _no_ order resting, and a batch may
 clear in that gap. `PUT /orders/{order_id}` closes the gap. It verifies both
 sides, then applies the cancel and the replacement atomically: either the swap
 happens whole, or nothing changes.
 
 ## Path parameters
 
-| Parameter | Type | Description |
-|---|---|---|
+| Parameter  | Type   | Description                                       |
+| ---------- | ------ | ------------------------------------------------- |
 | `order_id` | string | The 16-byte id (hex) of the OLD order to replace. |
 
 ## Request body
@@ -41,16 +40,16 @@ happens whole, or nothing changes.
 ```json
 {
   "cancel_signature": "…",
-  "cancel_nonce": 2,
+  "cancel_nonce": "2",
   "replacement": { "… a full Place Order body …" }
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `cancel_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body of the OLD order, which proves ownership of what is being replaced. |
-| `cancel_nonce` | integer | Yes | The cancel nonce bound into `cancel_signature`. |
-| `replacement` | object | Yes | A complete, independently-signed [Place Order](./place-order.md) body. It carries its own collateral note and input proof. |
+| Field              | Type           | Required | Description                                                                                                                       |
+| ------------------ | -------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `cancel_signature` | string         | Yes      | 64-byte hex. Ed25519 signature over the canonical cancel body of the OLD order, which proves ownership of what is being replaced. |
+| `cancel_nonce`     | decimal string | Yes      | Canonical `u64` decimal string bound into `cancel_signature`; the string form is lossless in JavaScript.                          |
+| `replacement`      | object         | Yes      | A complete, independently-signed [Place Order](./place-order.md) body. It carries its own collateral note and input proof.        |
 
 The trading key that signs the cancel **must** be the key that signs the
 replacement. The replacement may reuse the old order's note and proof while that
@@ -78,7 +77,7 @@ curl -s -X PUT "$GATEWAY/orders/$OLD_ORDER_ID" \
   -H "Content-Type: application/json" \
   -d '{
     "cancel_signature": "…",
-    "cancel_nonce": 2,
+    "cancel_nonce": "2",
     "replacement": { "symbol": "SOL-USDC", "side": "bid", "…": "…" }
   }'
 ```
@@ -94,12 +93,12 @@ curl -s -X PUT "$GATEWAY/orders/$OLD_ORDER_ID" \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `old_order_id` | string | The replaced order's id. |
-| `order_id` | string | The new order's id (equals `old_order_id` on a reprice in place). |
-| `status` | string | `"modified"`. |
-| `arrival_slot` | integer | The slot stamped on the replacement order. |
+| Field          | Type    | Description                                                       |
+| -------------- | ------- | ----------------------------------------------------------------- |
+| `old_order_id` | string  | The replaced order's id.                                          |
+| `order_id`     | string  | The new order's id (equals `old_order_id` on a reprice in place). |
+| `status`       | string  | `"modified"`.                                                     |
+| `arrival_slot` | integer | The slot stamped on the replacement order.                        |
 
 ## Atomicity guarantees
 
@@ -115,10 +114,10 @@ the same lock; no batch can clear between the two.
 
 ## Errors
 
-| Condition | Status |
-|---|---|
-| Malformed fields / the replacement fails place-order verification | `400` |
-| Missing or invalid bearer token | `401` |
-| A signature does not verify, or the caller does not own the old order | `403` |
-| The old order does not exist | `404` |
-| The replacement's `order_id` is already booked, or a nonce/session is stale | `409` |
+| Condition                                                                   | Status |
+| --------------------------------------------------------------------------- | ------ |
+| Malformed fields / the replacement fails place-order verification           | `400`  |
+| Missing or invalid bearer token                                             | `401`  |
+| A signature does not verify, or the caller does not own the old order       | `403`  |
+| The old order does not exist                                                | `404`  |
+| The replacement's `order_id` is already booked, or a nonce/session is stale | `409`  |

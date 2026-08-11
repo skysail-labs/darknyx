@@ -15,7 +15,6 @@ import type {
 } from "../venue/types.js";
 import { ExternalWalletController } from "../wallet/wallet-standard.js";
 import type {
-  OrderLifecycleKind,
   TraderOrderDraft,
   TraderShellActions,
   TraderShellSnapshot,
@@ -152,6 +151,9 @@ export class BrowserTraderController {
   #checking = true;
   #snapshot: TraderShellSnapshot;
   #updatePromise: Promise<void> | null = null;
+  #updateQueued = false;
+  #runtimePromise: Promise<void> | null = null;
+  #runtimeGeneration = 0;
 
   constructor(options: BrowserTraderControllerOptions) {
     this.#options = options;
@@ -202,6 +204,7 @@ export class BrowserTraderController {
   }
 
   async #bootVenue(): Promise<void> {
+    this.#runtimeGeneration += 1;
     this.#runtime?.close();
     this.#runtime = null;
     this.#checking = true;
@@ -232,125 +235,159 @@ export class BrowserTraderController {
 
   async #openRuntime(): Promise<void> {
     if (!this.#venue || this.#runtime) return;
-    this.#runtime = await createBrowserPrivateRuntime({
-      release: this.#options.release,
-      venue: this.#venue,
-      vault: this.#vault,
-      prover: this.#options.prover,
-      circuitVersion: this.#options.circuitVersion,
-      provingKeyVersion: this.#options.provingKeyVersion,
-      databaseName: this.#options.databaseName,
-      recover: () => this.#options.recover(this.#vault, this.#venue!),
-      onChange: () => void this.#update(),
-      onError: (error) => this.#options.onError?.(error),
+    if (this.#runtimePromise) {
+      await this.#runtimePromise;
+      if (!this.#runtime && this.#venue) await this.#openRuntime();
+      return;
+    }
+    const venue = this.#venue;
+    const generation = this.#runtimeGeneration;
+    this.#runtimePromise = (async () => {
+      const runtime = await createBrowserPrivateRuntime({
+        release: this.#options.release,
+        venue,
+        vault: this.#vault,
+        prover: this.#options.prover,
+        circuitVersion: this.#options.circuitVersion,
+        provingKeyVersion: this.#options.provingKeyVersion,
+        databaseName: this.#options.databaseName,
+        recover: () => this.#options.recover(this.#vault, venue),
+        onChange: () => void this.#update(),
+        onError: (error) => this.#options.onError?.(error),
+      });
+      if (generation !== this.#runtimeGeneration || venue !== this.#venue) {
+        runtime.close();
+        return;
+      }
+      this.#runtime = runtime;
+    })().finally(() => {
+      this.#runtimePromise = null;
     });
+    await this.#runtimePromise;
   }
 
   async #update(): Promise<void> {
+    this.#updateQueued = true;
     if (this.#updatePromise) return this.#updatePromise;
     this.#updatePromise = (async () => {
-      const vault = await this.#vault.status();
-      if (!this.#venue) {
-        this.#snapshot = this.#emptySnapshot(vault);
-        this.#emit();
-        return;
+      while (this.#updateQueued) {
+        this.#updateQueued = false;
+        try {
+          await this.#performUpdate();
+        } catch (error) {
+          this.#options.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
       }
-      const [balances, proofs, orders] = this.#runtime
-        ? await Promise.all([
-            this.#runtime.trader.balances(),
-            this.#runtime.trader.proofReadiness(),
-            this.#runtime.inventory.listOrders(),
-          ])
-        : [[], { ready: 0, proving: 0, stale: 0 }, []];
-      const byMint = new Map<string, { symbol: string; decimals: number }>();
-      for (const market of this.#venue.instruments) {
-        byMint.set(mintHex(market.baseMint), {
-          symbol: market.symbol.split("-")[0],
-          decimals: market.baseDecimals,
-        });
-        byMint.set(mintHex(market.quoteMint), {
-          symbol: market.symbol.split("-")[1],
-          decimals: market.quoteDecimals,
-        });
-      }
-      const marketBySymbol = new Map(
-        this.#venue.instruments.map((market) => [market.symbol, market]),
-      );
-      this.#snapshot = {
-        venue: {
-          state: "trusted",
-          label: this.#options.venueLabel ?? "Darknyx private venue",
-          composeHash: this.#venue.attestation.composeHash,
-          governanceSlot: this.#venue.finalizedGovernanceSlot.toString(),
-          message: this.#venue.status.degraded
-            ? "Some markets are locally paused; healthy instruments remain available."
-            : undefined,
-        },
-        vault,
-        wallet: {
-          state: this.#wallet.current()
-            ? "connected"
-            : this.#walletError
-              ? "failed"
-              : "disconnected",
-          ...this.#wallet.current(),
-          availableWallets: this.#wallet.available(),
-          error: this.#walletError,
-        },
-        instruments: this.#venue.instruments.map((market) => ({
-          symbol: market.symbol,
-          baseSymbol: market.symbol.split("-")[0],
-          quoteSymbol: market.symbol.split("-")[1],
-          tradingEnabled: market.tradingEnabled,
-          minOrderSize: formatUnits(market.minOrderSize, market.baseDecimals),
-          tickSize: formatScaled(market.tickSize, market.priceScale),
-        })),
-        selectedSymbol: this.#selectedSymbol,
-        balances: balances.map((balance) => {
-          const metadata = byMint.get(balance.mint) ?? {
-            symbol: "Unknown",
-            decimals: 0,
-          };
-          return {
-            mint: balance.mint,
-            symbol: metadata.symbol,
-            spendable: formatUnits(balance.spendableAtoms, metadata.decimals),
-            reserved: formatUnits(balance.reservedAtoms, metadata.decimals),
-            pendingSettlement: formatUnits(
-              balance.pendingSettlementAtoms,
-              metadata.decimals,
-            ),
-          };
-        }),
-        proofReadiness: proofs,
-        orders: orders.map((order) => {
-          const market = marketBySymbol.get(order.marketSymbol);
-          return {
-            orderId: order.orderId,
-            symbol: order.marketSymbol,
-            side: order.side,
-            amount: market
-              ? formatUnits(order.baseAmountAtoms, market.baseDecimals)
-              : order.baseAmountAtoms,
-            limitPrice: market
-              ? formatScaled(order.limitPriceTicks, market.priceScale)
-              : order.limitPriceTicks,
-            filled:
-              market && order.filledAtoms
-                ? formatUnits(order.filledAtoms, market.baseDecimals)
-                : order.filledAtoms,
-            kind: order.kind as OrderLifecycleKind,
-            reason: order.reason,
-            updatedAt: new Date(order.updatedAtMs).toISOString(),
-          };
-        }),
-        lastUpdated: new Date().toISOString(),
-      };
-      this.#emit();
     })().finally(() => {
       this.#updatePromise = null;
+      if (this.#updateQueued) void this.#update();
     });
     return this.#updatePromise;
+  }
+
+  async #performUpdate(): Promise<void> {
+    const vault = await this.#vault.status();
+    if (!this.#venue) {
+      this.#snapshot = this.#emptySnapshot(vault);
+      this.#emit();
+      return;
+    }
+    const [balances, proofs, orders] = this.#runtime
+      ? await Promise.all([
+          this.#runtime.trader.balances(),
+          this.#runtime.trader.proofReadiness(),
+          this.#runtime.inventory.listOrders(),
+        ])
+      : [[], { ready: 0, proving: 0, stale: 0 }, []];
+    const byMint = new Map<string, { symbol: string; decimals: number }>();
+    for (const market of this.#venue.instruments) {
+      byMint.set(mintHex(market.baseMint), {
+        symbol: market.symbol.split("-")[0],
+        decimals: market.baseDecimals,
+      });
+      byMint.set(mintHex(market.quoteMint), {
+        symbol: market.symbol.split("-")[1],
+        decimals: market.quoteDecimals,
+      });
+    }
+    const marketBySymbol = new Map(
+      this.#venue.instruments.map((market) => [market.symbol, market]),
+    );
+    this.#snapshot = {
+      venue: {
+        state: "trusted",
+        label: this.#options.venueLabel ?? "Darknyx private venue",
+        composeHash: this.#venue.attestation.composeHash,
+        governanceSlot: this.#venue.finalizedGovernanceSlot.toString(),
+        message: this.#venue.status.degraded
+          ? "Some markets are locally paused; healthy instruments remain available."
+          : undefined,
+      },
+      vault,
+      wallet: {
+        state: this.#wallet.current()
+          ? "connected"
+          : this.#walletError
+            ? "failed"
+            : "disconnected",
+        ...this.#wallet.current(),
+        availableWallets: this.#wallet.available(),
+        error: this.#walletError,
+      },
+      instruments: this.#venue.instruments.map((market) => ({
+        symbol: market.symbol,
+        baseSymbol: market.symbol.split("-")[0],
+        quoteSymbol: market.symbol.split("-")[1],
+        tradingEnabled: market.tradingEnabled,
+        minOrderSize: formatUnits(market.minOrderSize, market.baseDecimals),
+        tickSize: formatScaled(market.tickSize, market.priceScale),
+      })),
+      selectedSymbol: this.#selectedSymbol,
+      balances: balances.map((balance) => {
+        const metadata = byMint.get(balance.mint);
+        if (!metadata) {
+          throw new Error(
+            `inventory contains unsupported mint ${balance.mint}`,
+          );
+        }
+        return {
+          mint: balance.mint,
+          symbol: metadata.symbol,
+          spendable: formatUnits(balance.spendableAtoms, metadata.decimals),
+          reserved: formatUnits(balance.reservedAtoms, metadata.decimals),
+          pendingSettlement: formatUnits(
+            balance.pendingSettlementAtoms,
+            metadata.decimals,
+          ),
+        };
+      }),
+      proofReadiness: proofs,
+      orders: orders.map((order) => {
+        const market = marketBySymbol.get(order.marketSymbol);
+        return {
+          orderId: order.orderId,
+          symbol: order.marketSymbol,
+          side: order.side,
+          amount: market
+            ? formatUnits(order.baseAmountAtoms, market.baseDecimals)
+            : order.baseAmountAtoms,
+          limitPrice: market
+            ? formatScaled(order.limitPriceTicks, market.priceScale)
+            : order.limitPriceTicks,
+          filled:
+            market && order.filledAtoms
+              ? formatUnits(order.filledAtoms, market.baseDecimals)
+              : order.filledAtoms,
+          kind: order.kind,
+          reason: order.reason,
+          updatedAt: new Date(order.updatedAtMs).toISOString(),
+        };
+      }),
+      lastUpdated: new Date().toISOString(),
+    };
+    this.#emit();
   }
 
   readonly actions: TraderShellActions = {
@@ -386,6 +423,7 @@ export class BrowserTraderController {
       await this.#update();
     },
     lockVault: async () => {
+      this.#runtimeGeneration += 1;
       this.#runtime?.close();
       this.#runtime = null;
       await this.#vault.lock();
@@ -397,9 +435,22 @@ export class BrowserTraderController {
     },
     submitOrder: (draft) => this.submitOrder(draft),
     cancelOrder: async (orderId) => {
-      if (!this.#runtime) throw new Error("private runtime is locked");
-      const cancel = await this.#runtime.authorizer.authorizeCancel(orderId);
-      await this.#runtime.transport.cancel(orderId, cancel);
+      try {
+        if (!this.#runtime) throw new Error("private runtime is locked");
+        const cancel = await this.#runtime.authorizer.authorizeCancel(orderId);
+        await this.#runtime.transport.cancel(orderId, cancel);
+      } catch (error) {
+        const normalized =
+          error instanceof Error ? error : new Error(String(error));
+        this.#options.onError?.(normalized);
+        const order = await this.#runtime?.inventory.order(orderId);
+        if (order) {
+          await this.#runtime?.inventory.updateOrder(orderId, {
+            kind: order.kind,
+            reason: `Cancellation failed: ${normalized.message}`,
+          });
+        }
+      }
       await this.#update();
     },
   };
@@ -414,15 +465,26 @@ export class BrowserTraderController {
     if (!market || !market.tradingEnabled) {
       return { status: "rejected", code: "INVALID_INTENT", retryable: false };
     }
-    const amount = decimalToAtoms(draft.amount, market.baseDecimals);
+    let amount: bigint;
+    let price: bigint;
+    try {
+      amount = decimalToAtoms(draft.amount, market.baseDecimals);
+      price = decimalToPriceTicks(
+        draft.limitPrice,
+        market.priceScale,
+        market.tickSize,
+      );
+    } catch {
+      return { status: "rejected", code: "INVALID_INTENT", retryable: false };
+    }
     if (amount < market.minOrderSize) {
       return { status: "rejected", code: "INVALID_INTENT", retryable: false };
     }
-    const price = decimalToPriceTicks(
-      draft.limitPrice,
-      market.priceScale,
-      market.tickSize,
-    );
+    // Zero is the intentional market-ask sentinel. Only bids require a
+    // positive cap; the inventory plane repeats this invariant before reserve.
+    if (draft.side === "bid" && price === 0n) {
+      return { status: "rejected", code: "INVALID_INTENT", retryable: false };
+    }
     const result = await this.#runtime.trader.submitIntent({
       protocolVersion: 1,
       marketSymbol: market.symbol,
@@ -440,6 +502,7 @@ export class BrowserTraderController {
   }
 
   destroy(): void {
+    this.#runtimeGeneration += 1;
     this.#runtime?.close();
     this.#runtime = null;
     this.#vault.destroy();

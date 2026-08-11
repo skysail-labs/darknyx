@@ -191,6 +191,7 @@ pub struct CancelOrderRequest {
     /// 32-byte Ed25519 pubkey (must match the original order's
     /// trading_key), hex.
     pub trading_key: String,
+    #[serde(deserialize_with = "deserialize_wire_u64")]
     pub cancel_nonce: u64,
     /// 32-byte boot session id from `/info`, hex, bound into the signature
     /// (S-07). Scopes the cancel to one CVM boot so a captured body cannot
@@ -199,6 +200,35 @@ pub struct CancelOrderRequest {
     /// 64-byte Ed25519 signature over
     /// `sha256(cancel_canonical_bytes)`, hex.
     pub trading_key_signature: String,
+}
+
+/// Accept the canonical decimal-string form used by JavaScript clients. The
+/// integer arm keeps existing Rust/native clients compatible during devnet.
+fn deserialize_wire_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WireU64 {
+        Decimal(String),
+        Integer(u64),
+    }
+
+    match WireU64::deserialize(deserializer)? {
+        WireU64::Integer(value) => Ok(value),
+        WireU64::Decimal(value) => {
+            if value.is_empty()
+                || (value.len() > 1 && value.starts_with('0'))
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(serde::de::Error::custom(
+                    "u64 must be a canonical decimal string",
+                ));
+            }
+            value.parse::<u64>().map_err(serde::de::Error::custom)
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -971,6 +1001,7 @@ pub struct ModifyOrderRequest {
     /// 64-byte Ed25519 signature over `CancelCanonical{old_order_id, trading_key,
     /// cancel_nonce}`, hex — proves ownership of the OLD order.
     pub cancel_signature: String,
+    #[serde(deserialize_with = "deserialize_wire_u64")]
     pub cancel_nonce: u64,
     /// The replacement order — a full, independently-signed `PlaceOrderRequest`
     /// (its own note + `VALID_INPUT` proof; may reuse the old order's note while
@@ -1225,4 +1256,31 @@ pub async fn get_order(
         expiry_slot: order.expiry_slot,
         arrival_slot: order.arrival_slot,
     }))
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::CancelOrderRequest;
+
+    #[test]
+    fn cancel_nonce_accepts_lossless_decimal_u64() {
+        let request: CancelOrderRequest = serde_json::from_value(serde_json::json!({
+            "trading_key": "00".repeat(32),
+            "cancel_nonce": u64::MAX.to_string(),
+            "session_id": "11".repeat(32),
+            "trading_key_signature": "22".repeat(64),
+        }))
+        .expect("canonical decimal u64");
+        assert_eq!(request.cancel_nonce, u64::MAX);
+
+        for invalid in ["01", "-1", "18446744073709551616"] {
+            let parsed = serde_json::from_value::<CancelOrderRequest>(serde_json::json!({
+                "trading_key": "00".repeat(32),
+                "cancel_nonce": invalid,
+                "session_id": "11".repeat(32),
+                "trading_key_signature": "22".repeat(64),
+            }));
+            assert!(parsed.is_err(), "accepted invalid u64 {invalid}");
+        }
+    }
 }

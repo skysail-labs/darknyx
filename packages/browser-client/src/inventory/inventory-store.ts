@@ -123,7 +123,14 @@ function decodeSnapshot(bytes: Uint8Array): InventorySnapshot {
   ) {
     throw new Error("unsupported browser inventory snapshot");
   }
-  return value as InventorySnapshot;
+  const snapshot = value as InventorySnapshot;
+  // Pre-release v2 snapshots predate durable cancel nonces. Starting at one is
+  // safe because every trading index/key is unique to one order.
+  snapshot.orders = snapshot.orders.map((order) => ({
+    ...order,
+    nextCancelNonce: "nextCancelNonce" in order ? order.nextCancelNonce : "1",
+  }));
+  return snapshot;
 }
 
 function validateEncryptedRecord(value: unknown): EncryptedInventoryRecord {

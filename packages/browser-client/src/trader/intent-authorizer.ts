@@ -81,6 +81,7 @@ export class BrowserIntentAuthorizer implements IntentAuthorizationPort {
       reservationId: reservation.reservationId,
       noteCommitment: reserved.note.commitment,
       tradingIndex,
+      nextCancelNonce: "1",
       marketSymbol: draft.marketSymbol,
       side: draft.side,
       baseAmountAtoms: draft.baseAmountAtoms,
@@ -99,13 +100,14 @@ export class BrowserIntentAuthorizer implements IntentAuthorizationPort {
     if (!ORDER_ID.test(orderId)) throw new Error("invalid browser order id");
     const order = await this.#inventory.order(orderId);
     if (!order) throw new Error("unknown browser order");
+    const cancelNonce = await this.#inventory.allocateCancelNonce(orderId);
     return requestVaultInternal<CancelOrderRequest>(
       this.#vault,
       "authorizeCancel",
       {
         orderId,
         tradingIndex: order.tradingIndex,
-        cancelNonce: "1",
+        cancelNonce,
         sessionId: this.#bootSessionId,
       },
     );

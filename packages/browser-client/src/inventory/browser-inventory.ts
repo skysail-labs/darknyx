@@ -28,8 +28,8 @@ import type {
   InventorySnapshot,
   RecoveryReport,
 } from "./types.js";
+import { canonicalU64, U64_MAX } from "../canonical-u64.js";
 
-const U64_MAX = (1n << 64n) - 1n;
 const BPS_SCALE = 10_000n;
 const HEX32 = /^[0-9a-f]{64}$/;
 
@@ -58,14 +58,6 @@ const fromHex32 = (value: string, label: string): Uint8Array => {
 const same = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
-
-function canonicalU64(value: string, label: string): bigint {
-  if (!/^(0|[1-9]\d*)$/.test(value))
-    throw new Error(`${label} is not canonical`);
-  const parsed = BigInt(value);
-  if (parsed < 0n || parsed > U64_MAX) throw new Error(`${label} is not a u64`);
-  return parsed;
-}
 
 function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
@@ -263,6 +255,12 @@ export class BrowserInventory implements InventoryIntentPort {
       throw new Error("unsupported browser inventory snapshot");
     }
     const commitments = new Set<string>();
+    const supportedMints = new Set(
+      [...this.#markets.values()].flatMap((market) => [
+        market.baseMintHex,
+        market.quoteMintHex,
+      ]),
+    );
     for (const note of this.#snapshot.notes) {
       fromHex32(note.commitment, "note commitment");
       fromHex32(note.noteUseTag, "note-use tag");
@@ -274,6 +272,17 @@ export class BrowserInventory implements InventoryIntentPort {
       }
       if (note.tokenMint.length !== 32)
         throw new Error("inventory mint must be 32 bytes");
+      if (!supportedMints.has(hex(note.tokenMint))) {
+        throw new Error("inventory note mint is not served by this venue");
+      }
+      if (
+        !Number.isInteger(note.treeId) ||
+        note.treeId === undefined ||
+        note.treeId < 0 ||
+        note.treeId > 255
+      ) {
+        throw new Error("inventory note tree id must be a u8");
+      }
       const shouldHaveReservation =
         note.state === "reserved" || note.state === "pending_settlement";
       if (shouldHaveReservation !== Boolean(note.reservationId)) {
@@ -333,6 +342,26 @@ export class BrowserInventory implements InventoryIntentPort {
         throw new Error("trading index cannot be reused");
       }
       fromHex32(order.noteCommitment, "order note commitment");
+      canonicalU64(order.nextCancelNonce, "next cancel nonce");
+      if (canonicalU64(order.nextCancelNonce, "next cancel nonce") === 0n) {
+        throw new Error("next cancel nonce must be positive");
+      }
+      if (
+        ![
+          "submitting",
+          "open",
+          "pending_settlement",
+          "partially_filled",
+          "fully_filled",
+          "settlement_failed",
+          "cancelled",
+          "expired",
+          "ambiguous",
+          "rejected",
+        ].includes(order.kind)
+      ) {
+        throw new Error("inventory order lifecycle kind is invalid");
+      }
       orderIds.add(order.orderId);
       tradingIndices.add(order.tradingIndex);
     }
@@ -379,10 +408,8 @@ export class BrowserInventory implements InventoryIntentPort {
       if (proof.noteCommitment !== noteCommitment) return true;
       if (held.has(proof.handle) || readyToKeep.has(proof.handle)) return true;
       if (proof.state === "ready") return false;
-      return (
-        !["root_evicted", "artifact_changed", "note_consumed"].includes(
-          proof.invalidationReason ?? "",
-        )
+      return !["root_evicted", "artifact_changed", "note_consumed"].includes(
+        proof.invalidationReason ?? "",
       );
     });
   }
@@ -467,6 +494,24 @@ export class BrowserInventory implements InventoryIntentPort {
     });
   }
 
+  /** Burn and persist a strictly increasing nonce before asking the Worker to sign. */
+  async allocateCancelNonce(orderId: string): Promise<string> {
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        const order = this.#snapshot.orders.find(
+          (candidate) => candidate.orderId === orderId,
+        );
+        if (!order) throw new Error("unknown browser order");
+        const nonce = canonicalU64(order.nextCancelNonce, "next cancel nonce");
+        if (nonce === 0n || nonce === U64_MAX) {
+          throw new Error("cancel nonce sequence is exhausted");
+        }
+        order.nextCancelNonce = (nonce + 1n).toString();
+        return nonce.toString();
+      }),
+    );
+  }
+
   async listOrders(): Promise<readonly BrowserOrderRecord[]> {
     return this.#serialized(async () =>
       structuredClone(
@@ -536,38 +581,43 @@ export class BrowserInventory implements InventoryIntentPort {
   async synchronizeFinalizedRoots(
     rings: readonly FinalizedRootRing[],
   ): Promise<void> {
-    await this.#serialized(() => this.#mutate(async () => {
-      const next = rings.map(validateRootRing);
-      const ids = new Set<number>();
-      for (const ring of next) {
-        if (ids.has(ring.treeId)) throw new Error("duplicate root-ring shard");
-        ids.add(ring.treeId);
-        const prior = this.#snapshot.roots.find(
-          (root) => root.treeId === ring.treeId,
-        );
-        if (prior && ring.finalizedSlot < prior.finalizedSlot) {
-          throw new Error("finalized root slot moved backwards");
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const next = rings.map(validateRootRing);
+        const ids = new Set<number>();
+        for (const ring of next) {
+          if (ids.has(ring.treeId))
+            throw new Error("duplicate root-ring shard");
+          ids.add(ring.treeId);
+          const prior = this.#snapshot.roots.find(
+            (root) => root.treeId === ring.treeId,
+          );
+          if (prior && ring.finalizedSlot < prior.finalizedSlot) {
+            throw new Error("finalized root slot moved backwards");
+          }
         }
-      }
-      const updatedIds = new Set(next.map((ring) => ring.treeId));
-      this.#snapshot.roots = [
-        ...this.#snapshot.roots.filter((ring) => !updatedIds.has(ring.treeId)),
-        ...next,
-      ].sort((left, right) => left.treeId - right.treeId);
-      for (const proof of this.#snapshot.proofs) {
-        const position = rootPosition(
-          this.#snapshot,
-          proof.treeId,
-          proof.merkleRoot,
-        );
-        if (position < 0) {
-          proof.state = "stale";
-          proof.invalidationReason = "root_evicted";
-        } else {
-          proof.rootHistoryPosition = position;
+        const updatedIds = new Set(next.map((ring) => ring.treeId));
+        this.#snapshot.roots = [
+          ...this.#snapshot.roots.filter(
+            (ring) => !updatedIds.has(ring.treeId),
+          ),
+          ...next,
+        ].sort((left, right) => left.treeId - right.treeId);
+        for (const proof of this.#snapshot.proofs) {
+          const position = rootPosition(
+            this.#snapshot,
+            proof.treeId,
+            proof.merkleRoot,
+          );
+          if (position < 0) {
+            proof.state = "stale";
+            proof.invalidationReason = "root_evicted";
+          } else {
+            proof.rootHistoryPosition = position;
+          }
         }
-      }
-    }));
+      }),
+    );
   }
 
   async cacheReadyProof(
@@ -575,175 +625,186 @@ export class BrowserInventory implements InventoryIntentPort {
     merkleRoot: string,
     proofBytes: Uint8Array,
   ): Promise<string> {
-    return this.#serialized(() => this.#mutate(async () => {
-      const note = this.#snapshot.notes.find(
-        (candidate) => candidate.commitment === noteCommitment,
-      );
-      if (!note || note.state === "consumed")
-        throw new Error("proof note is unavailable");
-      if (proofBytes.length !== 256)
-        throw new Error("VALID_INPUT proof must be 256 bytes");
-      const position = rootPosition(
-        this.#snapshot,
-        note.treeId ?? 0,
-        merkleRoot,
-      );
-      if (position < 0)
-        throw new Error("proof root is not finalized and accepted");
-      const fields = {
-        noteCommitment,
-        noteUseTag: note.noteUseTag,
-        treeId: note.treeId ?? 0,
-        merkleRoot,
-        circuitVersion: this.#circuitVersion,
-        provingKeyVersion: this.#provingKeyVersion,
-      };
-      const key = cacheKey(fields);
-      const existing = this.#snapshot.proofs.find(
-        (proof) => proof.cacheKey === key,
-      );
-      if (existing) {
-        existing.proofBytes = Uint8Array.from(proofBytes);
-        existing.createdAtMs = this.#now();
-        existing.rootHistoryPosition = position;
-        existing.state = "ready";
-        delete existing.invalidationReason;
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        const note = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === noteCommitment,
+        );
+        if (!note || note.state === "consumed")
+          throw new Error("proof note is unavailable");
+        if (proofBytes.length !== 256)
+          throw new Error("VALID_INPUT proof must be 256 bytes");
+        const position = rootPosition(this.#snapshot, note.treeId, merkleRoot);
+        if (position < 0)
+          throw new Error("proof root is not finalized and accepted");
+        const fields = {
+          noteCommitment,
+          noteUseTag: note.noteUseTag,
+          treeId: note.treeId,
+          merkleRoot,
+          circuitVersion: this.#circuitVersion,
+          provingKeyVersion: this.#provingKeyVersion,
+        };
+        const key = cacheKey(fields);
+        const existing = this.#snapshot.proofs.find(
+          (proof) => proof.cacheKey === key,
+        );
+        if (existing) {
+          existing.proofBytes = Uint8Array.from(proofBytes);
+          existing.createdAtMs = this.#now();
+          existing.rootHistoryPosition = position;
+          existing.state = "ready";
+          delete existing.invalidationReason;
+          this.#pruneProofs(noteCommitment);
+          return existing.handle;
+        }
+        const handle = readyProofHandle(`proof-${this.#randomId()}`);
+        this.#snapshot.proofs.push({
+          ...fields,
+          handle,
+          cacheKey: key,
+          proofBytes: Uint8Array.from(proofBytes),
+          createdAtMs: this.#now(),
+          rootHistoryPosition: position,
+          state: "ready",
+        });
         this.#pruneProofs(noteCommitment);
-        return existing.handle;
-      }
-      const handle = readyProofHandle(`proof-${this.#randomId()}`);
-      this.#snapshot.proofs.push({
-        ...fields,
-        handle,
-        cacheKey: key,
-        proofBytes: Uint8Array.from(proofBytes),
-        createdAtMs: this.#now(),
-        rootHistoryPosition: position,
-        state: "ready",
-      });
-      this.#pruneProofs(noteCommitment);
-      return handle;
-    }));
+        return handle;
+      }),
+    );
   }
 
   async reserveReadyIntent(
     draft: TraderIntentDraft,
   ): Promise<ReservationOutcome> {
-    return this.#serialized(() => this.#mutate(async () => {
-      const market = this.#markets.get(draft.marketSymbol);
-      if (!market) throw new Error(`unsupported market ${draft.marketSymbol}`);
-      const required = requiredCollateral(draft, market);
-      const candidates = this.#snapshot.notes
-        .filter(
-          (note) =>
-            note.state === "spendable" &&
-            hex(note.tokenMint) === required.mint &&
-            note.amount >= required.amount &&
-            note.leafIndex !== undefined,
-        )
-        .sort((left, right) =>
-          left.amount < right.amount ? -1 : left.amount > right.amount ? 1 : 0,
-        );
-      for (const note of candidates) {
-        const proof = this.#snapshot.proofs
+    return this.#serialized(() =>
+      this.#mutate(async () => {
+        const market = this.#markets.get(draft.marketSymbol);
+        if (!market)
+          throw new Error(`unsupported market ${draft.marketSymbol}`);
+        const required = requiredCollateral(draft, market);
+        const candidates = this.#snapshot.notes
           .filter(
-            (candidate) =>
-              candidate.noteCommitment === note.commitment &&
-              candidate.state === "ready" &&
-              candidate.circuitVersion === this.#circuitVersion &&
-              candidate.provingKeyVersion === this.#provingKeyVersion &&
-              rootPosition(
-                this.#snapshot,
-                candidate.treeId,
-                candidate.merkleRoot,
-              ) >= 0,
+            (note) =>
+              note.state === "spendable" &&
+              hex(note.tokenMint) === required.mint &&
+              note.amount >= required.amount &&
+              note.leafIndex !== undefined,
           )
-          .sort(
-            (left, right) =>
-              left.rootHistoryPosition - right.rootHistoryPosition,
-          )[0];
-        if (!proof) continue;
-        const id = reservationId(`reservation-${this.#randomId()}`);
-        note.state = "reserved";
-        note.reservationId = id;
-        this.#snapshot.reservations.push({
-          reservationId: id,
-          noteCommitment: note.commitment,
-          proofHandle: proof.handle,
-          createdAtMs: this.#now(),
-        });
-        return {
-          status: "ready",
-          reservation: {
+          .sort((left, right) =>
+            left.amount < right.amount
+              ? -1
+              : left.amount > right.amount
+                ? 1
+                : 0,
+          );
+        for (const note of candidates) {
+          const proof = this.#snapshot.proofs
+            .filter(
+              (candidate) =>
+                candidate.noteCommitment === note.commitment &&
+                candidate.state === "ready" &&
+                candidate.circuitVersion === this.#circuitVersion &&
+                candidate.provingKeyVersion === this.#provingKeyVersion &&
+                rootPosition(
+                  this.#snapshot,
+                  candidate.treeId,
+                  candidate.merkleRoot,
+                ) >= 0,
+            )
+            .sort(
+              (left, right) =>
+                left.rootHistoryPosition - right.rootHistoryPosition,
+            )[0];
+          if (!proof) continue;
+          const id = reservationId(`reservation-${this.#randomId()}`);
+          note.state = "reserved";
+          note.reservationId = id;
+          this.#snapshot.reservations.push({
             reservationId: id,
-            proof: readyProofHandle(proof.handle),
-          },
-        };
-      }
-      return { status: "not_ready", retryAfterMs: 250 };
-    }));
+            noteCommitment: note.commitment,
+            proofHandle: proof.handle,
+            createdAtMs: this.#now(),
+          });
+          return {
+            status: "ready",
+            reservation: {
+              reservationId: id,
+              proof: readyProofHandle(proof.handle),
+            },
+          };
+        }
+        return { status: "not_ready", retryAfterMs: 250 };
+      }),
+    );
   }
 
   async releaseReservation(id: string): Promise<void> {
-    await this.#serialized(() => this.#mutate(async () => {
-      const index = this.#snapshot.reservations.findIndex(
-        (candidate) => candidate.reservationId === id,
-      );
-      if (index < 0) return;
-      const [reservation] = this.#snapshot.reservations.splice(index, 1);
-      const note = this.#snapshot.notes.find(
-        (candidate) => candidate.commitment === reservation.noteCommitment,
-      );
-      if (
-        note &&
-        (note.state === "reserved" || note.state === "pending_settlement") &&
-        note.reservationId === id
-      ) {
-        note.state = "spendable";
-        delete note.reservationId;
-      }
-    }));
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const index = this.#snapshot.reservations.findIndex(
+          (candidate) => candidate.reservationId === id,
+        );
+        if (index < 0) return;
+        const [reservation] = this.#snapshot.reservations.splice(index, 1);
+        const note = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === reservation.noteCommitment,
+        );
+        if (
+          note &&
+          (note.state === "reserved" || note.state === "pending_settlement") &&
+          note.reservationId === id
+        ) {
+          note.state = "spendable";
+          delete note.reservationId;
+        }
+      }),
+    );
   }
 
   async markPendingSettlement(id: string): Promise<void> {
-    await this.#serialized(() => this.#mutate(async () => {
-      const reservation = this.#snapshot.reservations.find(
-        (candidate) => candidate.reservationId === id,
-      );
-      if (!reservation) throw new Error("unknown inventory reservation");
-      const note = this.#snapshot.notes.find(
-        (candidate) => candidate.commitment === reservation.noteCommitment,
-      );
-      if (
-        !note ||
-        (note.state !== "reserved" && note.state !== "pending_settlement") ||
-        note.reservationId !== id
-      ) {
-        throw new Error("inventory reservation is inconsistent");
-      }
-      note.state = "pending_settlement";
-    }));
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const reservation = this.#snapshot.reservations.find(
+          (candidate) => candidate.reservationId === id,
+        );
+        if (!reservation) throw new Error("unknown inventory reservation");
+        const note = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === reservation.noteCommitment,
+        );
+        if (
+          !note ||
+          (note.state !== "reserved" && note.state !== "pending_settlement") ||
+          note.reservationId !== id
+        ) {
+          throw new Error("inventory reservation is inconsistent");
+        }
+        note.state = "pending_settlement";
+      }),
+    );
   }
 
   async markConsumed(noteCommitment: string): Promise<void> {
-    await this.#serialized(() => this.#mutate(async () => {
-      const note = this.#snapshot.notes.find(
-        (candidate) => candidate.commitment === noteCommitment,
-      );
-      if (!note) return;
-      note.state = "consumed";
-      delete note.reservationId;
-      this.#snapshot.reservations = this.#snapshot.reservations.filter(
-        (reservation) => reservation.noteCommitment !== noteCommitment,
-      );
-      for (const proof of this.#snapshot.proofs) {
-        if (proof.noteCommitment === noteCommitment) {
-          proof.state = "stale";
-          proof.invalidationReason = "note_consumed";
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const note = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === noteCommitment,
+        );
+        if (!note) return;
+        note.state = "consumed";
+        delete note.reservationId;
+        this.#snapshot.reservations = this.#snapshot.reservations.filter(
+          (reservation) => reservation.noteCommitment !== noteCommitment,
+        );
+        for (const proof of this.#snapshot.proofs) {
+          if (proof.noteCommitment === noteCommitment) {
+            proof.state = "stale";
+            proof.invalidationReason = "note_consumed";
+          }
         }
-      }
-      this.#pruneProofs(noteCommitment);
-    }));
+        this.#pruneProofs(noteCommitment);
+      }),
+    );
   }
 
   async resolveReservedProof(
@@ -785,140 +846,154 @@ export class BrowserInventory implements InventoryIntentPort {
     if (report.unresolvedSettlements > 0 || report.unresolvedMerges > 0) {
       throw new Error("seed-plus-chain recovery has unresolved owned outputs");
     }
-    await this.#serialized(() => this.#mutate(async () => {
-      const verified: InventoryNote[] = [];
-      for (const candidate of report.notes) {
-        const commitment = await noteCommitmentV2(candidate);
-        if (
-          !same(
-            commitment,
-            fromHex32(candidate.commitment, "recovered commitment"),
-          )
-        ) {
-          throw new Error(
-            "recovered note opening does not match its commitment",
-          );
-        }
-        const tag = hex(
-          await deriveNoteUseTag(commitment, bn254ToBE32(candidate.innerHash)),
-        );
-        const treeId = candidate.treeId ?? 0;
-        const consumed = await isConsumed(tag, treeId);
-        const locked = !consumed && (await isLocked?.(tag, treeId)) === true;
-        verified.push({
-          ...structuredClone(candidate),
-          noteUseTag: tag,
-          state: consumed
-            ? "consumed"
-            : locked || candidate.leafIndex === undefined
-              ? "locked"
-              : "spendable",
-        });
-      }
-      const priorByCommitment = new Map(
-        this.#snapshot.notes.map((note) => [note.commitment, note]),
-      );
-      const recovered = verified.map((note) => {
-        const prior = priorByCommitment.get(note.commitment);
-        if (
-          prior &&
-          note.state === "spendable" &&
-          (prior.state === "reserved" || prior.state === "pending_settlement")
-        ) {
-          return {
-            ...note,
-            state: prior.state,
-            reservationId: prior.reservationId,
-          };
-        }
-        return note;
-      });
-      this.#snapshot.notes = report.fullScan
-        ? recovered
-        : [
-            ...this.#snapshot.notes.filter(
-              (note) =>
-                !recovered.some(
-                  (candidate) => candidate.commitment === note.commitment,
-                ),
-            ),
-            ...recovered,
-          ];
-      const present = new Set(
-        this.#snapshot.notes
-          .filter((note) => note.reservationId !== undefined)
-          .map((note) => `${note.commitment}:${note.reservationId}`),
-      );
-      this.#snapshot.reservations = this.#snapshot.reservations.filter(
-        (reservation) =>
-          present.has(
-            `${reservation.noteCommitment}:${reservation.reservationId}`,
-          ),
-      );
-      const consumed = new Set(
-        this.#snapshot.notes
-          .filter((note) => note.state === "consumed")
-          .map((note) => note.commitment),
-      );
-      for (const proof of this.#snapshot.proofs) {
-        if (consumed.has(proof.noteCommitment)) {
-          proof.state = "stale";
-          proof.invalidationReason = "note_consumed";
-        }
-      }
-      // A stream gap may hide one or several confirmed fills. Settlement
-      // outputs are seed-recovered with both `orderId` and the exact
-      // `consumedCommitment`, so walk that private continuation chain and move
-      // the journal's current collateral pointer forward. The collateral mint
-      // distinguishes a partial-fill continuation from the trade output.
-      for (const order of this.#snapshot.orders) {
-        if (
-          order.kind === "fully_filled" ||
-          order.kind === "settlement_failed" ||
-          order.kind === "cancelled" ||
-          order.kind === "expired" ||
-          order.kind === "rejected"
-        ) {
-          continue;
-        }
-        const market = this.#markets.get(order.marketSymbol);
-        if (!market) continue;
-        const collateralMint =
-          order.side === "bid" ? market.quoteMintHex : market.baseMintHex;
-        let current = order.noteCommitment;
-        let changed = false;
-        for (let depth = 0; depth <= verified.length; depth += 1) {
-          const outputs = verified.filter(
-            (note) =>
-              note.orderId?.toLowerCase() === order.orderId &&
-              note.consumedCommitment?.toLowerCase() === current,
-          );
-          if (outputs.length === 0) break;
-          const continuation = outputs.find(
-            (note) => hex(note.tokenMint) === collateralMint,
-          );
-          changed = true;
-          if (!continuation) {
-            order.kind = "fully_filled";
-            break;
-          }
-          order.kind = "partially_filled";
-          current = continuation.commitment;
-          order.noteCommitment = current;
-          const continuationNote = this.#snapshot.notes.find(
-            (note) => note.commitment === current,
-          );
-          if (continuationNote) {
-            continuationNote.state = "locked";
-            delete continuationNote.reservationId;
-            this.#snapshot.reservations = this.#snapshot.reservations.filter(
-              (reservation) => reservation.noteCommitment !== current,
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const verified: InventoryNote[] = [];
+        for (const candidate of report.notes) {
+          const commitment = await noteCommitmentV2(candidate);
+          if (
+            !same(
+              commitment,
+              fromHex32(candidate.commitment, "recovered commitment"),
+            )
+          ) {
+            throw new Error(
+              "recovered note opening does not match its commitment",
             );
           }
+          const tag = hex(
+            await deriveNoteUseTag(
+              commitment,
+              bn254ToBE32(candidate.innerHash),
+            ),
+          );
+          if (
+            !Number.isInteger(candidate.treeId) ||
+            candidate.treeId === undefined ||
+            candidate.treeId < 0 ||
+            candidate.treeId > 255
+          ) {
+            throw new Error("recovered note tree id must be a u8");
+          }
+          const treeId = candidate.treeId;
+          const consumed = await isConsumed(tag, treeId);
+          const locked = !consumed && (await isLocked?.(tag, treeId)) === true;
+          verified.push({
+            ...structuredClone(candidate),
+            treeId,
+            noteUseTag: tag,
+            state: consumed
+              ? "consumed"
+              : locked || candidate.leafIndex === undefined
+                ? "locked"
+                : "spendable",
+          });
         }
-        if (changed) order.updatedAtMs = this.#now();
-      }
-    }));
+        const priorByCommitment = new Map(
+          this.#snapshot.notes.map((note) => [note.commitment, note]),
+        );
+        const recovered = verified.map((note) => {
+          const prior = priorByCommitment.get(note.commitment);
+          if (
+            prior &&
+            note.state === "spendable" &&
+            (prior.state === "reserved" || prior.state === "pending_settlement")
+          ) {
+            return {
+              ...note,
+              state: prior.state,
+              reservationId: prior.reservationId,
+            };
+          }
+          return note;
+        });
+        this.#snapshot.notes = report.fullScan
+          ? recovered
+          : [
+              ...this.#snapshot.notes.filter(
+                (note) =>
+                  !recovered.some(
+                    (candidate) => candidate.commitment === note.commitment,
+                  ),
+              ),
+              ...recovered,
+            ];
+        const present = new Set(
+          this.#snapshot.notes
+            .filter((note) => note.reservationId !== undefined)
+            .map((note) => `${note.commitment}:${note.reservationId}`),
+        );
+        this.#snapshot.reservations = this.#snapshot.reservations.filter(
+          (reservation) =>
+            present.has(
+              `${reservation.noteCommitment}:${reservation.reservationId}`,
+            ),
+        );
+        const consumed = new Set(
+          this.#snapshot.notes
+            .filter((note) => note.state === "consumed")
+            .map((note) => note.commitment),
+        );
+        for (const proof of this.#snapshot.proofs) {
+          if (consumed.has(proof.noteCommitment)) {
+            proof.state = "stale";
+            proof.invalidationReason = "note_consumed";
+          }
+        }
+        // A stream gap may hide one or several confirmed fills. Settlement
+        // outputs are seed-recovered with both `orderId` and the exact
+        // `consumedCommitment`, so walk that private continuation chain and move
+        // the journal's current collateral pointer forward. The collateral mint
+        // distinguishes a partial-fill continuation from the trade output.
+        for (const order of this.#snapshot.orders) {
+          if (
+            order.kind === "fully_filled" ||
+            order.kind === "settlement_failed" ||
+            order.kind === "cancelled" ||
+            order.kind === "expired" ||
+            order.kind === "rejected"
+          ) {
+            continue;
+          }
+          const market = this.#markets.get(order.marketSymbol);
+          if (!market) continue;
+          const collateralMint =
+            order.side === "bid" ? market.quoteMintHex : market.baseMintHex;
+          let current = order.noteCommitment;
+          let changed = false;
+          for (let depth = 0; depth <= verified.length; depth += 1) {
+            const outputs = verified.filter(
+              (note) =>
+                note.orderId?.toLowerCase() === order.orderId &&
+                note.consumedCommitment?.toLowerCase() === current,
+            );
+            if (outputs.length === 0) break;
+            const continuation = outputs.find(
+              (note) => hex(note.tokenMint) === collateralMint,
+            );
+            changed = true;
+            if (!continuation) {
+              order.kind = "fully_filled";
+              break;
+            }
+            order.kind = "partially_filled";
+            current = continuation.commitment;
+            order.noteCommitment = current;
+            const continuationNote = this.#snapshot.notes.find(
+              (note) => note.commitment === current,
+            );
+            if (continuationNote) {
+              continuationNote.state = "locked";
+              delete continuationNote.reservationId;
+              this.#snapshot.reservations = this.#snapshot.reservations.filter(
+                (reservation) => reservation.noteCommitment !== current,
+              );
+            }
+          }
+          if (changed) order.updatedAtMs = this.#now();
+        }
+      }),
+    );
   }
 
   async refreshExpiringProofs(produce: InputProofProducer): Promise<number> {
@@ -928,7 +1003,7 @@ export class BrowserInventory implements InventoryIntentPort {
       for (const note of this.#snapshot.notes) {
         if (note.state !== "spendable" || note.leafIndex === undefined)
           continue;
-        const treeId = note.treeId ?? 0;
+        const treeId = note.treeId;
         const ring = this.#snapshot.roots.find(
           (candidate) => candidate.treeId === treeId,
         );

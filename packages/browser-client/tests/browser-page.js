@@ -3,6 +3,7 @@ import {
   BrowserInventory,
   BrowserIntentAuthorizer,
   inventoryStoreForVault,
+  requestVaultInternal,
   recoverBrowserInventory,
 } from "/dist/internal.js";
 
@@ -220,13 +221,17 @@ async function supported() {
     attributes: { orderType: "limit", expirySlot: "0", minFillSize: "0" },
   };
   const reservation = await reloaded.reserveReadyIntent(draft);
-  if (reservation.status !== "ready") throw new Error("proof was not reservable");
+  if (reservation.status !== "ready")
+    throw new Error("proof was not reservable");
   const authorizer = new BrowserIntentAuthorizer({
     vault,
     inventory: reloaded,
     bootSessionId: "11".repeat(32),
   });
-  const envelope = await authorizer.authorizeIntent(draft, reservation.reservation);
+  const envelope = await authorizer.authorizeIntent(
+    draft,
+    reservation.reservation,
+  );
   const orderBody = JSON.parse(new TextDecoder().decode(envelope.body));
   if (
     orderBody.order_id !== envelope.clientOrderId ||
@@ -238,9 +243,32 @@ async function supported() {
   const cancelBody = await authorizer.authorizeCancel(envelope.clientOrderId);
   if (
     cancelBody.trading_key_signature.length !== 128 ||
-    cancelBody.session_id !== "11".repeat(32)
+    cancelBody.session_id !== "11".repeat(32) ||
+    cancelBody.cancel_nonce !== "1"
   ) {
     throw new Error("custody Worker returned a malformed signed cancel");
+  }
+  const retryCancelBody = await authorizer.authorizeCancel(
+    envelope.clientOrderId,
+  );
+  if (retryCancelBody.cancel_nonce !== "2") {
+    throw new Error("cancel nonce was reused instead of durably incremented");
+  }
+  let mismatchedOrderRejected = false;
+  try {
+    await requestVaultInternal(vault, "authorizeCancel", {
+      orderId: "ff".repeat(16),
+      tradingIndex: 0,
+      cancelNonce: "3",
+      sessionId: "11".repeat(32),
+    });
+  } catch (error) {
+    mismatchedOrderRejected = /does not match its trading index/.test(
+      String(error),
+    );
+  }
+  if (!mismatchedOrderRejected) {
+    throw new Error("custody Worker signed a mismatched order/index pair");
   }
   status.textContent = "testing-inventory-lock";
   await vault.lock();

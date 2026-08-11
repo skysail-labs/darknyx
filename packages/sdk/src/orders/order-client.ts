@@ -54,7 +54,8 @@ export interface ModifyOrderResponse {
 /** A signed cancel body (mirrors the server `CancelOrderRequest`). */
 export interface CancelOrderRequest {
   trading_key: string;
-  cancel_nonce: number;
+  /** Canonical decimal u64 string; JSON numbers cannot preserve the full range. */
+  cancel_nonce: string;
   /** 32-byte hex boot session the cancel signature is scoped to (S-07). */
   session_id: string;
   trading_key_signature: string;
@@ -63,7 +64,8 @@ export interface CancelOrderRequest {
 /** A modify body: a signed cancel of the old order + a full replacement. */
 export interface ModifyOrderRequest {
   cancel_signature: string;
-  cancel_nonce: number;
+  /** Canonical decimal u64 string; JSON numbers cannot preserve the full range. */
+  cancel_nonce: string;
   replacement: PlaceOrderRequest;
 }
 
@@ -184,7 +186,7 @@ export async function buildCancel(args: {
     throw new Error("sign() must return a 64-byte signature");
   return {
     trading_key: toHex(args.tradingKey),
-    cancel_nonce: Number(args.cancelNonce),
+    cancel_nonce: args.cancelNonce.toString(),
     session_id: toHex(args.sessionId),
     trading_key_signature: toHex(sig),
   };

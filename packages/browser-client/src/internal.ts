@@ -1,4 +1,5 @@
 /** Product-composition surface. Not exported from the package's public API. */
+export { requestVaultInternal } from "./custody/browser-vault.js";
 export {
   BrowserProverSuite,
   type BrowserProverOptions,

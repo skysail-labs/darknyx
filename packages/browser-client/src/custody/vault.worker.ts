@@ -39,6 +39,7 @@ import {
   type BrowserVaultRecord,
 } from "./codec.js";
 import { BROWSER_VAULT_LOCKED_ERROR } from "./errors.js";
+import { canonicalU64 } from "../canonical-u64.js";
 
 const encoder = new TextEncoder();
 const BACKUP_FORMAT = "darknyx-master-seed-backup";
@@ -52,7 +53,6 @@ const INVENTORY_KEY_INFO = new TextEncoder().encode(
   "darknyx/browser-inventory-key/v1",
 );
 const INVENTORY_AAD = new TextEncoder().encode("darknyx/browser-inventory/v1");
-const U64_MAX = (1n << 64n) - 1n;
 
 type VaultHeader = Omit<BrowserVaultRecord, "cipher">;
 type Cipher = BrowserVaultRecord["cipher"];
@@ -113,15 +113,6 @@ function fromHex(
   return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
     Number.parseInt(byte, 16),
   );
-}
-
-function canonicalU64(value: unknown, label: string): bigint {
-  if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value)) {
-    throw new Error(`${label} must be a canonical u64 string`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > U64_MAX) throw new Error(`${label} exceeds u64`);
-  return parsed;
 }
 
 function orderType(value: unknown): OrderType {
@@ -457,6 +448,9 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       typeof opening.amount !== "bigint" ||
       typeof opening.ownerCommitment !== "bigint" ||
       typeof opening.innerHash !== "bigint" ||
+      !Number.isInteger(opening.treeId) ||
+      (opening.treeId as number) < 0 ||
+      (opening.treeId as number) > 255 ||
       typeof readyProof.merkleRoot !== "string" ||
       !(readyProof.proofBytes instanceof Uint8Array) ||
       readyProof.proofBytes.length !== 256
@@ -528,7 +522,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
         sessionId: session,
         arrivalNonce: 1n,
         collateralAmount: opening.amount,
-        treeId: typeof opening.treeId === "number" ? opening.treeId : undefined,
+        treeId: opening.treeId as number,
       });
       return {
         body: encoder.encode(JSON.stringify(request)),
@@ -548,6 +542,10 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       throw new Error("cancel trading index must be a u32");
     }
     const id = fromHex(orderId, 16, "order id");
+    const expectedId = deriveOrderId(requireSeed(), tradingIndex as number);
+    if (!equalBytes(id, expectedId)) {
+      throw new Error("cancel order id does not match its trading index");
+    }
     const session = fromHex(sessionId, 32, "boot session id");
     const nonce = canonicalU64(cancelNonce, "cancel nonce");
     const rawTrading = deriveTradingKeyAtOffset(
@@ -746,5 +744,7 @@ async function handleMessage(data: WorkerRequest): Promise<void> {
 // Serialize them so lock/restore cannot zero or replace an in-use seed.
 let commandQueue = Promise.resolve();
 workerScope.onmessage = ({ data }) => {
-  commandQueue = commandQueue.then(() => handleMessage(data)).catch(() => undefined);
+  commandQueue = commandQueue
+    .then(() => handleMessage(data))
+    .catch(() => undefined);
 };

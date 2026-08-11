@@ -85,6 +85,8 @@ export class BrowserLifecycleStream {
   readonly #options: BrowserLifecycleStreamOptions;
   readonly #subscriptions: StreamChannelSubscription[] = [];
   #reconcilePromise: Promise<void> | null = null;
+  #reconcileQueued = false;
+  readonly #reconcileReasons: string[] = [];
   #closed = false;
 
   constructor(options: BrowserLifecycleStreamOptions) {
@@ -146,6 +148,9 @@ export class BrowserLifecycleStream {
           break;
         case "cancelled":
         case "expired":
+          // A stream frame is only a hint. First prove against finalized chain
+          // state that no lock/consumption keeps this collateral unavailable.
+          await this.#options.reconcile(`order ${update.kind}`);
           await this.#options.inventory.releaseReservation(order.reservationId);
           break;
       }
@@ -160,24 +165,36 @@ export class BrowserLifecycleStream {
 
   reconcile(reason: string): Promise<void> {
     if (this.#closed) return Promise.resolve();
+    this.#reconcileReasons.push(reason);
+    this.#reconcileQueued = true;
     if (this.#reconcilePromise) return this.#reconcilePromise;
-    this.#reconcilePromise = this.#options
-      .reconcile(reason)
-      .then(() => this.#options.onChange?.())
-      .catch((error) => {
-        this.#options.onError?.(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      })
-      .finally(() => {
-        this.#reconcilePromise = null;
-      });
+    this.#reconcilePromise = (async () => {
+      while (this.#reconcileQueued && !this.#closed) {
+        this.#reconcileQueued = false;
+        const reasons = this.#reconcileReasons.splice(0).join("; ");
+        try {
+          await this.#options.reconcile(reasons);
+          this.#options.onChange?.();
+        } catch (error) {
+          this.#options.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+      }
+    })().finally(() => {
+      this.#reconcilePromise = null;
+      if (this.#reconcileQueued && !this.#closed) {
+        void this.reconcile("queued after reconciliation completion");
+      }
+    });
     return this.#reconcilePromise;
   }
 
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#reconcileQueued = false;
+    this.#reconcileReasons.length = 0;
     for (const subscription of this.#subscriptions) subscription.close();
     this.#subscriptions.length = 0;
   }

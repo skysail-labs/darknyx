@@ -46,6 +46,8 @@ export interface BrowserPrivateRuntimeOptions {
   webSocketFactory?: SendableWebSocketFactory;
   onChange?(): void;
   onError?(error: Error): void;
+  onReconcile?(reason: string): void;
+  refreshTimeoutMs?: number;
 }
 
 export interface BrowserPrivateRuntime {
@@ -93,10 +95,17 @@ export async function createBrowserPrivateRuntime(
     fetchImpl: options.fetchImpl,
   });
 
+  const refreshTimeoutMs = options.refreshTimeoutMs ?? 30_000;
+  if (!Number.isFinite(refreshTimeoutMs) || refreshTimeoutMs <= 0) {
+    throw new Error("refresh timeout must be positive");
+  }
   let refreshPromise: Promise<void> | null = null;
-  const refresh = (_reason = "manual"): Promise<void> => {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = (async () => {
+  let refreshQueued = false;
+  const reasons: string[] = [];
+  const runRefresh = async (reason: string): Promise<void> => {
+    options.onReconcile?.(reason);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const work = (async () => {
       const treeIds = Array.from(
         { length: options.venue.numTrees },
         (_unused, treeId) => treeId,
@@ -122,8 +131,39 @@ export async function createBrowserPrivateRuntime(
             error instanceof Error ? error : new Error(String(error)),
           ),
         );
+    })();
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`finalized reconciliation timed out: ${reason}`)),
+        refreshTimeoutMs,
+      );
+    });
+    try {
+      await Promise.race([work, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  const refresh = (reason = "manual"): Promise<void> => {
+    reasons.push(reason);
+    refreshQueued = true;
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = (async () => {
+      while (refreshQueued) {
+        refreshQueued = false;
+        const runReasons = reasons.splice(0);
+        await runRefresh(runReasons.join("; "));
+      }
     })().finally(() => {
       refreshPromise = null;
+      if (refreshQueued) {
+        void refresh("queued after reconciliation completion").catch((error) =>
+          options.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+        );
+      }
     });
     return refreshPromise;
   };

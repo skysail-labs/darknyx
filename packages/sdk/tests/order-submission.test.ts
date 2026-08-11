@@ -221,7 +221,7 @@ describe("TradingClient (/v1/stream session)", () => {
     const { client, sock } = await connected();
     const cancelP = client.cancel("ab", {
       trading_key: "00",
-      cancel_nonce: 1,
+      cancel_nonce: "1",
       // Required since S-07: a cancel signature is scoped to a boot session.
       // The test body omitted it and nothing caught that, because test files
       // were never typechecked.

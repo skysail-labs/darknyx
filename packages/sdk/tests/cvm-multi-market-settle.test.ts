@@ -467,7 +467,7 @@ maybeDescribe(
         );
         return {
           trading_key: hex(tradingKey),
-          cancel_nonce: Number(cancelNonce),
+          cancel_nonce: cancelNonce.toString(),
           session_id: hex(bootSessionId),
           trading_key_signature: hex(signature),
         };
@@ -520,7 +520,7 @@ maybeDescribe(
           },
           body: JSON.stringify({
             cancel_signature: hex(modifySignature),
-            cancel_nonce: 1,
+            cancel_nonce: "1",
             replacement: crossMarketReplacement.body,
           }),
         },

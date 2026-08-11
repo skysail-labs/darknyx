@@ -2,7 +2,6 @@
 description: "Cancel a resting order with a signed cancel request from the owning trading key."
 ---
 
-
 # Cancel Order
 
 {% hint style="info" %}
@@ -23,8 +22,8 @@ the body.
 
 ## Path parameters
 
-| Parameter | Type | Description |
-|---|---|---|
+| Parameter  | Type   | Description                           |
+| ---------- | ------ | ------------------------------------- |
 | `order_id` | string | The 16-byte order id (hex) to cancel. |
 
 ## Request body
@@ -32,21 +31,21 @@ the body.
 ```json
 {
   "trading_key": "…",
-  "cancel_nonce": 1,
+  "cancel_nonce": "1",
   "session_id": "…",
   "trading_key_signature": "…"
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trading_key` | string | Yes | 32-byte hex. Must be the key that placed the order. |
-| `cancel_nonce` | integer | Yes | A nonce bound into the signed cancel body. Must **strictly increase** per trading key. |
-| `session_id` | string | Yes | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. The value is not quote-bound; a substituted value only makes the engine reject the request. |
-| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body: `{ order_id, trading_key, cancel_nonce, session_id }`. |
+| Field                   | Type           | Required | Description                                                                                                                                                                        |
+| ----------------------- | -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trading_key`           | string         | Yes      | 32-byte hex. Must be the key that placed the order.                                                                                                                                |
+| `cancel_nonce`          | decimal string | Yes      | A canonical `u64` decimal string bound into the signed cancel body. It must **strictly increase** per trading key; the string form avoids JavaScript precision loss.               |
+| `session_id`            | string         | Yes      | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. The value is not quote-bound; a substituted value only makes the engine reject the request. |
+| `trading_key_signature` | string         | Yes      | 64-byte hex. Ed25519 signature over the canonical cancel body: `{ order_id, trading_key, cancel_nonce, session_id }`.                                                              |
 
 The cancel nonce is part of the signed bytes, so a captured cancel request cannot
-be replayed to cancel a *different* (later, same-id) order, because the canonical body,
+be replayed to cancel a _different_ (later, same-id) order, because the canonical body,
 and therefore the signature, differs.
 
 The canonical body also binds the **boot session**, and the nonce must strictly
@@ -67,7 +66,7 @@ curl -s -X DELETE "$GATEWAY/orders/$ORDER_ID" \
   -H "Content-Type: application/json" \
   -d '{
     "trading_key": "…",
-    "cancel_nonce": 1,
+    "cancel_nonce": "1",
     "session_id": "…",
     "trading_key_signature": "…"
   }'
@@ -82,10 +81,10 @@ curl -s -X DELETE "$GATEWAY/orders/$ORDER_ID" \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
+| Field      | Type   | Description               |
+| ---------- | ------ | ------------------------- |
 | `order_id` | string | The cancelled order's id. |
-| `status` | string | `"cancelled"`. |
+| `status`   | string | `"cancelled"`.            |
 
 When an order is cancelled, the engine releases its collateral reservation and
 drops the in-enclave note opening. A `cancelled` event is also emitted on the
@@ -94,13 +93,13 @@ order leave without polling.
 
 ## Errors
 
-| Condition | Status |
-|---|---|
-| Malformed `order_id` / `trading_key` / signature hex | `400` |
-| Missing or invalid bearer token | `401` |
-| The signature does not verify, or the key does not own the order | `403` |
-| No such (resting) order, already filled, expired, or cancelled | `404` |
-| The cancel nonce did not advance, or the session belongs to another boot | `409` |
+| Condition                                                                | Status |
+| ------------------------------------------------------------------------ | ------ |
+| Malformed `order_id` / `trading_key` / signature hex                     | `400`  |
+| Missing or invalid bearer token                                          | `401`  |
+| The signature does not verify, or the key does not own the order         | `403`  |
+| No such (resting) order, already filled, expired, or cancelled           | `404`  |
+| The cancel nonce did not advance, or the session belongs to another boot | `409`  |
 
 {% hint style="info" %}
 **Cancelling races the match**

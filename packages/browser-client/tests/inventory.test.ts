@@ -70,6 +70,64 @@ function ids(...values: string[]): () => string {
 }
 
 describe("browser inventory plane", () => {
+  it("rejects an invalid persisted order lifecycle kind", async () => {
+    await expect(
+      BrowserInventory.create({
+        store: {
+          load: async () =>
+            ({
+              format: "darknyx-browser-inventory",
+              version: 2,
+              notes: [],
+              proofs: [],
+              reservations: [],
+              roots: [],
+              nextOrderIndex: 1,
+              orders: [
+                {
+                  orderId: "ab".repeat(16),
+                  reservationId: "reservation-a",
+                  noteCommitment: "cd".repeat(32),
+                  tradingIndex: 0,
+                  nextCancelNonce: "1",
+                  marketSymbol: "SOL-USDC",
+                  side: "bid",
+                  baseAmountAtoms: "1",
+                  limitPriceTicks: "1",
+                  kind: "corrupted",
+                  createdAtMs: 1,
+                  updatedAtMs: 1,
+                },
+              ],
+            }) as never,
+          save: async () => undefined,
+          clear: async () => undefined,
+        },
+        markets: [market],
+        circuitVersion: "valid-input-v3",
+        provingKeyVersion: "pk-1",
+      }),
+    ).rejects.toThrow(/lifecycle kind/);
+  });
+
+  it("persists the HD order index before reuse is possible", async () => {
+    const store = new InMemoryInventoryStore();
+    const first = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(first.allocateOrderIndex()).resolves.toBe(0);
+    const reloaded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(reloaded.allocateOrderIndex()).resolves.toBe(1);
+  });
+
   it("revalidates recovered openings and chain consumption before exposing balances", async () => {
     const store = new InMemoryInventoryStore();
     const inventory = await BrowserInventory.create({
@@ -96,6 +154,25 @@ describe("browser inventory plane", () => {
         pendingSettlementAtoms: "0",
       },
     ]);
+  });
+
+  it("rejects recovered notes without an exact shard or governed mint", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const missingTree = await note(mint(0x9e), 5n, 45n, 4n);
+    delete missingTree.treeId;
+    await expect(
+      inventory.recover(report([missingTree]), async () => false),
+    ).rejects.toThrow(/tree id/);
+
+    const unsupported = await note(mint(0x55), 5n, 46n, 5n);
+    await expect(
+      inventory.recover(report([unsupported]), async () => false),
+    ).rejects.toThrow(/not served/);
   });
 
   it("persists one reservation per note and refuses double allocation after reload", async () => {
@@ -176,6 +253,7 @@ describe("browser inventory plane", () => {
       reservationId: reserved.reservation.reservationId,
       noteCommitment: input.commitment,
       tradingIndex,
+      nextCancelNonce: "1",
       marketSymbol: "SOL-USDC",
       side: "bid",
       baseAmountAtoms: "100",
@@ -185,6 +263,11 @@ describe("browser inventory plane", () => {
       updatedAtMs: 1,
     });
     expect(reserved.reservation.proof).toBe(proofHandle);
+    await expect(inventory.allocateCancelNonce(orderId)).resolves.toBe("1");
+    await expect(inventory.allocateCancelNonce(orderId)).resolves.toBe("2");
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      nextCancelNonce: "3",
+    });
 
     const trade = await note(mint(0xb1), 40n, 53n, 11n);
     trade.orderId = orderId;

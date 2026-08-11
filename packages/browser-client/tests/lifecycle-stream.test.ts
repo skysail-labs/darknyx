@@ -73,13 +73,13 @@ describe("browser lifecycle stream", () => {
       kind: "partially_filled",
       filled_quantity: 10,
     });
-    await vi.waitFor(() =>
-      expect(inventory.markConsumed).toHaveBeenCalledWith("cd".repeat(32)),
-    );
-    expect(reconcile).toHaveBeenCalledWith("order partially_filled");
+    await vi.waitFor(() => {
+      expect(inventory.markConsumed).toHaveBeenCalledWith("cd".repeat(32));
+      expect(reconcile).toHaveBeenCalledWith("order partially_filled");
+    });
   });
 
-  it("treats fill frames as hints and deduplicates concurrent chain reconciliation", async () => {
+  it("coalesces concurrent hints but follows with a fresh reconciliation", async () => {
     let finish!: () => void;
     const { handlers, reconcile } = harness();
     reconcile.mockImplementation(
@@ -89,5 +89,28 @@ describe("browser lifecycle stream", () => {
     handlers.get("fills")?.({ channel: "fills" });
     await vi.waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1));
     finish();
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not release cancelled collateral before finalized reconciliation", async () => {
+    let finish!: () => void;
+    const { handlers, inventory, reconcile } = harness();
+    reconcile.mockImplementation(
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    handlers.get("orders")?.({
+      order_id: "ab".repeat(16),
+      kind: "cancelled",
+    });
+    await vi.waitFor(() =>
+      expect(reconcile).toHaveBeenCalledWith("order cancelled"),
+    );
+    expect(inventory.releaseReservation).not.toHaveBeenCalled();
+    finish();
+    await vi.waitFor(() =>
+      expect(inventory.releaseReservation).toHaveBeenCalledWith(
+        "reservation-1",
+      ),
+    );
   });
 });
