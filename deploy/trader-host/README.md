@@ -19,6 +19,27 @@ The static mount is an assembled, reviewed release containing `index.html`,
 `release.json`, hashed application assets, and the signed proving-artifact set.
 The runtime never builds or signs assets at startup.
 
+Build and assemble that directory offline before deployment. The assembly step
+requires the six circuit build outputs and an Ed25519 PKCS#8 signing key; the
+example leaves the deployment-specific pins explicit:
+
+```sh
+npm -w @darknyx/browser-client run build:app
+DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64="$OFFLINE_RELEASE_KEY" \
+  npm -w @darknyx/browser-client run assemble:release -- \
+    --origin=https://trade.example \
+    --release-id=<reviewed-release-id> \
+    --venue-id=<opaque-venue-id> \
+    --vault-program-id=<deployed-vault-program> \
+    --expected-compose-hash=<64-lowercase-hex> \
+    --artifact-key-id=<reviewed-key-id> \
+    --circuit-version=<reviewed-circuit-version> \
+    --proving-key-version=<reviewed-proving-key-version>
+```
+
+The signer is an offline release key, not the wallet, vault upgrade authority,
+or CVM signer. Do not place it in the runtime environment or secrets mount.
+
 Create the secret directory with mode `0700`; every file must be a regular,
 non-symlink file with mode `0600` and owned by the runtime UID (`1101` in the
 container):
