@@ -67,7 +67,20 @@ below it, shows only its own layer, and stays open until explicitly approved.
   same-origin, opaque-venue session broker; long-lived CVM credentials stay
   server-side. Wallet Standard discovery and sign-and-send are constrained to
   bounded Solana transaction bytes. The visual workspace and typed
-  order/lifecycle composition remain the next stacked Layer 5b change.
+  order/lifecycle composition remain stacked above it.
+- **Layer 5b — implementation complete and locally qualified:** the Warm Horizon trader
+  workspace now exposes attestation, venue-local readiness, external wallet,
+  vault, aggregate private balances, proof readiness, order entry, and durable
+  settlement lifecycle states at desktop/tablet/mobile breakpoints. It imports
+  only page-safe view/action contracts; decimal-to-atom conversion and typed
+  intent authorization stay behind the action adapter. Failed trust and paused
+  markets disable submission with a durable explanation, while ambiguous
+  transport remains “Reconciling.” The final Layer 5c composition will wire
+  these actions to the encrypted inventory, custody Worker, authenticated
+  stream, and chain reconciliation before physical-device qualification.
+  Exact Chromium emulation at 375, 768, and 1280 CSS pixels confirms no
+  page-level horizontal overflow; the narrow lifecycle table alone remains an
+  intentional swipe/scroll region.
 
 The production Worker currently bundles snarkjs, whose package declares
 GPL-3.0. Before distributing the browser application, obtain a focused license-

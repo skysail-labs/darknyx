@@ -50,4 +50,52 @@ describe("browser custody product boundary", () => {
     );
     expect(proverWorker).not.toContain("node:");
   });
+
+  it("keeps the page-facing trader workspace browser-native and secret-free", async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as {
+      exports: Record<string, string | { default: string }>;
+      scripts: Record<string, string>;
+    };
+    const ui = await readFile(
+      new URL("../dist/ui.js", import.meta.url),
+      "utf8",
+    );
+    const css = await readFile(
+      new URL("../dist/ui.css", import.meta.url),
+      "utf8",
+    );
+    expect(manifest.exports["./ui"]).toEqual({
+      types: "./dist/ui/index.d.ts",
+      default: "./dist/ui.js",
+    });
+    expect(manifest.exports["./ui.css"]).toBe("./dist/ui.css");
+    expect(manifest.scripts["build:preview"]).toContain(
+      "DARKNYX_UI_PREVIEW=1",
+    );
+    expect(ui).toContain("Venue identity");
+    expect(ui).toContain("Place order");
+    expect(css).toContain(".darknyx-product");
+    expect(css).toContain("--darknyx-ink");
+    expect(ui).not.toContain("--darknyx-ink");
+    for (const forbidden of [
+      "node:",
+      "BrowserInventory",
+      "BrowserProverSuite",
+      "proveValidInput",
+      "validInputWitness",
+      "proofBytes",
+      "masterSeed",
+      "signAndSendTransaction",
+      "snarkjs",
+    ]) {
+      expect(ui, forbidden).not.toContain(forbidden);
+    }
+    expect(css).toContain("@media (max-width: 1050px)");
+    expect(css).toContain("@media (max-width: 720px)");
+    expect(css).toContain("prefers-reduced-motion");
+    expect(css).not.toContain("@import");
+    expect(css).not.toMatch(/https?:\/\//);
+  });
 });

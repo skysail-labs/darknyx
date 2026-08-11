@@ -27,6 +27,20 @@ await build({
   chunkNames: "[name]-[hash]",
 });
 
+await build({
+  bundle: true,
+  platform: "browser",
+  target: ["chrome113", "edge113"],
+  sourcemap: true,
+  legalComments: "linked",
+  entryPoints: {
+    ui: new URL("../src/ui/index.ts", import.meta.url).pathname,
+  },
+  format: "esm",
+  outdir: new URL("../dist", import.meta.url).pathname,
+  external: ["react", "react/jsx-runtime", "lucide-react"],
+});
+
 await Promise.all([
   build({
     ...shared,
@@ -45,3 +59,19 @@ await Promise.all([
     outfile: new URL("../dist/prover.worker.js", import.meta.url).pathname,
   }),
 ]);
+
+if (process.env.DARKNYX_UI_PREVIEW === "1") {
+  await build({
+    bundle: true,
+    platform: "browser",
+    target: ["chrome113", "edge113"],
+    sourcemap: true,
+    legalComments: "linked",
+    entryPoints: {
+      "ui-preview": new URL("../tests/ui-preview.tsx", import.meta.url)
+        .pathname,
+    },
+    format: "esm",
+    outdir: new URL("../dist", import.meta.url).pathname,
+  });
+}

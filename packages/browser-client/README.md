@@ -31,6 +31,28 @@ discovered through Wallet Standard and are used only for bounded, explicitly
 user-approved Solana transactions; they are not the Darknyx note seed or a
 generic message signer.
 
+The `@darknyx/browser-client/ui` entrypoint is the product-owned trader
+workspace. It consumes page-safe snapshots and narrow actions only: formatted
+aggregate balances, opaque proof readiness, explicit venue/vault/wallet state,
+and durable order-lifecycle states. It cannot import inventory internals or
+initiate proving. A disabled ticket always names the blocking trust, market,
+vault, or proof condition; ambiguous settlement remains visible as
+“Reconciling” and is never presented as a failed or reusable order.
+
+Import `@darknyx/browser-client/ui.css` once at the dedicated application root.
+The stylesheet carries the Warm Horizon tokens and responsive 1280/768/375
+layouts but performs no third-party font fetch. Production should self-host the
+OFL-licensed Newsreader, Inter, and IBM Plex Mono files on the same origin; the
+system fallbacks are usable during integration. The root `brand.md` records the
+product rules. The reference-only `design-system/` directory is not a package
+dependency and must not be committed with this stack.
+
+Run `npm -w @darknyx/browser-client run build:preview`, then serve the package
+directory and open `/tests/ui-preview.html` to inspect the exact standalone
+workspace fixture. The preview build emits both `dist/ui-preview.js` and
+`dist/ui-preview.css`; production consumers still import the separate
+`@darknyx/browser-client/ui` and `@darknyx/browser-client/ui.css` exports.
+
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,
 checks every recovered opening and tag, filters historical ancestors through
@@ -61,6 +83,15 @@ WebAssembly compilation, not JavaScript eval. snarkjs's generated curve Workers
 also require `worker-src 'self' blob:` and the
 `darknyx-snarkjs-worker` Trusted Types policy installed inside the pinned prover
 Worker. Nested concurrency is capped at four.
+
+The same CSP should set `default-src 'none'`, `script-src 'self'
+'wasm-unsafe-eval'`, `worker-src 'self' blob:`, `connect-src 'self'
+https://<pinned-gateway> https://<pinned-rpc>`, `style-src 'self'`, `font-src
+'self'`, `img-src 'self' data:`, `form-action 'none'`, `base-uri 'none'`,
+`object-src 'none'`, `frame-ancestors 'none'`, and
+`require-trusted-types-for 'script'`. Deployment must replace the endpoint
+placeholders with the reviewed release pins; a wildcard is not an acceptable
+substitute.
 
 `artifacts/client-artifacts.v1.payload.json` is the reviewed release payload.
 `scripts/verify-artifact-payload.mjs` checks it against all six local build
