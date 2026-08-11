@@ -1,5 +1,9 @@
 import type { Wallet, WalletAccount } from "@wallet-standard/base";
-import { StandardConnect, StandardDisconnect } from "@wallet-standard/features";
+import {
+  StandardConnect,
+  StandardDisconnect,
+  type StandardDisconnectFeature,
+} from "@wallet-standard/features";
 import { SolanaSignAndSendTransaction } from "@solana/wallet-standard-features";
 import { describe, expect, it, vi } from "vitest";
 
@@ -88,9 +92,12 @@ describe("external Wallet Standard boundary", () => {
 
   it("retains the active wallet when its disconnect cleanup rejects", async () => {
     const candidate = wallet();
-    vi.mocked(
-      candidate.features[StandardDisconnect]!.disconnect,
-    ).mockRejectedValueOnce(new Error("wallet refused disconnect"));
+    const disconnect = (
+      candidate.features as StandardDisconnectFeature
+    )[StandardDisconnect];
+    vi.mocked(disconnect.disconnect).mockRejectedValueOnce(
+      new Error("wallet refused disconnect"),
+    );
     const controller = new ExternalWalletController({
       wallets: {
         get: () => [candidate],
