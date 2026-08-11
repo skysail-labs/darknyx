@@ -125,11 +125,19 @@ audit, ceremony, governance, and mainnet controls tracked under `audits/`.
   This code is not qualified until the complete everything-green gate, real
   wallet/passkey matrix, live devnet/CVM account flows, reconnect/recovery drill,
   and focused frontend/supply-chain review have all produced recorded evidence.
-- **Layer 7 — pending:** the deployable dedicated-origin host, server-held
-  session broker, immutable release manifest, production security headers, and
-  launch-qualification record are the final implementation slice. Physical
-  authenticators, real wallet behavior, x86 proving and external review remain
-  evidence gates even after that code is complete.
+- **Layer 7 — code complete, launch qualification pending:** the release-host
+  contract serves reviewed static assets and strict public pins, gives hashed
+  assets immutable caching while keeping the HTML/release pointer revalidated,
+  and applies COOP/COEP/CORP, CSP/Trusted Types, HSTS, permissions, framing,
+  MIME-sniffing and referrer controls. The same-origin broker issues only
+  short-lived tokens and binds a signed HttpOnly browser session to a distinct
+  server-side CVM account. It refuses an issuer that reuses an account identity
+  across browser sessions; a single shared site credential is not a supported
+  fallback. The automated host test covers headers, cache policy, exact public
+  manifest parsing, cross-origin rejection, cookie flags and account-isolation
+  failure. Physical authenticators, real-wallet COOP/COEP behavior, x86 proving,
+  live-venue recovery and external review remain open qualification gates in
+  `docs/browser-client-launch-qualification.md`.
 
 The production Worker currently bundles snarkjs, whose package declares
 GPL-3.0. Before distributing the browser application, obtain a focused license-

@@ -149,6 +149,7 @@ jobs:
             browser_client:
               - 'packages/client-core/**'
               - 'packages/browser-client/**'
+              - 'packages/trader-host/**'
               - 'package.json'
               - 'package-lock.json'
               - '.github/workflows/pr-checks.yml'
@@ -558,6 +559,9 @@ jobs:
       - name: tsc --noEmit (indexer, tests included)
         run: node node_modules/typescript/bin/tsc -p packages/indexer/tsconfig.test.json --noEmit
 
+      - name: tsc --noEmit (trader host, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/trader-host/tsconfig.test.json --noEmit
+
       # Guard the guard: assert each tsconfig.test.json actually includes
       # `tests/`. Without this, narrowing an `include` would silently restore
       # the blind spot while this job kept reporting success — the T-18 pattern
@@ -566,7 +570,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for pkg in sdk daemon indexer; do
+          for pkg in sdk daemon indexer trader-host; do
             cfg="packages/$pkg/tsconfig.test.json"
             test -f "$cfg" || { echo "::error::$cfg is missing"; fail=1; continue; }
             if ! grep -q '"tests/\*\*/\*"' "$cfg"; then
@@ -664,6 +668,14 @@ jobs:
 
       - name: Browser-client unit and bundle-boundary tests
         run: npm exec -- vitest run --root packages/browser-client
+
+      - name: Build and typecheck the production release host
+        run: |
+          npm -w @darknyx/trader-host run build
+          npm -w @darknyx/trader-host run typecheck:tests
+
+      - name: Production release-host security integration
+        run: npm run test:trader-host
 
       - name: Production browser custody lifecycle
         run: npm -w @darknyx/browser-client run test:custody
