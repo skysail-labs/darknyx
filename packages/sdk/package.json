@@ -30,6 +30,10 @@
     "./browser-orders": {
       "types": "./dist/browser-orders.d.ts",
       "default": "./dist/browser-orders.js"
+    },
+    "./browser-account": {
+      "types": "./dist/browser-account.d.ts",
+      "default": "./dist/browser-account.js"
     }
   },
   "files": [

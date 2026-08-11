@@ -13,7 +13,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   bn254ToBE32,
   buildDepositInstruction,
@@ -49,6 +49,7 @@ const recoveryProgramId = new PublicKey(
 const recoveryPayer = new PublicKey(new Uint8Array(32).fill(0x52));
 const recoveryBaseMint = new Uint8Array(32).fill(0xb1);
 const recoveryQuoteMint = new Uint8Array(32).fill(0x9e);
+const browserWallet = Keypair.generate().publicKey;
 
 const concatBytes = (...parts) => {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -117,6 +118,7 @@ async function recoveryFixture() {
     program_id: recoveryProgramId.toBase58(),
     base_mint: Buffer.from(recoveryBaseMint).toString("hex"),
     quote_mint: Buffer.from(recoveryQuoteMint).toString("hex"),
+    quote_mint_base58: new PublicKey(recoveryQuoteMint).toBase58(),
     amount: recoveryAmount.toString(),
     transaction: {
       signature: "browser-recovery-deposit",
@@ -346,6 +348,36 @@ async function scenario(hasPrf, scenarioName) {
         restored.fill(0);
         return;
       }
+      if (request.method === "POST" && url.pathname === "/rpc") {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        response.setHeader("Content-Type", "application/json");
+        if (requestBody.method === "getLatestBlockhash") {
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: requestBody.id,
+              result: {
+                context: { slot: 101 },
+                value: {
+                  blockhash: recoveryPayer.toBase58(),
+                  lastValidBlockHeight: 999999,
+                },
+              },
+            }),
+          );
+          return;
+        }
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: requestBody.id,
+            error: { code: -32601, message: "method not found" },
+          }),
+        );
+        return;
+      }
       if (url.pathname === "/config.json") {
         response.setHeader("Content-Type", "application/json");
         response.end(
@@ -355,6 +387,7 @@ async function scenario(hasPrf, scenarioName) {
             passphrase,
             node_backup: nodeBackup,
             recovery: browserRecoveryFixture,
+            wallet_address: browserWallet.toBase58(),
           }),
         );
         return;

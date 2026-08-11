@@ -74,3 +74,10 @@ export {
   decimalToPriceTicks,
   type BrowserTraderControllerOptions,
 } from "./trader/controller.js";
+export {
+  AccountOperationError,
+  BrowserAccountOperations,
+  type AccountOperationKind,
+  type AccountOperationResult,
+  type BrowserAccountOperationsOptions,
+} from "./account/account-operations.js";

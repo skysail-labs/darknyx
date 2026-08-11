@@ -10,13 +10,23 @@ import {
 } from "@darknyx/sdk/browser-recovery";
 import {
   bn254ToBE32,
+  deriveBlindingFactor,
+  deriveDepositInnerHash,
+  deriveMergeOutputInnerHash,
+  deriveNoteSecret,
   deriveNoteUseTag,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   noteCommitmentV2,
+  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "@darknyx/sdk/browser-inventory-crypto";
+import type {
+  DepositInputs,
+  MergeInputs,
+  SpendInputs,
+} from "@darknyx/sdk/browser-account";
 import {
   buildCancel,
   buildOrder,
@@ -565,6 +575,240 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       rawTrading.fill(0);
       keypair.secretKey.fill(0);
     }
+  },
+  async prepareDeposit({ tokenMint, amount, depositIndex }) {
+    if (
+      !Number.isInteger(depositIndex) ||
+      (depositIndex as number) < 0 ||
+      (depositIndex as number) > 0xffff_ffff
+    ) {
+      throw new Error("deposit index must be a u32");
+    }
+    const mint = fromHex(tokenMint, 32, "deposit mint");
+    const depositAmount = canonicalU64(amount, "deposit amount");
+    if (depositAmount === 0n)
+      throw new Error("deposit amount must be positive");
+    const currentSeed = requireSeed();
+    const spendingKey = deriveSpendingKey(currentSeed);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
+    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const recoveryNonce = deriveBlindingFactor(
+      currentSeed,
+      BigInt(depositIndex as number),
+    );
+    const nonceBytes = bn254ToBE32(recoveryNonce);
+    const noteSecret = deriveNoteSecret(currentSeed, nonceBytes);
+    const innerBytes = await deriveDepositInnerHash(
+      bn254ToBE32(owner),
+      nonceBytes,
+      bn254ToBE32(noteSecret),
+    );
+    const innerHash = be32ToBigInt(innerBytes);
+    const commitment = await noteCommitmentV2({
+      tokenMint: mint,
+      amount: depositAmount,
+      ownerCommitment: owner,
+      innerHash,
+    });
+    const [mintLo, mintHi] = pubkeyToFrPair(mint);
+    return {
+      witness: {
+        noteCommitment: be32ToBigInt(commitment),
+        tokenMint: [mintLo, mintHi],
+        amount: depositAmount,
+        recoveryNonce,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        noteSecret,
+      } satisfies DepositInputs,
+      commitment,
+      recoveryNonce: nonceBytes,
+    };
+  },
+  async prepareSpend({ note, merkleRoot, siblings, pathIndices, destination }) {
+    if (!note || typeof note !== "object")
+      throw new Error("spend note is malformed");
+    const candidate = note as Record<string, unknown>;
+    if (
+      typeof candidate.commitment !== "string" ||
+      !(candidate.tokenMint instanceof Uint8Array) ||
+      candidate.tokenMint.length !== 32 ||
+      typeof candidate.amount !== "bigint" ||
+      candidate.amount <= 0n ||
+      typeof candidate.ownerCommitment !== "bigint" ||
+      typeof candidate.innerHash !== "bigint" ||
+      !Array.isArray(siblings) ||
+      siblings.length !== 20 ||
+      !Array.isArray(pathIndices) ||
+      pathIndices.length !== 20 ||
+      pathIndices.some((index) => index !== 0 && index !== 1)
+    ) {
+      throw new Error("spend witness is malformed");
+    }
+    const root = fromHex(merkleRoot, 32, "spend Merkle root");
+    const destinationBytes = fromHex(destination, 32, "withdraw destination");
+    const currentSeed = requireSeed();
+    const spendingKey = deriveSpendingKey(currentSeed);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
+    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    if (expectedOwner !== candidate.ownerCommitment) {
+      throw new Error("withdraw note is not owned by this vault");
+    }
+    const commitment = await noteCommitmentV2({
+      tokenMint: candidate.tokenMint,
+      amount: candidate.amount,
+      ownerCommitment: expectedOwner,
+      innerHash: candidate.innerHash,
+    });
+    if (
+      !equalBytes(commitment, fromHex(candidate.commitment, 32, "commitment"))
+    ) {
+      throw new Error("withdraw note opening does not match its commitment");
+    }
+    const tag = await deriveNoteUseTag(
+      commitment,
+      bn254ToBE32(candidate.innerHash),
+    );
+    const nullifier = await nullifierV2(spendingKey, candidate.innerHash);
+    const [mintLo, mintHi] = pubkeyToFrPair(candidate.tokenMint);
+    const [recipientLo, recipientHi] = pubkeyToFrPair(destinationBytes);
+    return {
+      witness: {
+        merkleRoot: be32ToBigInt(root),
+        nullifier: be32ToBigInt(nullifier),
+        tokenMint: [mintLo, mintHi],
+        amount: candidate.amount,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        innerHash: candidate.innerHash,
+        merklePath: siblings.map((value, index) =>
+          be32ToBigInt(fromHex(value, 32, `Merkle sibling ${index}`)),
+        ),
+        merkleIndices: pathIndices as number[],
+        recipient: [recipientLo, recipientHi],
+      } satisfies SpendInputs,
+      noteUseTag: tag,
+      nullifier,
+      merkleRoot: root,
+    };
+  },
+  async prepareMerge({ inputs, inclusions }) {
+    if (
+      !Array.isArray(inputs) ||
+      inputs.length < 2 ||
+      inputs.length > 4 ||
+      !Array.isArray(inclusions) ||
+      inclusions.length !== inputs.length
+    ) {
+      throw new Error("merge needs 2..4 notes and matching inclusions");
+    }
+    const notes = inputs as Record<string, unknown>[];
+    const paths = inclusions as Record<string, unknown>[];
+    const currentSeed = requireSeed();
+    const spendingKey = deriveSpendingKey(currentSeed);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
+    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    const k: 2 | 4 = notes.length <= 2 ? 2 : 4;
+    const commitments: Uint8Array[] = [];
+    const tags: Uint8Array[] = [];
+    const amounts: bigint[] = [];
+    const inners: bigint[] = [];
+    let tokenMint: Uint8Array | undefined;
+    let root: Uint8Array | undefined;
+    const merklePath: bigint[][] = [];
+    const merkleIndices: number[][] = [];
+    for (let index = 0; index < notes.length; index += 1) {
+      const note = notes[index];
+      const inclusion = paths[index];
+      if (
+        typeof note.commitment !== "string" ||
+        !(note.tokenMint instanceof Uint8Array) ||
+        note.tokenMint.length !== 32 ||
+        typeof note.amount !== "bigint" ||
+        note.amount <= 0n ||
+        typeof note.ownerCommitment !== "bigint" ||
+        note.ownerCommitment !== expectedOwner ||
+        typeof note.innerHash !== "bigint" ||
+        typeof inclusion.root !== "string" ||
+        !Array.isArray(inclusion.siblings) ||
+        inclusion.siblings.length !== 20 ||
+        !Array.isArray(inclusion.pathIndices) ||
+        inclusion.pathIndices.length !== 20 ||
+        inclusion.pathIndices.some((value) => value !== 0 && value !== 1)
+      ) {
+        throw new Error("merge note or inclusion is malformed");
+      }
+      if (tokenMint && !equalBytes(tokenMint, note.tokenMint)) {
+        throw new Error("merge notes must use one mint");
+      }
+      tokenMint ??= Uint8Array.from(note.tokenMint);
+      const inclusionRoot = fromHex(inclusion.root, 32, "merge Merkle root");
+      if (root && !equalBytes(root, inclusionRoot)) {
+        throw new Error("merge inclusions must use one root");
+      }
+      root ??= inclusionRoot;
+      const commitment = await noteCommitmentV2({
+        tokenMint: note.tokenMint,
+        amount: note.amount,
+        ownerCommitment: expectedOwner,
+        innerHash: note.innerHash,
+      });
+      if (!equalBytes(commitment, fromHex(note.commitment, 32, "commitment"))) {
+        throw new Error("merge note opening does not match its commitment");
+      }
+      commitments.push(commitment);
+      tags.push(
+        await deriveNoteUseTag(commitment, bn254ToBE32(note.innerHash)),
+      );
+      amounts.push(note.amount);
+      inners.push(note.innerHash);
+      merklePath.push(
+        inclusion.siblings.map((value, sibling) =>
+          be32ToBigInt(fromHex(value, 32, `Merkle sibling ${sibling}`)),
+        ),
+      );
+      merkleIndices.push(inclusion.pathIndices as number[]);
+    }
+    if (!tokenMint || !root) throw new Error("merge inputs are empty");
+    const zero = new Uint8Array(32);
+    while (commitments.length < k) {
+      commitments.push(zero);
+      tags.push(zero);
+      amounts.push(0n);
+      inners.push(0n);
+      merklePath.push(Array.from({ length: 20 }, () => 0n));
+      merkleIndices.push(Array.from({ length: 20 }, () => 0));
+    }
+    const total = amounts.reduce((sum, value) => sum + value, 0n);
+    if (total <= 0n || total > U64_MAX)
+      throw new Error("merged amount exceeds u64");
+    const outputInnerHash = await deriveMergeOutputInnerHash(commitments);
+    const outputCommitment = await noteCommitmentV2({
+      tokenMint,
+      amount: total,
+      ownerCommitment: expectedOwner,
+      innerHash: outputInnerHash,
+    });
+    const [mintLo, mintHi] = pubkeyToFrPair(tokenMint);
+    return {
+      witness: {
+        k,
+        merkleRoot: be32ToBigInt(root),
+        tokenMint: [mintLo, mintHi],
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        isActive: amounts.map((value) => (value > 0n ? 1 : 0)),
+        amount: amounts,
+        innerHash: inners,
+        merklePath,
+        merkleIndices,
+      } satisfies MergeInputs,
+      inputUseTags: tags,
+      outputCommitment,
+      tokenMint,
+      merkleRoot: root,
+      k,
+    };
   },
   async inventorySeal({ plaintext }) {
     if (!(plaintext instanceof Uint8Array)) {

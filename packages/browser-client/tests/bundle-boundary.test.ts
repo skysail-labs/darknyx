@@ -50,9 +50,14 @@ describe("browser custody product boundary", () => {
     expect(entry).not.toContain("recoverNotes");
     expect(entry).not.toContain("authorizeIntent");
     expect(entry).not.toContain("BrowserTraderController");
+    expect(entry).not.toContain("BrowserAccountOperations");
     expect(internal).toContain("BrowserTraderController");
     expect(internal).toContain("BrowserLifecycleStream");
+    expect(internal).toContain("BrowserAccountOperations");
     expect(worker).toContain("authorizeIntent");
+    expect(worker).toContain("prepareDeposit");
+    expect(worker).toContain("prepareSpend");
+    expect(worker).toContain("prepareMerge");
     expect(proverWorker).toContain("artifact manifest signature is invalid");
     expect(proverWorker).toContain(
       "browser proof failed mandatory local verification",
@@ -106,6 +111,10 @@ describe("browser custody product boundary", () => {
       "masterSeed",
       "signAndSendTransaction",
       "snarkjs",
+      "BrowserAccountOperations",
+      "prepareDeposit",
+      "prepareSpend",
+      "prepareMerge",
     ]) {
       expect(ui, forbidden).not.toContain(forbidden);
     }

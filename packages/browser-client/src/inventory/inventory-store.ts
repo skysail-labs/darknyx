@@ -93,7 +93,7 @@ function decodeSnapshot(bytes: Uint8Array): InventorySnapshot {
     !("format" in value) ||
     value.format !== "darknyx-browser-inventory" ||
     !("version" in value) ||
-    (value.version !== 1 && value.version !== 2) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
     !("notes" in value) ||
     !Array.isArray(value.notes) ||
     !("proofs" in value) ||
@@ -109,17 +109,33 @@ function decodeSnapshot(bytes: Uint8Array): InventorySnapshot {
     return {
       ...(value as Omit<
         InventorySnapshot,
-        "version" | "orders" | "nextOrderIndex"
+        "version" | "orders" | "nextOrderIndex" | "nextDepositIndex"
       >),
-      version: 2,
+      version: 3,
       orders: [],
       nextOrderIndex: 0,
+      nextDepositIndex: 0,
+    };
+  }
+  if (value.version === 2) {
+    if (
+      !("orders" in value) ||
+      !Array.isArray(value.orders) ||
+      !("nextOrderIndex" in value)
+    ) {
+      throw new Error("unsupported browser inventory snapshot");
+    }
+    return {
+      ...(value as Omit<InventorySnapshot, "version" | "nextDepositIndex">),
+      version: 3,
+      nextDepositIndex: 0,
     };
   }
   if (
     !("orders" in value) ||
     !Array.isArray(value.orders) ||
-    !("nextOrderIndex" in value)
+    !("nextOrderIndex" in value) ||
+    !("nextDepositIndex" in value)
   ) {
     throw new Error("unsupported browser inventory snapshot");
   }

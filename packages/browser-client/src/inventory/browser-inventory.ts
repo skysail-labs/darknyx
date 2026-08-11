@@ -35,13 +35,14 @@ const HEX32 = /^[0-9a-f]{64}$/;
 
 const emptySnapshot = (): InventorySnapshot => ({
   format: "darknyx-browser-inventory",
-  version: 2,
+  version: 3,
   notes: [],
   proofs: [],
   reservations: [],
   roots: [],
   orders: [],
   nextOrderIndex: 0,
+  nextDepositIndex: 0,
 });
 
 const hex = (value: Uint8Array): string =>
@@ -250,7 +251,7 @@ export class BrowserInventory implements InventoryIntentPort {
   #validateSnapshot(): void {
     if (
       this.#snapshot.format !== "darknyx-browser-inventory" ||
-      this.#snapshot.version !== 2
+      this.#snapshot.version !== 3
     ) {
       throw new Error("unsupported browser inventory snapshot");
     }
@@ -322,6 +323,13 @@ export class BrowserInventory implements InventoryIntentPort {
       this.#snapshot.nextOrderIndex > 0xffff_ffff
     ) {
       throw new Error("inventory order index is invalid");
+    }
+    if (
+      !Number.isSafeInteger(this.#snapshot.nextDepositIndex) ||
+      this.#snapshot.nextDepositIndex < 0 ||
+      this.#snapshot.nextDepositIndex > 0xffff_ffff
+    ) {
+      throw new Error("inventory deposit index is invalid");
     }
     const orderIds = new Set<string>();
     const tradingIndices = new Set<number>();
@@ -472,6 +480,161 @@ export class BrowserInventory implements InventoryIntentPort {
       this.#snapshot.nextOrderIndex += 1;
       await this.#save();
       return index;
+    });
+  }
+
+  /** Allocate and persist a never-reused deposit recovery-nonce index. */
+  async allocateDepositIndex(): Promise<number> {
+    return this.#serialized(async () => {
+      if (this.#snapshot.nextDepositIndex > 0xffff_fffe) {
+        throw new Error("browser deposit sequence is exhausted");
+      }
+      const index = this.#snapshot.nextDepositIndex;
+      this.#snapshot.nextDepositIndex += 1;
+      await this.#save();
+      return index;
+    });
+  }
+
+  async selectSpendableNote(
+    mint: string,
+    amount: bigint,
+  ): Promise<InventoryNote | null> {
+    fromHex32(mint, "selection mint");
+    if (amount <= 0n || amount > U64_MAX)
+      throw new Error("selection amount is invalid");
+    return this.#serialized(async () => {
+      const note = this.#snapshot.notes.find(
+        (candidate) =>
+          candidate.state === "spendable" &&
+          candidate.leafIndex !== undefined &&
+          hex(candidate.tokenMint) === mint &&
+          candidate.amount === amount,
+      );
+      return note ? structuredClone(note) : null;
+    });
+  }
+
+  async reserveAccountExact(
+    mint: string,
+    amount: bigint,
+  ): Promise<{ note: InventoryNote; reservationId: string } | null> {
+    fromHex32(mint, "selection mint");
+    if (amount <= 0n || amount > U64_MAX)
+      throw new Error("selection amount is invalid");
+    return this.#serialized(async () => {
+      const note = this.#snapshot.notes.find(
+        (candidate) =>
+          candidate.state === "spendable" &&
+          candidate.leafIndex !== undefined &&
+          hex(candidate.tokenMint) === mint &&
+          candidate.amount === amount,
+      );
+      if (!note) return null;
+      const id = reservationId(`account-${this.#randomId()}`);
+      note.state = "reserved";
+      note.reservationId = id;
+      this.#snapshot.reservations.push({
+        reservationId: id,
+        noteCommitment: note.commitment,
+        proofHandle: `account-operation-${id}`,
+        createdAtMs: this.#now(),
+      });
+      await this.#save();
+      return { note: structuredClone(note), reservationId: id };
+    });
+  }
+
+  async selectMergeInputs(mint: string): Promise<readonly InventoryNote[]> {
+    fromHex32(mint, "merge mint");
+    return this.#serialized(async () => {
+      const candidates = this.#snapshot.notes
+        .filter(
+          (note) =>
+            note.state === "spendable" &&
+            note.leafIndex !== undefined &&
+            hex(note.tokenMint) === mint,
+        )
+        .sort(
+          (left, right) =>
+            (left.treeId ?? 0) - (right.treeId ?? 0) ||
+            (left.amount < right.amount
+              ? -1
+              : left.amount > right.amount
+                ? 1
+                : 0),
+        );
+      for (let start = 0; start < candidates.length; start += 1) {
+        const treeId = candidates[start].treeId ?? 0;
+        const sameTree = candidates.filter(
+          (candidate) => (candidate.treeId ?? 0) === treeId,
+        );
+        if (sameTree.length >= 2) return structuredClone(sameTree.slice(0, 4));
+      }
+      return [];
+    });
+  }
+
+  async reserveAccountMerge(
+    mint: string,
+  ): Promise<readonly { note: InventoryNote; reservationId: string }[]> {
+    fromHex32(mint, "merge mint");
+    return this.#serialized(async () => {
+      const candidates = this.#snapshot.notes
+        .filter(
+          (note) =>
+            note.state === "spendable" &&
+            note.leafIndex !== undefined &&
+            hex(note.tokenMint) === mint,
+        )
+        .sort(
+          (left, right) =>
+            (left.treeId ?? 0) - (right.treeId ?? 0) ||
+            (left.amount < right.amount
+              ? -1
+              : left.amount > right.amount
+                ? 1
+                : 0),
+        );
+      const treeId = candidates.find(
+        (candidate) =>
+          candidates.filter(
+            (other) => (other.treeId ?? 0) === (candidate.treeId ?? 0),
+          ).length >= 2,
+      )?.treeId;
+      if (
+        treeId === undefined &&
+        candidates.every((note) => note.treeId !== undefined)
+      ) {
+        return [];
+      }
+      const selected = candidates
+        .filter((candidate) => (candidate.treeId ?? 0) === (treeId ?? 0))
+        .slice(0, 4);
+      if (selected.length < 2) return [];
+      const held = selected.map((note) => {
+        const id = reservationId(`account-${this.#randomId()}`);
+        note.state = "reserved";
+        note.reservationId = id;
+        this.#snapshot.reservations.push({
+          reservationId: id,
+          noteCommitment: note.commitment,
+          proofHandle: `account-operation-${id}`,
+          createdAtMs: this.#now(),
+        });
+        return { note: structuredClone(note), reservationId: id };
+      });
+      await this.#save();
+      return held;
+    });
+  }
+
+  async assertAcceptedRoot(treeId: number, root: string): Promise<void> {
+    fromHex32(root, "Merkle root");
+    await this.#serialized(async () => {
+      if (rootPosition(this.#snapshot, treeId, root) < 0) {
+        throw new Error("operation Merkle root is not finalized and accepted");
+      }
     });
   }
 

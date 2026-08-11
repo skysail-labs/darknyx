@@ -80,13 +80,14 @@ export interface BrowserOrderRecord {
 
 export interface InventorySnapshot {
   format: "darknyx-browser-inventory";
-  version: 2;
+  version: 3;
   notes: InventoryNote[];
   proofs: CachedInputProof[];
   reservations: InventoryReservation[];
   roots: FinalizedRootRing[];
   orders: BrowserOrderRecord[];
   nextOrderIndex: number;
+  nextDepositIndex: number;
 }
 
 export interface BrowserMarketInventoryConfig {

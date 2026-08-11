@@ -1,9 +1,12 @@
 import {
   Activity,
   AlertTriangle,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Check,
   ChevronDown,
   KeyRound,
+  Layers3,
   LoaderCircle,
   Lock,
   LogOut,
@@ -435,6 +438,206 @@ function ActivityTable({ snapshot, actions }: TraderShellProps) {
   );
 }
 
+function AccountPanel({ snapshot, actions }: TraderShellProps) {
+  const selected = snapshot.instruments.find(
+    (instrument) => instrument.symbol === snapshot.selectedSymbol,
+  );
+  const [asset, setAsset] = useState<"base" | "quote">("base");
+  const [amount, setAmount] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const operation = snapshot.accountOperation;
+  const busy =
+    operation !== undefined &&
+    operation.state !== "finalized" &&
+    operation.state !== "ambiguous" &&
+    operation.state !== "failed";
+  const blocked =
+    snapshot.vault.state !== "unlocked" ||
+    snapshot.wallet.state !== "connected" ||
+    !selected;
+
+  async function run(kind: "deposit" | "withdraw") {
+    if (!selected || blocked || busy) return;
+    await actions[kind]({
+      marketSymbol: selected.symbol,
+      asset,
+      amount,
+    });
+  }
+
+  async function downloadBackup() {
+    setBackupStatus("Encrypting backup…");
+    try {
+      const backup = await actions.exportBackup(passphrase);
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(backup, null, 2)], {
+          type: "application/json",
+        }),
+      );
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "darknyx-seed-backup-v2.json";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setBackupStatus("Encrypted backup downloaded. Keep it offline.");
+    } catch (error) {
+      setBackupStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function restoreBackup() {
+    if (!restoreFile) return;
+    setBackupStatus("Restoring encrypted backup…");
+    try {
+      const backup = JSON.parse(await restoreFile.text());
+      await actions.restoreBackup(backup, passphrase);
+      setBackupStatus("Backup restored. Finalized chain recovery is running.");
+    } catch (error) {
+      setBackupStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <section className="account-panel" id="account">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">Private account</span>
+          <h2>Fund, withdraw & recover</h2>
+        </div>
+      </div>
+      <div className="account-grid">
+        <div className="account-card">
+          <h3>Move assets</h3>
+          <p>
+            Deposits are public SPL transfers into a private note. Withdrawals
+            consume one exact note; consolidate first to withdraw a combined
+            balance.
+          </p>
+          <div className="account-segment" role="group" aria-label="Asset">
+            <button
+              type="button"
+              className={asset === "base" ? "active" : ""}
+              onClick={() => setAsset("base")}
+            >
+              {selected?.baseSymbol ?? "Base"}
+            </button>
+            <button
+              type="button"
+              className={asset === "quote" ? "active" : ""}
+              onClick={() => setAsset("quote")}
+            >
+              {selected?.quoteSymbol ?? "Quote"}
+            </button>
+          </div>
+          <label htmlFor="darknyx-account-amount">
+            <span>Amount</span>
+            <input
+              id="darknyx-account-amount"
+              className="mono"
+              inputMode="decimal"
+              pattern="[0-9]+([.][0-9]+)?"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              placeholder="0"
+              autoComplete="off"
+            />
+          </label>
+          <div className="account-actions">
+            <button
+              type="button"
+              disabled={blocked || busy || !amount}
+              onClick={() => void run("deposit")}
+            >
+              <ArrowDownToLine /> Deposit
+            </button>
+            <button
+              type="button"
+              disabled={blocked || busy || !amount}
+              onClick={() => void run("withdraw")}
+            >
+              <ArrowUpFromLine /> Withdraw
+            </button>
+            <button
+              type="button"
+              disabled={blocked || busy}
+              onClick={() =>
+                selected && void actions.merge(selected.symbol, asset)
+              }
+            >
+              <Layers3 /> Consolidate
+            </button>
+          </div>
+          {operation && (
+            <div
+              className={`account-result is-${operation.state}`}
+              role="status"
+            >
+              {busy && <LoaderCircle className="spin" />}
+              <span>
+                <b>{operation.kind.replace("merge", "consolidation")}</b>
+                {operation.message}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="account-card backup-card">
+          <h3>Portable recovery</h3>
+          <p>
+            Export the encrypted version-2 seed backup and keep it offline. The
+            passphrase is never persisted; chain recovery rebuilds notes on a
+            new device.
+          </p>
+          <label htmlFor="darknyx-backup-passphrase">
+            <span>Backup passphrase</span>
+            <input
+              id="darknyx-backup-passphrase"
+              type="password"
+              value={passphrase}
+              onChange={(event) => setPassphrase(event.target.value)}
+              autoComplete="new-password"
+              minLength={12}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={
+              snapshot.vault.state !== "unlocked" || passphrase.length < 12
+            }
+            onClick={() => void downloadBackup()}
+          >
+            Export encrypted backup
+          </button>
+          <div className="restore-row">
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label="Choose encrypted Darknyx backup"
+              disabled={snapshot.vault.state !== "unprovisioned"}
+              onChange={(event) =>
+                setRestoreFile(event.target.files?.[0] ?? null)
+              }
+            />
+            <button
+              type="button"
+              disabled={
+                snapshot.vault.state !== "unprovisioned" ||
+                !restoreFile ||
+                passphrase.length < 12
+              }
+              onClick={() => void restoreBackup()}
+            >
+              Restore on this device
+            </button>
+          </div>
+          {backupStatus && <p role="status">{backupStatus}</p>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function OrderTicket({ snapshot, actions }: TraderShellProps) {
   const selected = snapshot.instruments.find(
     (instrument) => instrument.symbol === snapshot.selectedSymbol,
@@ -674,6 +877,7 @@ export function TraderShell({ snapshot, actions }: TraderShellProps) {
             Trade
           </a>
           <a href="#activity">Activity</a>
+          <a href="#account">Account</a>
         </nav>
         <div className="top-actions">
           <VenueBadge venue={snapshot.venue} />
@@ -703,6 +907,7 @@ export function TraderShell({ snapshot, actions }: TraderShellProps) {
           </div>
           <BalanceStrip snapshot={snapshot} />
           <ActivityTable snapshot={snapshot} actions={actions} />
+          <AccountPanel snapshot={snapshot} actions={actions} />
         </div>
         <OrderTicket snapshot={snapshot} actions={actions} />
       </main>

@@ -19,6 +19,7 @@ import type {
   TraderShellActions,
   TraderShellSnapshot,
 } from "../ui/types.js";
+import { BrowserAccountOperations } from "../account/account-operations.js";
 import {
   createBrowserPrivateRuntime,
   type BrowserPrivateRuntime,
@@ -145,6 +146,8 @@ export class BrowserTraderController {
   readonly #listeners = new Set<Listener>();
   #venue: TrustedVenueSession | null = null;
   #runtime: BrowserPrivateRuntime | null = null;
+  #account: BrowserAccountOperations | null = null;
+  #accountOperation: TraderShellSnapshot["accountOperation"];
   #selectedSymbol: string | undefined;
   #venueError: string | undefined;
   #walletError: string | undefined;
@@ -207,6 +210,7 @@ export class BrowserTraderController {
     this.#runtimeGeneration += 1;
     this.#runtime?.close();
     this.#runtime = null;
+    this.#account = null;
     this.#checking = true;
     this.#venueError = undefined;
     await this.#update();
@@ -264,6 +268,25 @@ export class BrowserTraderController {
       this.#runtimePromise = null;
     });
     await this.#runtimePromise;
+    if (!this.#runtime || venue !== this.#venue) return;
+    this.#account = new BrowserAccountOperations({
+      release: this.#options.release,
+      venue,
+      vault: this.#vault,
+      inventory: this.#runtime.inventory,
+      prover: this.#options.prover,
+      wallet: this.#wallet,
+      onProgress: (kind, stage) => {
+        this.#accountOperation = {
+          kind,
+          state: stage as NonNullable<
+            TraderShellSnapshot["accountOperation"]
+          >["state"],
+          message: stage.replaceAll("_", " "),
+        };
+        void this.#update();
+      },
+    });
   }
 
   async #update(): Promise<void> {
@@ -385,6 +408,7 @@ export class BrowserTraderController {
           updatedAt: new Date(order.updatedAtMs).toISOString(),
         };
       }),
+      accountOperation: this.#accountOperation,
       lastUpdated: new Date().toISOString(),
     };
     this.#emit();
@@ -426,6 +450,7 @@ export class BrowserTraderController {
       this.#runtimeGeneration += 1;
       this.#runtime?.close();
       this.#runtime = null;
+      this.#account = null;
       await this.#vault.lock();
       await this.#update();
     },
@@ -453,7 +478,99 @@ export class BrowserTraderController {
       }
       await this.#update();
     },
+    exportBackup: (passphrase) => this.#vault.exportBackup(passphrase),
+    restoreBackup: async (backup, passphrase) => {
+      this.#runtime?.close();
+      this.#runtime = null;
+      this.#account = null;
+      await this.#vault.restoreBackup(
+        backup,
+        passphrase,
+        "Restored Darknyx private vault",
+      );
+      await this.#openRuntime();
+      await this.#update();
+    },
+    deposit: (draft) => this.#runAccountAmount("deposit", draft),
+    withdraw: (draft) => this.#runAccountAmount("withdraw", draft),
+    merge: (marketSymbol, asset) => this.#runMerge(marketSymbol, asset),
   };
+
+  #asset(
+    marketSymbol: string,
+    asset: "base" | "quote",
+  ): { mint: string; decimals: number } {
+    const market = this.#venue?.instruments.find(
+      (candidate) => candidate.symbol === marketSymbol,
+    );
+    if (!market) throw new Error("select an attested market");
+    return asset === "base"
+      ? { mint: market.baseMint, decimals: market.baseDecimals }
+      : { mint: market.quoteMint, decimals: market.quoteDecimals };
+  }
+
+  async #runAccountAmount(
+    kind: "deposit" | "withdraw",
+    draft: { marketSymbol: string; asset: "base" | "quote"; amount: string },
+  ): Promise<void> {
+    if (!this.#account || !this.#runtime)
+      throw new Error("unlock the private vault first");
+    const asset = this.#asset(draft.marketSymbol, draft.asset);
+    try {
+      const result = await this.#account[kind]({
+        tokenMint: asset.mint,
+        amount: decimalToAtoms(draft.amount, asset.decimals),
+      });
+      this.#accountOperation = {
+        kind,
+        state: result.status,
+        signature: result.signature,
+        message:
+          result.status === "finalized"
+            ? `${kind} finalized on Solana`
+            : "transaction submitted; finalized reconciliation is still pending",
+      };
+      await this.#runtime.refresh(`${kind} ${result.status}`);
+    } catch (error) {
+      this.#accountOperation = {
+        kind,
+        state: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      await this.#update();
+    }
+  }
+
+  async #runMerge(
+    marketSymbol: string,
+    assetKind: "base" | "quote",
+  ): Promise<void> {
+    if (!this.#account || !this.#runtime)
+      throw new Error("unlock the private vault first");
+    const asset = this.#asset(marketSymbol, assetKind);
+    try {
+      const result = await this.#account.merge(asset.mint);
+      this.#accountOperation = {
+        kind: "merge",
+        state: result.status,
+        signature: result.signature,
+        message:
+          result.status === "finalized"
+            ? "note consolidation finalized on Solana"
+            : "merge submitted; finalized reconciliation is still pending",
+      };
+      await this.#runtime.refresh(`merge ${result.status}`);
+    } catch (error) {
+      this.#accountOperation = {
+        kind: "merge",
+        state: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      await this.#update();
+    }
+  }
 
   async submitOrder(draft: TraderOrderDraft): Promise<SubmitIntentResult> {
     if (!this.#runtime || !this.#venue) {
@@ -505,6 +622,7 @@ export class BrowserTraderController {
     this.#runtimeGeneration += 1;
     this.#runtime?.close();
     this.#runtime = null;
+    this.#account = null;
     this.#vault.destroy();
     this.#listeners.clear();
   }

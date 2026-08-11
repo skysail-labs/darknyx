@@ -1,4 +1,5 @@
 import type {
+  EncryptedSeedBackupV2,
   ProofReadinessView,
   SubmitIntentResult,
   VaultStatus,
@@ -39,6 +40,26 @@ export interface TraderOrderDraft {
   /** User-entered decimal price; the trusted adapter validates ticks. */
   limitPrice: string;
   orderType: "limit" | "ioc" | "fok";
+}
+
+export interface AccountAmountDraft {
+  marketSymbol: string;
+  asset: "base" | "quote";
+  amount: string;
+}
+
+export interface AccountOperationView {
+  kind: "deposit" | "withdraw" | "merge";
+  state:
+    | "preparing"
+    | "proving"
+    | "wallet_approval"
+    | "finalizing"
+    | "finalized"
+    | "ambiguous"
+    | "failed";
+  message: string;
+  signature?: string;
 }
 
 export interface VenueView {
@@ -82,6 +103,7 @@ export interface TraderShellSnapshot {
   balances: readonly PrivateBalanceView[];
   proofReadiness: ProofReadinessView;
   orders: readonly OrderLifecycleView[];
+  accountOperation?: AccountOperationView;
   lastUpdated?: string;
 }
 
@@ -96,6 +118,14 @@ export interface TraderShellActions {
   refresh(): Promise<void>;
   submitOrder(draft: TraderOrderDraft): Promise<SubmitIntentResult>;
   cancelOrder(orderId: string): Promise<void>;
+  exportBackup(passphrase: string): Promise<EncryptedSeedBackupV2>;
+  restoreBackup(
+    backup: EncryptedSeedBackupV2,
+    passphrase: string,
+  ): Promise<void>;
+  deposit(draft: AccountAmountDraft): Promise<void>;
+  withdraw(draft: AccountAmountDraft): Promise<void>;
+  merge(marketSymbol: string, asset: "base" | "quote"): Promise<void>;
 }
 
 export interface TraderShellProps {

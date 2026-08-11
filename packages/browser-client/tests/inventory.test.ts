@@ -128,6 +128,25 @@ describe("browser inventory plane", () => {
     await expect(reloaded.allocateOrderIndex()).resolves.toBe(1);
   });
 
+  it("persists never-reused deposit recovery indices", async () => {
+    const store = new InMemoryInventoryStore();
+    const first = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(first.allocateDepositIndex()).resolves.toBe(0);
+    await expect(first.allocateDepositIndex()).resolves.toBe(1);
+    const reloaded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(reloaded.allocateDepositIndex()).resolves.toBe(2);
+  });
+
   it("revalidates recovered openings and chain consumption before exposing balances", async () => {
     const store = new InMemoryInventoryStore();
     const inventory = await BrowserInventory.create({
@@ -416,6 +435,49 @@ describe("browser inventory plane", () => {
         pendingSettlementAtoms: "0",
       },
     ]);
+  });
+
+  it("durably reserves exact withdrawals and same-shard merge inputs", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("withdraw", "merge-a", "merge-b"),
+    });
+    const exact = await note(mint(0x9e), 50n, 76n, 14n);
+    const mergeA = await note(mint(0xb1), 10n, 77n, 15n);
+    const mergeB = await note(mint(0xb1), 20n, 78n, 16n);
+    await inventory.recover(report([exact, mergeA, mergeB]), async () => false);
+    const withdrawal = await inventory.reserveAccountExact(
+      market.quoteMintHex,
+      50n,
+    );
+    expect(withdrawal?.note.commitment).toBe(exact.commitment);
+    expect(
+      await inventory.reserveAccountExact(market.quoteMintHex, 50n),
+    ).toBeNull();
+    const merge = await inventory.reserveAccountMerge(market.baseMintHex);
+    expect(merge.map(({ note: held }) => held.commitment)).toEqual([
+      mergeA.commitment,
+      mergeB.commitment,
+    ]);
+    expect(await inventory.listBalances()).toEqual(
+      [
+        {
+          mint: market.quoteMintHex,
+          spendableAtoms: "0",
+          reservedAtoms: "50",
+          pendingSettlementAtoms: "0",
+        },
+        {
+          mint: market.baseMintHex,
+          spendableAtoms: "0",
+          reservedAtoms: "30",
+          pendingSettlementAtoms: "0",
+        },
+      ].sort((left, right) => left.mint.localeCompare(right.mint)),
+    );
   });
 
   it("clears every proving marker after one refresh fails", async () => {

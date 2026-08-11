@@ -21,6 +21,21 @@ const actions: TraderShellActions = {
     orderId: "01",
   })),
   cancelOrder: vi.fn(async () => undefined),
+  exportBackup: vi.fn(async () => ({
+    format: "darknyx-master-seed-backup" as const,
+    version: 2 as const,
+    kdf: { name: "scrypt" as const, n: 131072, r: 8, p: 1, salt: "00" },
+    cipher: {
+      name: "aes-256-gcm" as const,
+      iv: "00",
+      ciphertext: "00",
+      tag: "00",
+    },
+  })),
+  restoreBackup: vi.fn(async () => undefined),
+  deposit: vi.fn(async () => undefined),
+  withdraw: vi.fn(async () => undefined),
+  merge: vi.fn(async () => undefined),
 };
 
 function snapshot(
@@ -119,5 +134,33 @@ describe("trader workspace", () => {
     expect(html).toContain("status-dot is-pending");
     expect(html).not.toContain("status-dot is-bad");
     expect(html).not.toContain(">Cancel<");
+  });
+
+  it("explains exact-note withdrawal and keeps recovery actions state-gated", () => {
+    const html = renderToStaticMarkup(
+      <TraderShell
+        actions={actions}
+        snapshot={snapshot({
+          venue: { state: "trusted", label: "Devnet · TDX" },
+          vault: { state: "locked" },
+          wallet: { state: "disconnected", availableWallets: [] },
+          selectedSymbol: "SOL-USDC",
+          instruments: [
+            {
+              symbol: "SOL-USDC",
+              baseSymbol: "SOL",
+              quoteSymbol: "USDC",
+              tradingEnabled: true,
+              minOrderSize: "0.01",
+              tickSize: "0.01",
+            },
+          ],
+        })}
+      />,
+    );
+    expect(html).toContain("Fund, withdraw &amp; recover");
+    expect(html).toContain("Withdrawals consume one exact note");
+    expect(html).toContain("Portable recovery");
+    expect(html).toContain('href="#account"');
   });
 });

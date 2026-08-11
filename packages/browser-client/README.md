@@ -77,6 +77,21 @@ lifecycle in the same encrypted inventory. The React-facing `TraderProduct`
 observes only `TraderShellSnapshot` plus narrow actions; it never receives the
 inventory, prover, note openings, witnesses, or signing keys.
 
+The same trusted composition owns account operations. Deposit recovery indices
+are persisted before use, and the custody Worker derives the deposit opening;
+withdraw and merge witnesses are likewise prepared there. The adapter compares
+all Groth16 public inputs with the exact instruction fields before giving a
+bounded versioned transaction to Wallet Standard. A withdrawal intentionally
+consumes one exact note. If no note equals the requested amount, the account UI
+asks the user to consolidate two to four notes on one Merkle shard first. A
+wallet rejection releases the reservation, while any transaction for which the
+wallet returned a signature remains reserved until finalized reconciliation
+decides it. The UI therefore never treats an RPC timeout as proof of failure.
+
+Account recovery uses the existing encrypted version-2 seed envelope. Export
+downloads ciphertext JSON only; restore is available only for an unprovisioned
+browser vault and is followed by finalized seed-plus-chain inventory recovery.
+
 Orders and fills use one in-band-authenticated `/v1/stream` connection with
 short-lived token refresh and cancel-on-disconnect. Stream updates are treated
 as notifications rather than durable authority: fills, unknown updates,

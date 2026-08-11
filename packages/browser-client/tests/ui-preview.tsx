@@ -101,6 +101,16 @@ const actions: TraderShellActions = {
   refresh: noop,
   submitOrder: async () => ({ status: "accepted", orderId: "preview" }),
   cancelOrder: noop,
+  exportBackup: async () => ({
+    format: "darknyx-master-seed-backup",
+    version: 2,
+    kdf: { name: "scrypt", n: 131072, r: 8, p: 1, salt: "00" },
+    cipher: { name: "aes-256-gcm", iv: "00", ciphertext: "00", tag: "00" },
+  }),
+  restoreBackup: noop,
+  deposit: noop,
+  withdraw: noop,
+  merge: noop,
 };
 
 createRoot(document.querySelector("#root")!).render(

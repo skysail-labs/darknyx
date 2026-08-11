@@ -2,6 +2,7 @@ import { BrowserVault, IndexedDbVaultStore } from "/dist/index.js";
 import {
   BrowserInventory,
   BrowserIntentAuthorizer,
+  BrowserAccountOperations,
   inventoryStoreForVault,
   requestVaultInternal,
   recoverBrowserInventory,
@@ -68,6 +69,16 @@ function fromHex(value) {
 
 function fromBase64(value) {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+function be32(value) {
+  const output = new Uint8Array(32);
+  let remaining = BigInt(value);
+  for (let index = 31; index >= 0; index -= 1) {
+    output[index] = Number(remaining & 255n);
+    remaining >>= 8n;
+  }
+  return output;
 }
 
 async function unsupported() {
@@ -270,6 +281,67 @@ async function supported() {
   if (!mismatchedOrderRejected) {
     throw new Error("custody Worker signed a mismatched order/index pair");
   }
+  status.textContent = "preparing-deposit";
+  let depositWitnessChecked = false;
+  const accountOperations = new BrowserAccountOperations({
+    release: {
+      venueId: "browser-test",
+      gatewayUrl: location.origin,
+      rpcUrl: `${location.origin}/rpc`,
+      vaultProgramId: config.recovery.program_id,
+      expectedComposeHash: "test-only",
+    },
+    venue: {
+      numTrees: 1,
+      token: async () => "test-token",
+    },
+    vault,
+    inventory: {
+      allocateDepositIndex: async () => 9,
+    },
+    prover: {
+      deposit: {
+        prove: async (witness) => {
+          depositWitnessChecked =
+            witness.amount === 123n && witness.noteSecret !== 0n;
+          return {
+            piA: new Uint8Array(64).fill(1),
+            piB: new Uint8Array(128).fill(2),
+            piC: new Uint8Array(64).fill(3),
+            publicInputs: [
+              witness.noteCommitment,
+              ...witness.tokenMint,
+              witness.amount,
+              witness.recoveryNonce,
+            ].map(be32),
+          };
+        },
+      },
+    },
+    wallet: {
+      current: () => ({ walletName: "Test", address: config.wallet_address }),
+      signAndSendTransaction: async (transaction) => {
+        if (!(transaction instanceof Uint8Array) || transaction.length === 0) {
+          throw new Error("account operation did not build a transaction");
+        }
+        throw new Error("intentional wallet rejection after build");
+      },
+    },
+  });
+  let walletStageReached = false;
+  try {
+    await accountOperations.deposit({
+      tokenMint: config.recovery.quote_mint_base58,
+      amount: 123n,
+    });
+  } catch (error) {
+    walletStageReached =
+      error?.stage === "wallet" &&
+      /intentional wallet rejection/.test(String(error));
+  }
+  if (!depositWitnessChecked || !walletStageReached) {
+    throw new Error("typed browser deposit did not reach the wallet boundary");
+  }
   status.textContent = "testing-inventory-lock";
   await vault.lock();
   let inventoryLocked = false;
@@ -330,6 +402,7 @@ async function supported() {
     inventory_revoked_on_lock: inventoryLocked,
     inventory_tamper_rejected: inventoryTamperRejected,
     worker_held_order_authorization: true,
+    worker_held_deposit_preparation: true,
     busy_during_backup: busyDuringBackup,
     ui_responsive_during_backup:
       responsivenessTicks >= minimumResponsivenessTicks,

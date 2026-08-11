@@ -5,6 +5,8 @@ export { TraderProduct, type TraderProductProps } from "./trader-product.js";
 export { HorizonMark } from "./mark.js";
 export type {
   InstrumentView,
+  AccountAmountDraft,
+  AccountOperationView,
   OrderLifecycleKind,
   OrderLifecycleView,
   PrivateBalanceView,

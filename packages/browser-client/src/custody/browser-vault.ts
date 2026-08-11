@@ -33,7 +33,10 @@ type InternalRequest = <T>(
     | "recoverNotes"
     | "validInputWitness"
     | "authorizeIntent"
-    | "authorizeCancel",
+    | "authorizeCancel"
+    | "prepareDeposit"
+    | "prepareSpend"
+    | "prepareMerge",
   payload?: Record<string, unknown>,
 ) => Promise<T>;
 
@@ -329,7 +332,10 @@ export function requestVaultInternal<T>(
     | "recoverNotes"
     | "validInputWitness"
     | "authorizeIntent"
-    | "authorizeCancel",
+    | "authorizeCancel"
+    | "prepareDeposit"
+    | "prepareSpend"
+    | "prepareMerge",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const request = internalRequests.get(vault);
