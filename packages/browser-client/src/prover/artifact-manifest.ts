@@ -304,6 +304,24 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   );
 }
 
+async function pruneStaleArtifactCaches(artifactSetId: string): Promise<void> {
+  if (!("caches" in globalThis)) return;
+  const current = `darknyx-client-artifacts-${artifactSetId}`;
+  try {
+    const names = await caches.keys();
+    await Promise.all(
+      names
+        .filter(
+          (name) =>
+            name.startsWith("darknyx-client-artifacts-") && name !== current,
+        )
+        .map((name) => caches.delete(name)),
+    );
+  } catch {
+    // Cache Storage is an optimization. Verification never depends on it.
+  }
+}
+
 export async function loadSignedArtifactManifest(
   policy: ManifestTrustPolicy,
 ): Promise<ClientArtifactManifest> {
@@ -370,11 +388,13 @@ export async function loadSignedArtifactManifest(
   } catch {
     throw new Error("artifact manifest payload is not valid JSON");
   }
-  return parseClientArtifactManifest(
+  const manifest = parseClientArtifactManifest(
     parsed,
     policy.expectedArtifactSetId,
     policy.expectedProtocolVersion,
   );
+  await pruneStaleArtifactCaches(manifest.artifact_set_id);
+  return manifest;
 }
 
 export async function fetchVerifiedArtifact(
@@ -390,25 +410,39 @@ export async function fetchVerifiedArtifact(
   const cacheName = `darknyx-client-artifacts-${artifactSetId}`;
   const cache = "caches" in globalThis ? await caches.open(cacheName) : null;
   const cached = cache ? await cache.match(url.href) : undefined;
-  const response =
-    cached ??
-    (await fetchImpl(url, {
-      cache: "no-store",
-      credentials: "omit",
-      redirect: "error",
-    }));
-  const bytes = await responseBytes(
-    response,
-    descriptor.bytes,
-    descriptor.path,
-  );
-  if ((await sha256Hex(bytes)) !== descriptor.sha256) {
-    if (cache) await cache.delete(url.href);
-    throw new Error(
-      `${descriptor.path} SHA-256 does not match signed manifest`,
+  const requestOptions: RequestInit = {
+    cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+  };
+  const verify = async (response: Response) => {
+    const bytes = await responseBytes(
+      response,
+      descriptor.bytes,
+      descriptor.path,
     );
+    if ((await sha256Hex(bytes)) !== descriptor.sha256) {
+      throw new Error(
+        `${descriptor.path} SHA-256 does not match signed manifest`,
+      );
+    }
+    return bytes;
+  };
+  let bytes: Uint8Array<ArrayBuffer>;
+  let fetchedFresh = false;
+  if (cached) {
+    try {
+      bytes = await verify(cached);
+    } catch {
+      if (cache) await cache.delete(url.href);
+      bytes = await verify(await fetchImpl(url, requestOptions));
+      fetchedFresh = true;
+    }
+  } else {
+    bytes = await verify(await fetchImpl(url, requestOptions));
+    fetchedFresh = true;
   }
-  if (!cached && cache) {
+  if (fetchedFresh && cache) {
     await cache.put(
       url.href,
       new Response(bytes, {

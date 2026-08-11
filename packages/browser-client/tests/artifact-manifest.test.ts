@@ -157,4 +157,38 @@ describe("signed client artifact manifest", () => {
       ),
     ).rejects.toThrow(/exceeded|byte length/);
   });
+
+  it("evicts a corrupt cached artifact and verifies one fresh refetch", async () => {
+    const bytes = encoder.encode("verified artifact bytes");
+    const corrupt = encoder.encode("corrupted artifact byte");
+    const sha256 = Buffer.from(
+      await crypto.subtle.digest("SHA-256", bytes),
+    ).toString("hex");
+    const cache = {
+      match: vi.fn(async () => new Response(corrupt)),
+      delete: vi.fn(async () => true),
+      put: vi.fn(async () => undefined),
+    };
+    vi.stubGlobal("caches", {
+      open: vi.fn(async () => cache),
+      keys: vi.fn(async () => []),
+      delete: vi.fn(async () => true),
+    });
+    const fetchImpl = vi.fn(async () => new Response(bytes));
+    await expect(
+      fetchVerifiedArtifact(
+        "https://client.darknyx.example/artifacts/manifest.json",
+        "set-id",
+        {
+          path: "valid_input/circuit.wasm",
+          bytes: bytes.length,
+          sha256,
+        },
+        fetchImpl,
+      ),
+    ).resolves.toEqual(bytes);
+    expect(cache.delete).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cache.put).toHaveBeenCalledOnce();
+  });
 });

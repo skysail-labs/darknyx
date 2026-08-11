@@ -179,13 +179,24 @@ child.stderr.on("data", (chunk) => {
 });
 let timeout;
 try {
+  const processFailure = new Promise((resolveFailure) => {
+    child.once("error", (error) => {
+      resolveFailure({ ok: false, error: `Chrome failed to start: ${error}` });
+    });
+    child.once("exit", (code, signal) => {
+      resolveFailure({
+        ok: false,
+        error: `Chrome exited before reporting (${code ?? signal ?? "unknown"})`,
+      });
+    });
+  });
   const timedOut = new Promise((resolveTimeout) => {
     timeout = setTimeout(
       () => resolveTimeout({ ok: false, error: "browser prover timed out" }),
       180_000,
     );
   });
-  const result = await Promise.race([resultPromise, timedOut]);
+  const result = await Promise.race([resultPromise, processFailure, timedOut]);
   if (!result.ok) throw new Error(`${result.error}\n${stderr.slice(-4000)}`);
   if (
     result.result.all_six_proved_and_verified !== true ||

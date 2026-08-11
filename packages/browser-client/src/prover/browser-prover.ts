@@ -15,11 +15,13 @@ import type {
 type Pending = {
   resolve(value: unknown): void;
   reject(error: unknown): void;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 export interface BrowserProverOptions extends ManifestTrustPolicy {
   workerUrl?: string | URL;
   workerFactory?: (url: string | URL) => Worker;
+  requestTimeoutMs?: number;
 }
 
 interface TrustedTypesFactoryLike {
@@ -67,11 +69,19 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
   readonly #worker: Worker;
   readonly #pending = new Map<number, Pending>();
   readonly #ready: Promise<void>;
+  readonly #requestTimeoutMs: number;
   #nextId = 1;
   #destroyed = false;
   #failure: Error | null = null;
 
   constructor(options: BrowserProverOptions) {
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? 180_000;
+    if (
+      !Number.isFinite(this.#requestTimeoutMs) ||
+      this.#requestTimeoutMs <= 0
+    ) {
+      throw new Error("browser prover timeout must be a positive number");
+    }
     const workerUrl = new URL(
       options.workerUrl ?? "./prover.worker.js",
       import.meta.url,
@@ -83,15 +93,24 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
       const pending = this.#pending.get(data?.id);
       if (!pending) return;
       this.#pending.delete(data.id);
+      clearTimeout(pending.timeout);
       if (data.ok) pending.resolve(data.value);
       else pending.reject(new Error(String(data.error)));
     };
-    this.#worker.onerror = ({ message }) => {
-      const error = new Error(`prover Worker failed: ${message}`);
+    const failWorker = (error: Error) => {
       this.#failure = error;
-      for (const pending of this.#pending.values()) pending.reject(error);
+      for (const pending of this.#pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+      }
       this.#pending.clear();
       this.#worker.terminate();
+    };
+    this.#worker.onerror = ({ message }) => {
+      failWorker(new Error(`prover Worker failed: ${message}`));
+    };
+    this.#worker.onmessageerror = () => {
+      failWorker(new Error("prover Worker returned an unreadable message"));
     };
     this.#ready = this.#request("initialize", {
       manifestUrl: options.manifestUrl,
@@ -100,6 +119,12 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
       trustedKeyId: options.trustedKeyId,
       trustedPublicKey: options.trustedPublicKey,
     }).then(() => undefined);
+    void this.#ready.catch((error: unknown) => {
+      this.#failure =
+        error instanceof Error
+          ? error
+          : new Error("browser prover initialization failed");
+    });
   }
 
   async #request(
@@ -110,11 +135,16 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
     if (this.#failure) throw this.#failure;
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`browser prover request '${type}' timed out`));
+      }, this.#requestTimeoutMs);
+      this.#pending.set(id, { resolve, reject, timeout });
       try {
         this.#worker.postMessage({ id, type, payload });
       } catch (error) {
         this.#pending.delete(id);
+        clearTimeout(timeout);
         reject(error);
       }
     });
@@ -247,6 +277,7 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
     this.#destroyed = true;
     this.#worker.terminate();
     for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timeout);
       pending.reject(new Error("browser prover destroyed"));
     }
     this.#pending.clear();

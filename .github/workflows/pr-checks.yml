@@ -153,6 +153,8 @@ jobs:
               - 'package-lock.json'
               - '.github/workflows/pr-checks.yml'
             browser_prover:
+              - 'circuits/**'
+              - 'scripts/build-circuits.sh'
               - 'packages/browser-client/artifacts/**'
               - 'packages/browser-client/src/prover/**'
               - 'packages/browser-client/src/internal.ts'
@@ -160,8 +162,10 @@ jobs:
               - 'packages/browser-client/tests/artifact-manifest.test.ts'
               - 'packages/browser-client/tests/groth16-format-parity.test.ts'
               - 'packages/browser-client/scripts/verify-artifact-payload.mjs'
+              - 'packages/browser-client/scripts/sign-artifact-manifest.mjs'
               - 'packages/browser-client/scripts/build.mjs'
               - 'packages/browser-client/package.json'
+              - 'package.json'
               - 'package-lock.json'
               - '.github/workflows/pr-checks.yml'
             # Any TypeScript, anywhere, plus the configs that decide HOW it is
@@ -622,7 +626,8 @@ jobs:
     if: >-
       always() && (
         github.event_name == 'push' ||
-        needs.changes.outputs.browser_client == 'true'
+        needs.changes.outputs.browser_client == 'true' ||
+        needs.changes.outputs.browser_prover == 'true'
       ) && needs.circuits.result != 'failure'
     timeout-minutes: 8
     steps:

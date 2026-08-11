@@ -2,14 +2,16 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { validateArtifactPayload } from "./artifact-payload-schema.mjs";
+
 const packageRoot = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(packageRoot, "../..");
-const payload = JSON.parse(
+const payload = validateArtifactPayload(JSON.parse(
   await readFile(
     resolve(packageRoot, "artifacts/client-artifacts.v1.payload.json"),
     "utf8",
   ),
-);
+));
 const builds = {
   wallet_create: "valid_wallet_create",
   deposit: "valid_deposit",

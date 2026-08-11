@@ -89,32 +89,9 @@ interface WorkerScope {
   postMessage(message: unknown, transfer?: Transferable[]): void;
 }
 
-interface SnarkjsShape {
-  wtns: {
-    calculate(
-      input: unknown,
-      wasm: Uint8Array,
-      output: { type: "mem" },
-    ): Promise<unknown>;
-  };
-  groth16: {
-    prove(
-      zkey: Uint8Array,
-      witness: { type: "mem" },
-    ): Promise<{ proof: RawGroth16Proof; publicSignals: string[] }>;
-    verify(
-      verificationKey: unknown,
-      publicSignals: string[],
-      proof: RawGroth16Proof,
-    ): Promise<boolean>;
-  };
-}
-
-let proverPromise: Promise<SnarkjsShape> | null = null;
-function loadProver(): Promise<SnarkjsShape> {
-  proverPromise ??= import("snarkjs").then(
-    (module) => module as unknown as SnarkjsShape,
-  );
+let proverPromise: Promise<typeof import("snarkjs")> | null = null;
+function loadProver(): Promise<typeof import("snarkjs")> {
+  proverPromise ??= import("snarkjs");
   return proverPromise;
 }
 const workerScope = self as unknown as WorkerScope;
@@ -224,31 +201,34 @@ async function handle(request: Request): Promise<unknown> {
 
 let queue = Promise.resolve();
 workerScope.onmessage = ({ data }) => {
-  queue = queue.then(async () => {
-    try {
-      const value = await handle(data);
-      const transfer: Transferable[] = [];
-      if (
-        value &&
-        typeof value === "object" &&
-        "piA" in value &&
-        value.piA instanceof Uint8Array
-      ) {
-        const proof = value as ReturnType<typeof formatBrowserGroth16Proof>;
-        transfer.push(
-          proof.piA.buffer,
-          proof.piB.buffer,
-          proof.piC.buffer,
-          ...proof.publicInputs.map((input) => input.buffer),
-        );
+  queue = queue
+    .then(async () => {
+      try {
+        const value = await handle(data);
+        const transfer: Transferable[] = [];
+        if (
+          value &&
+          typeof value === "object" &&
+          "piA" in value &&
+          value.piA instanceof Uint8Array
+        ) {
+          const proof = value as ReturnType<typeof formatBrowserGroth16Proof>;
+          transfer.push(
+            proof.piA.buffer,
+            proof.piB.buffer,
+            proof.piC.buffer,
+            ...proof.publicInputs.map((input) => input.buffer),
+          );
+        }
+        workerScope.postMessage({ id: data.id, ok: true, value }, transfer);
+      } catch (error) {
+        workerScope.postMessage({
+          id: data.id,
+          ok: false,
+          error:
+            error instanceof Error ? error.message : "browser prove failed",
+        });
       }
-      workerScope.postMessage({ id: data.id, ok: true, value }, transfer);
-    } catch (error) {
-      workerScope.postMessage({
-        id: data.id,
-        ok: false,
-        error: error instanceof Error ? error.message : "browser prove failed",
-      });
-    }
-  });
+    })
+    .catch(() => undefined);
 };

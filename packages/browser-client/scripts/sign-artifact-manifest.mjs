@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { createPrivateKey, sign } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+
+import { validateArtifactPayload } from "./artifact-payload-schema.mjs";
+import { signArtifactPayload } from "./artifact-signing.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((argument) => {
@@ -25,18 +27,16 @@ const packageRoot = resolve(import.meta.dirname, "..");
 const payload = await readFile(
   resolve(packageRoot, "artifacts/client-artifacts.v1.payload.json"),
 );
+let payloadValue;
+try {
+  payloadValue = JSON.parse(payload.toString("utf8"));
+} catch {
+  throw new Error("artifact manifest payload is not valid JSON");
+}
+validateArtifactPayload(payloadValue);
 const keyBytes = Buffer.from(encodedKey, "base64");
 try {
-  const privateKey = createPrivateKey({
-    key: keyBytes,
-    format: "der",
-    type: "pkcs8",
-  });
-  if (privateKey.asymmetricKeyType !== "ed25519") {
-    throw new Error("artifact signing key must be Ed25519");
-  }
-  const domain = Buffer.from("darknyx/client-artifact-manifest/v1\0");
-  const signature = sign(null, Buffer.concat([domain, payload]), privateKey);
+  const signature = signArtifactPayload(payload, keyBytes);
   const envelope = {
     envelope_version: 1,
     key_id: keyId,
