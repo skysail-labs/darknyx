@@ -15,6 +15,7 @@ export function securityHeaders(
     new URL(release.gateway_url).origin,
     wsOrigin(release.gateway_url),
     new URL(release.rpc_url).origin,
+    new URL(release.artifact_manifest_url).origin,
   ].join(" ");
   const csp = [
     "default-src 'none'",
@@ -45,7 +46,7 @@ export function securityHeaders(
   };
   if (origin.protocol === "https:") {
     headers["Strict-Transport-Security"] =
-      "max-age=63072000; includeSubDomains; preload";
+      "max-age=63072000; includeSubDomains";
   }
   return Object.freeze(headers);
 }

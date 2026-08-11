@@ -4,9 +4,16 @@ import {
   createHash,
   randomBytes as nodeRandomBytes,
 } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open as openFile,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { fetchBounded, gatewayBase, readJsonBounded } from "./http.js";
 import type { CvmAccountCredentials } from "./types.js";
 
 interface StoredAccount extends CvmAccountCredentials {
@@ -36,6 +43,7 @@ export interface ProvisioningCredentialResolverOptions {
   fetchImpl?: typeof fetch;
   randomBytes?: (length: number) => Uint8Array;
   now?: () => Date;
+  requestTimeoutMs?: number;
 }
 
 const AAD = Buffer.from("darknyx/trader-host-account-store/v1\0");
@@ -122,6 +130,7 @@ function open(value: unknown, key: Uint8Array): PlainStore {
     throw new Error("account store envelope is malformed");
   }
   const sealed = value as SealedStore;
+  let plaintext: Buffer;
   try {
     const decipher = createDecipheriv(
       "aes-256-gcm",
@@ -130,34 +139,53 @@ function open(value: unknown, key: Uint8Array): PlainStore {
     );
     decipher.setAAD(AAD);
     decipher.setAuthTag(Buffer.from(sealed.tag, "base64url"));
-    const plaintext = Buffer.concat([
+    plaintext = Buffer.concat([
       decipher.update(Buffer.from(sealed.ciphertext, "base64url")),
       decipher.final(),
     ]);
-    return parsePlain(JSON.parse(plaintext.toString("utf8")));
   } catch {
     throw new Error("account store authentication failed");
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(plaintext.toString("utf8"));
+  } catch {
+    throw new Error("account store plaintext is not valid JSON");
+  }
+  return parsePlain(parsed);
 }
 
 async function exchange(
   gateway: URL,
   credentials: CvmAccountCredentials,
   fetchImpl: typeof fetch,
+  timeoutMs?: number,
 ): Promise<string> {
-  const response = await fetchImpl(new URL("/auth/token", gateway), {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({
-      api_key: credentials.apiKey,
-      api_secret: credentials.apiSecret,
-      passphrase: credentials.passphrase,
-    }),
-  });
+  const response = await fetchBounded(
+    fetchImpl,
+    new URL("auth/token", gateway),
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        api_key: credentials.apiKey,
+        api_secret: credentials.apiSecret,
+        passphrase: credentials.passphrase,
+      }),
+    },
+    timeoutMs,
+  );
   if (!response.ok)
     throw new Error(`admin token exchange failed (${response.status})`);
-  const body = (await response.json()) as Record<string, unknown>;
-  if (typeof body.access_token !== "string" || body.access_token.length < 32) {
+  const body = await readJsonBounded(response, 32 * 1024, timeoutMs);
+  if (
+    typeof body.access_token !== "string" ||
+    body.access_token.length < 32 ||
+    body.access_token.length > 16_384
+  ) {
     throw new Error("admin token exchange returned a malformed response");
   }
   return body.access_token;
@@ -173,9 +201,7 @@ export function createProvisioningCredentialResolver(
   if (options.encryptionKey.length !== 32) {
     throw new Error("account-store encryption key must be 32 bytes");
   }
-  const gateway = new URL(options.gatewayUrl);
-  if (gateway.protocol !== "https:")
-    throw new Error("account provisioning requires HTTPS");
+  const gateway = gatewayBase(options.gatewayUrl);
   const maxAccounts = options.maxAccounts ?? 10_000;
   if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1) {
     throw new Error("maxAccounts must be a positive safe integer");
@@ -210,13 +236,27 @@ export function createProvisioningCredentialResolver(
       throw new Error("randomBytes returned the wrong temporary-file suffix");
     const bytes = `${JSON.stringify(seal(store, options.encryptionKey, iv))}\n`;
     const temporary = `${options.storePath}.${process.pid}.${token(suffix)}.tmp`;
-    await mkdir(dirname(options.storePath), { recursive: true, mode: 0o700 });
-    await writeFile(temporary, bytes, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    await rename(temporary, options.storePath);
+    const directory = dirname(options.storePath);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    let file: Awaited<ReturnType<typeof openFile>> | undefined;
+    try {
+      file = await openFile(temporary, "wx", 0o600);
+      await file.writeFile(bytes, "utf8");
+      await file.sync();
+      await file.close();
+      file = undefined;
+      await rename(temporary, options.storePath);
+      const parent = await openFile(directory, "r");
+      try {
+        await parent.sync();
+      } finally {
+        await parent.close();
+      }
+    } catch (error) {
+      await file?.close().catch(() => undefined);
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   return async (sessionId, venueId) => {
@@ -276,9 +316,11 @@ export function createProvisioningCredentialResolver(
           gateway,
           options.adminCredentials,
           fetchImpl,
+          options.requestTimeoutMs,
         );
-        const registration = await fetchImpl(
-          new URL("/admin/accounts", gateway),
+        const registration = await fetchBounded(
+          fetchImpl,
+          new URL("admin/accounts", gateway),
           {
             method: "POST",
             headers: {
@@ -292,12 +334,18 @@ export function createProvisioningCredentialResolver(
               is_admin: false,
             }),
           },
+          options.requestTimeoutMs,
         );
         if (registration.status === 409) {
           // A crash may occur after the CVM persisted registration but before
           // the local pending record became active. Prove that the stored
           // credentials own the existing account before completing recovery.
-          await exchange(gateway, credentials, fetchImpl);
+          await exchange(
+            gateway,
+            credentials,
+            fetchImpl,
+            options.requestTimeoutMs,
+          );
         } else if (registration.status !== 201) {
           throw new Error(
             `CVM account registration failed (${registration.status})`,

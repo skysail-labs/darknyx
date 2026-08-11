@@ -54,4 +54,16 @@ export interface ReleaseHostOptions {
   /** Trusted client identity for creation throttling (for example a proxy-normalized IP). */
   clientKey?: (request: IncomingMessage) => string;
   maxNewSessionsPerMinute?: number;
+  maxTokenRequestsPerMinute?: number;
+  /** Signed-cookie lifetime and runtime-isolation retention. Defaults to 7 days. */
+  sessionTtlSeconds?: number;
+  /** Hard cap for all in-memory session/rate-limit maps. */
+  maxTrackedSessions?: number;
+  onIsolationViolation?: (details: {
+    sessionId: string;
+    accountId: string;
+    conflictingSessionId?: string;
+    conflictingAccountId?: string;
+  }) => void | Promise<void>;
+  onError?: (error: unknown) => void;
 }

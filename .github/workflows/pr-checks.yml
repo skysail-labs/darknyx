@@ -79,6 +79,7 @@ jobs:
       daemon: ${{ steps.filter.outputs.daemon }}
       browser_custody: ${{ steps.filter.outputs.browser_custody }}
       browser_client: ${{ steps.filter.outputs.browser_client }}
+      trader_host: ${{ steps.filter.outputs.trader_host }}
       browser_prover: ${{ steps.filter.outputs.browser_prover }}
       ts: ${{ steps.filter.outputs.ts }}
       deps: ${{ steps.filter.outputs.deps }}
@@ -149,6 +150,10 @@ jobs:
             browser_client:
               - 'packages/client-core/**'
               - 'packages/browser-client/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/pr-checks.yml'
+            trader_host:
               - 'packages/trader-host/**'
               - 'package.json'
               - 'package-lock.json'
@@ -669,14 +674,6 @@ jobs:
       - name: Browser-client unit and bundle-boundary tests
         run: npm exec -- vitest run --root packages/browser-client
 
-      - name: Build and typecheck the production release host
-        run: |
-          npm -w @darknyx/trader-host run build
-          npm -w @darknyx/trader-host run typecheck:tests
-
-      - name: Production release-host security integration
-        run: npm run test:trader-host
-
       - name: Production browser custody lifecycle
         run: npm -w @darknyx/browser-client run test:custody
 
@@ -690,6 +687,36 @@ jobs:
       - name: Signed-manifest hashes + all-six browser proofs
         if: needs.changes.outputs.browser_prover == 'true'
         run: npm -w @darknyx/browser-client run test:prover
+
+  trader-host:
+    name: Trader host — release and session security
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.trader_host == 'true'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      - name: Build and typecheck the production release host
+        run: |
+          npm -w @darknyx/trader-host run build
+          npm -w @darknyx/trader-host run typecheck:tests
+
+      - name: Production release-host security integration
+        run: npm run test:trader-host
 
   daemon:
     name: Daemon — keystore, lifecycle, attestation (vitest)
@@ -1210,6 +1237,7 @@ jobs:
       - typecheck
       - browser-custody
       - browser-client
+      - trader-host
       - daemon
       - consistency
       - sbf-build
@@ -1245,6 +1273,7 @@ jobs:
             (needs.typecheck.result != 'success' && needs.typecheck.result != 'skipped') ||
             (needs['browser-custody'].result != 'success' && needs['browser-custody'].result != 'skipped') ||
             (needs['browser-client'].result != 'success' && needs['browser-client'].result != 'skipped') ||
+            (needs['trader-host'].result != 'success' && needs['trader-host'].result != 'skipped') ||
             (needs.daemon.result != 'success' && needs.daemon.result != 'skipped') ||
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
@@ -1262,6 +1291,7 @@ jobs:
           echo "typecheck:                ${{ needs.typecheck.result }}"
           echo "browser-custody:          ${{ needs['browser-custody'].result }}"
           echo "browser-client:           ${{ needs['browser-client'].result }}"
+          echo "trader-host:              ${{ needs['trader-host'].result }}"
           echo "daemon:                   ${{ needs.daemon.result }}"
           echo "consistency:              ${{ needs.consistency.result }}"
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"

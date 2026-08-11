@@ -16,6 +16,7 @@ results, an owner, and an explicit pass before a release candidate can ship.
 | Host release            | Content-hashed assets, signed artifact envelope, reviewed public release pins, TLS/HSTS, no source maps/secrets, headers captured from the deployed origin                                                              | Open          |
 | Security/legal          | Focused hostile-frontend, dependency/supply-chain and session-broker review; snarkjs GPL-3.0 distribution obligations resolved                                                                                          | Open          |
 | Recovery drill          | Lost browser state restored from backup plus finalized chain; old account/order state reaches an explicit terminal outcome                                                                                              | Open          |
+| MM selection integrity  | Threat model records that a compromised enclave can repeatedly select a colluding MM; published per-MM execution-quality statistics are live as the compensating control                                                | Open          |
 
 Local implementation evidence currently available:
 
@@ -28,3 +29,8 @@ Local implementation evidence currently available:
 The release owner must record dated evidence beneath this table or link a
 versioned report before changing a row to Passed. A CI badge or an emulator-only
 result is not sufficient for a physical-device or live-infrastructure gate.
+
+After a CPU-CVM Live venue or Account isolation run, stop every billable CVM
+and unset exported bootstrap credentials. Never leave a billable CPU CVM
+running. Do **not** stop an on-demand GPU CVM: Phala permanently deallocates it
+and forfeits the remaining prepaid window.

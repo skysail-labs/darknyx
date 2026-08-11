@@ -9,34 +9,99 @@ import type { ReleaseHostOptions } from "./types.js";
 
 const COOKIE = "__Host-darknyx_session";
 const SESSION = /^[0-9a-f]{64}$/;
+const ISSUED_AT = /^(0|[1-9]\d{0,15})$/;
 
-function mac(key: Uint8Array, session: string): string {
-  return createHmac("sha256", key).update(session).digest("hex");
+interface RateWindow {
+  window: number;
+  count: number;
+}
+
+interface AccountBinding {
+  accountId: string;
+  expiresAtMs: number;
+}
+
+interface SessionBinding {
+  sessionId: string;
+  expiresAtMs: number;
+}
+
+export interface SessionRuntimeState {
+  accountBySession: Map<string, AccountBinding>;
+  sessionByAccount: Map<string, SessionBinding>;
+  creationRate: Map<string, RateWindow>;
+  tokenRate: Map<string, RateWindow>;
+}
+
+interface BrowserSession {
+  id: string;
+  issuedAtSeconds: number;
+  expiresAtMs: number;
+}
+
+class AccountIsolationError extends Error {
+  constructor(
+    readonly details: {
+      sessionId: string;
+      accountId: string;
+      conflictingSessionId?: string;
+      conflictingAccountId?: string;
+    },
+  ) {
+    super("token issuer violated per-session account isolation");
+    this.name = "AccountIsolationError";
+  }
+}
+
+function mac(key: Uint8Array, session: string, issuedAt: string): string {
+  return createHmac("sha256", key)
+    .update(session)
+    .update(".")
+    .update(issuedAt)
+    .digest("hex");
 }
 
 function existingSession(
   request: IncomingMessage,
   key: Uint8Array,
-): string | null {
+  nowMs: number,
+  ttlSeconds: number,
+): BrowserSession | null {
   const raw = request.headers.cookie
     ?.split(";")
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${COOKIE}=`))
     ?.slice(COOKIE.length + 1);
   if (!raw) return null;
-  const [session, signature, ...extra] = raw.split(".");
+  const [session, issuedAt, signature, ...extra] = raw.split(".");
   if (
     !session ||
+    !issuedAt ||
     !signature ||
     extra.length ||
     !SESSION.test(session) ||
+    !ISSUED_AT.test(issuedAt) ||
     !SESSION.test(signature)
   ) {
     return null;
   }
-  const expected = Buffer.from(mac(key, session), "hex");
+  const issuedAtSeconds = Number(issuedAt);
+  const nowSeconds = Math.floor(nowMs / 1_000);
+  if (
+    !Number.isSafeInteger(issuedAtSeconds) ||
+    issuedAtSeconds > nowSeconds + 60 ||
+    nowSeconds - issuedAtSeconds >= ttlSeconds
+  ) {
+    return null;
+  }
+  const expected = Buffer.from(mac(key, session, issuedAt), "hex");
   const actual = Buffer.from(signature, "hex");
-  return timingSafeEqual(expected, actual) ? session : null;
+  if (!timingSafeEqual(expected, actual)) return null;
+  return {
+    id: session,
+    issuedAtSeconds,
+    expiresAtMs: (issuedAtSeconds + ttlSeconds) * 1_000,
+  };
 }
 
 async function body(request: IncomingMessage): Promise<unknown> {
@@ -62,13 +127,46 @@ function json(response: ServerResponse, status: number, value: unknown): void {
   response.end(bytes);
 }
 
+function consume(
+  entries: Map<string, RateWindow>,
+  key: string,
+  nowMs: number,
+  limit: number,
+): boolean {
+  const window = Math.floor(nowMs / 60_000);
+  const current = entries.get(key);
+  if (current?.window === window && current.count >= limit) return false;
+  entries.set(key, {
+    window,
+    count: current?.window === window ? current.count + 1 : 1,
+  });
+  return true;
+}
+
+function prune(state: SessionRuntimeState, nowMs: number): void {
+  const currentWindow = Math.floor(nowMs / 60_000);
+  for (const [key, value] of state.creationRate) {
+    if (value.window < currentWindow) state.creationRate.delete(key);
+  }
+  for (const [key, value] of state.tokenRate) {
+    if (value.window < currentWindow) state.tokenRate.delete(key);
+  }
+  for (const [sessionId, binding] of state.accountBySession) {
+    if (binding.expiresAtMs <= nowMs) {
+      state.accountBySession.delete(sessionId);
+      const reverse = state.sessionByAccount.get(binding.accountId);
+      if (reverse?.sessionId === sessionId) {
+        state.sessionByAccount.delete(binding.accountId);
+      }
+    }
+  }
+}
+
 export async function handleSession(
   request: IncomingMessage,
   response: ServerResponse,
   options: ReleaseHostOptions,
-  accountBySession: Map<string, string>,
-  sessionByAccount: Map<string, string>,
-  creationRate: Map<string, { window: number; count: number }>,
+  state: SessionRuntimeState,
 ): Promise<void> {
   if (request.method !== "POST")
     return json(response, 405, { error: "method_not_allowed" });
@@ -100,40 +198,71 @@ export async function handleSession(
   ) {
     return json(response, 400, { error: "unknown_venue" });
   }
+
+  const nowMs = options.now?.() ?? Date.now();
+  const ttlSeconds = options.sessionTtlSeconds ?? 7 * 24 * 60 * 60;
+  const maxTracked = options.maxTrackedSessions ?? 10_000;
+  prune(state, nowMs);
   const generate =
     options.randomBytes ?? ((length: number) => nodeRandomBytes(length));
-  let sessionId = existingSession(request, options.cookieKey);
-  if (!sessionId) {
+  let session = existingSession(request, options.cookieKey, nowMs, ttlSeconds);
+  if (!session) {
     const clientKey =
       options.clientKey?.(request) ?? request.socket.remoteAddress ?? "unknown";
-    const window = Math.floor((options.now?.() ?? Date.now()) / 60_000);
-    const current = creationRate.get(clientKey);
-    const limit = options.maxNewSessionsPerMinute ?? 5;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-      throw new Error("maxNewSessionsPerMinute must be between 1 and 100");
+    if (
+      !state.creationRate.has(clientKey) &&
+      state.creationRate.size >= maxTracked
+    ) {
+      return json(response, 503, { error: "session_capacity_reached" });
     }
-    if (current?.window === window && current.count >= limit) {
+    if (
+      !consume(
+        state.creationRate,
+        clientKey,
+        nowMs,
+        options.maxNewSessionsPerMinute ?? 5,
+      )
+    ) {
       response.setHeader("retry-after", "60");
       return json(response, 429, { error: "session_rate_limited" });
     }
-    creationRate.set(clientKey, {
-      window,
-      count: current?.window === window ? current.count + 1 : 1,
-    });
     const generated = generate(32);
     if (generated.length !== 32) {
       throw new Error("randomBytes returned the wrong length");
     }
-    sessionId = Buffer.from(generated).toString("hex");
+    const issuedAtSeconds = Math.floor(nowMs / 1_000);
+    const issuedAt = String(issuedAtSeconds);
+    const sessionId = Buffer.from(generated).toString("hex");
+    session = {
+      id: sessionId,
+      issuedAtSeconds,
+      expiresAtMs: (issuedAtSeconds + ttlSeconds) * 1_000,
+    };
     response.setHeader(
       "set-cookie",
-      `${COOKIE}=${sessionId}.${mac(options.cookieKey, sessionId)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+      `${COOKIE}=${sessionId}.${issuedAt}.${mac(options.cookieKey, sessionId, issuedAt)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ttlSeconds}`,
     );
   }
+
+  if (!state.tokenRate.has(session.id) && state.tokenRate.size >= maxTracked) {
+    return json(response, 503, { error: "session_capacity_reached" });
+  }
+  if (
+    !consume(
+      state.tokenRate,
+      session.id,
+      nowMs,
+      options.maxTokenRequestsPerMinute ?? 30,
+    )
+  ) {
+    response.setHeader("retry-after", "60");
+    return json(response, 429, { error: "token_rate_limited" });
+  }
+
   try {
     const token = await options.issueToken({
       venueId: options.release.venue_id,
-      sessionId,
+      sessionId: session.id,
       request,
     });
     if (
@@ -146,21 +275,48 @@ export async function handleSession(
     ) {
       throw new Error("isolated token issuer returned an invalid result");
     }
-    const boundAccount = accountBySession.get(sessionId);
-    const boundSession = sessionByAccount.get(token.accountId);
+    const boundAccount = state.accountBySession.get(session.id);
+    const boundSession = state.sessionByAccount.get(token.accountId);
     if (
-      (boundAccount !== undefined && boundAccount !== token.accountId) ||
-      (boundSession !== undefined && boundSession !== sessionId)
+      (boundAccount !== undefined &&
+        boundAccount.accountId !== token.accountId) ||
+      (boundSession !== undefined && boundSession.sessionId !== session.id)
     ) {
-      throw new Error("token issuer violated per-session account isolation");
+      throw new AccountIsolationError({
+        sessionId: session.id,
+        accountId: token.accountId,
+        ...(boundSession
+          ? { conflictingSessionId: boundSession.sessionId }
+          : {}),
+        ...(boundAccount
+          ? { conflictingAccountId: boundAccount.accountId }
+          : {}),
+      });
     }
-    accountBySession.set(sessionId, token.accountId);
-    sessionByAccount.set(token.accountId, sessionId);
+    if (!boundAccount && state.accountBySession.size >= maxTracked) {
+      return json(response, 503, { error: "session_capacity_reached" });
+    }
+    state.accountBySession.set(session.id, {
+      accountId: token.accountId,
+      expiresAtMs: session.expiresAtMs,
+    });
+    state.sessionByAccount.set(token.accountId, {
+      sessionId: session.id,
+      expiresAtMs: session.expiresAtMs,
+    });
     return json(response, 200, {
       access_token: token.accessToken,
       expires_in: token.expiresIn,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AccountIsolationError) {
+      try {
+        await options.onIsolationViolation?.(error.details);
+      } catch (callbackError) {
+        options.onError?.(callbackError);
+      }
+      return json(response, 503, { error: "account_isolation_failed" });
+    }
     return json(response, 503, { error: "session_unavailable" });
   }
 }

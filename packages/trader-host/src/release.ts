@@ -24,8 +24,19 @@ function exactKeys(value: Record<string, unknown>, allowed: string[]): void {
 
 function httpsUrl(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} must be HTTPS`);
-  const url = new URL(value);
-  if (url.protocol !== "https:" || url.username || url.password || url.hash) {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid HTTPS URL`);
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
     throw new Error(`${label} must be a credential-free HTTPS URL`);
   }
   return url.toString();

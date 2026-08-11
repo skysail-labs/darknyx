@@ -10,8 +10,11 @@ from environment variables. TEE order and fill streams are account-scoped, so a
 shared credential would leak lifecycle notifications between visitors and let
 one visitor exhaust another's rate/connection allowance. Callers must provide
 an `IsolatedTokenIssuer` backed by a durable server-side mapping from the signed
-HttpOnly browser session to one CVM account. The host detects and refuses an
-issuer that reuses one account ID across two live browser sessions. The issuer
+HttpOnly browser session to one CVM account. Within one running host process,
+the host detects and refuses an issuer that reuses one account ID across two
+live browser sessions. This bounded runtime tripwire resets on restart and does
+not span load-balanced instances; the durable guarantee comes from the issuer.
+The issuer
 may call the CVM's `/auth/token`, but long-lived credentials never enter the
 public release manifest or browser response.
 
@@ -32,7 +35,9 @@ It creates one deterministic account name with fresh random credentials per
 signed browser session, registers it as a non-admin account through a
 server-held admin credential, and persists the mapping in an AES-256-GCM file
 written with owner-only permissions. A pending-before-register state makes an
-interrupted provision resumable without silently replacing credentials. Set a
+interrupted provision resumable without silently replacing credentials. The
+file and its parent directory are synchronized before a provision succeeds, so
+an acknowledged mapping survives a host crash on supported production filesystems. Set a
 finite `maxAccounts`; a public deployment still needs an authenticated or
 rate-limited admission policy and an operator retention process because the TEE
 does not currently expose account deletion.
