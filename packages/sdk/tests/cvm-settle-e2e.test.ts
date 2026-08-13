@@ -27,7 +27,7 @@
  *      (`solana transfer`).
  *
  * Gated on RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY=<https://…>. Pricing is
- * anchored to the live Hermes feed (override with DARKNYX_CVM_PRICE);
+ * anchored to the live finalized Pyth push feed (override with DARKNYX_CVM_PRICE);
  * DARKNYX_CVM_BASE_QTY tunes the trade size.
  *
  * Run:
@@ -206,7 +206,7 @@ maybeDescribe(
           process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
         );
         const t = new StepTimer();
-        const anchor = await t.step("oracle anchor (Hermes)", () =>
+        const anchor = await t.step("oracle anchor (finalized Pyth push)", () =>
           fetchOracleAnchor(),
         );
         const tickSize = BigInt(cfg.market.tickSize);

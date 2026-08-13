@@ -89,6 +89,15 @@ pub struct RpcAccountInfo {
     pub rent_epoch: u64,
 }
 
+/// Positional account batch plus the finalized/confirmed bank slot that served
+/// it. Oracle consumers need the context slot to reject an impossible
+/// `posted_slot` instead of trusting account bytes in isolation.
+#[derive(Debug, Clone)]
+pub struct RpcAccountsWithContext {
+    pub context_slot: u64,
+    pub accounts: Vec<Option<RpcAccountInfo>>,
+}
+
 /// Solana's `getMultipleAccounts` caps a single request at 100 keys.
 pub const MAX_MULTIPLE_ACCOUNTS: usize = 100;
 
@@ -536,8 +545,24 @@ impl SolanaRpcClient {
         &self,
         addresses: &[Address],
     ) -> Result<Vec<Option<RpcAccountInfo>>, RpcError> {
+        Ok(self
+            .get_multiple_accounts_with_context(addresses)
+            .await?
+            .accounts)
+    }
+
+    /// `getMultipleAccounts` with the serving bank's context slot retained.
+    /// The positional and request-size invariants are identical to
+    /// [`Self::get_multiple_accounts`].
+    pub async fn get_multiple_accounts_with_context(
+        &self,
+        addresses: &[Address],
+    ) -> Result<RpcAccountsWithContext, RpcError> {
         if addresses.is_empty() {
-            return Ok(Vec::new());
+            return Ok(RpcAccountsWithContext {
+                context_slot: 0,
+                accounts: Vec::new(),
+            });
         }
         if addresses.len() > MAX_MULTIPLE_ACCOUNTS {
             return Err(RpcError::Schema(format!(
@@ -552,6 +577,9 @@ impl SolanaRpcClient {
         ]);
         let resp: RpcContextValue<Vec<Option<RawAccount>>> =
             self.call("getMultipleAccounts", params).await?;
+        let context_slot = resp.context.map(|context| context.slot).ok_or_else(|| {
+            RpcError::Schema("getMultipleAccounts response missing context.slot".to_string())
+        })?;
         if resp.value.len() != addresses.len() {
             return Err(RpcError::Schema(format!(
                 "getMultipleAccounts returned {} entries for {} addresses; \
@@ -560,10 +588,15 @@ impl SolanaRpcClient {
                 addresses.len()
             )));
         }
-        resp.value
+        let accounts = resp
+            .value
             .into_iter()
             .map(|opt| opt.map(decode_account).transpose())
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RpcAccountsWithContext {
+            context_slot,
+            accounts,
+        })
     }
 
     /// `getSignaturesForAddress` — transaction signatures touching
@@ -1233,6 +1266,29 @@ mod multiple_accounts_tests {
         format!("http://{addr}/")
     }
 
+    async fn serve_once_without_context(value: serde_json::Value) -> String {
+        use axum::routing::post;
+        let app = axum::Router::new().route(
+            "/",
+            post(move || {
+                let v = value.clone();
+                async move {
+                    axum::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": { "value": v },
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}/")
+    }
+
     fn addrs(n: usize) -> Vec<Address> {
         // Distinct, valid addresses; the values do not matter, only the count.
         (0..n)
@@ -1297,6 +1353,17 @@ mod multiple_accounts_tests {
         assert_eq!(got.len(), 2);
         assert!(got[0].is_none(), "absent account stays at index 0");
         assert_eq!(got[1].as_ref().unwrap().data, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn oracle_read_rejects_a_response_without_context_slot() {
+        let url = serve_once_without_context(serde_json::json!([null])).await;
+        let rpc = SolanaRpcClient::new(url).unwrap();
+        let error = rpc
+            .get_multiple_accounts_with_context(&addrs(1))
+            .await
+            .expect_err("finalized oracle evidence needs the serving context slot");
+        assert!(format!("{error}").contains("context.slot"));
     }
 
     /// Over the RPC's own cap, the client refuses rather than silently

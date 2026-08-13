@@ -14,12 +14,15 @@ use axum::{
 use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::{build_router, ApiState};
 use darknyx_tee::matcher::TradingPauseReason;
+use darknyx_tee::oracle::OracleMode;
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use tower::ServiceExt;
 
 fn app() -> axum::Router {
-    build_router(Arc::new(ApiState::for_tests()))
+    build_router(Arc::new(
+        ApiState::for_tests().with_oracle_mode(OracleMode::PythSolanaPushV1),
+    ))
 }
 
 fn bearer() -> String {
@@ -70,6 +73,9 @@ async fn instruments_list_is_public() {
     assert_eq!(arr[0]["tick_size"], "1");
     assert_eq!(arr[0]["trading_enabled"], true);
     assert_eq!(arr[0]["oracle"]["type"], "pyth_pull_v2");
+    assert_eq!(arr[0]["oracle"]["source"], "pyth-solana-push-v1");
+    assert_eq!(arr[0]["oracle"]["max_age_ms"], 90_000);
+    assert!(arr[0]["oracle"]["account"].as_str().is_some());
 }
 
 #[tokio::test]

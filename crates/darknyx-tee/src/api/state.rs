@@ -35,7 +35,7 @@ use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::{FillMemo, MatcherState, TradingGate};
 use crate::merkle::{MerkleMirror, TreeAppendEvent};
-use crate::oracle::OracleCache;
+use crate::oracle::{OracleCache, OracleMode};
 use crate::persistence;
 use crate::settle::SettleSchedulerState;
 use crate::solana_rpc::SolanaRpcClient;
@@ -215,6 +215,9 @@ pub struct ApiState {
     /// written by `spawn_oracle_sync` (PR 4b) and read by the
     /// matcher tick.
     pub oracle: Option<OracleCache>,
+    /// Boot-selected oracle trust/transport mode, surfaced to clients so a
+    /// mainnet release can refuse the slower development profile.
+    pub oracle_mode: Option<OracleMode>,
 
     // ── Settle scheduler state (PR 4g.1) ────────────────────────
     /// Shared state the `SettleScheduler` task writes into. The
@@ -582,6 +585,7 @@ impl ApiState {
             market_trading_gates: HashMap::new(),
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
+            oracle_mode: None,
             settle_state: None,
             settle_enabled: false,
             solana_rpc: None,
@@ -651,6 +655,11 @@ impl ApiState {
     /// Idempotent.
     pub fn with_solana_rpc(mut self, rpc: SolanaRpcClient) -> Self {
         self.solana_rpc = Some(rpc);
+        self
+    }
+
+    pub fn with_oracle_mode(mut self, mode: OracleMode) -> Self {
+        self.oracle_mode = Some(mode);
         self
     }
 
@@ -972,6 +981,7 @@ impl ApiState {
             // long enough to be matched without intervention.
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             oracle: Some(OracleCache::new()),
+            oracle_mode: None,
             // No scheduler running by default — tests that need
             // to drive the `/settlement/status/*` endpoint must
             // spawn one and call `with_settle_state(...)`.

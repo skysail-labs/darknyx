@@ -232,7 +232,8 @@ for a `from_boot` CVM, or the `.devnet/e2e-config.json` mints for a real-mint CV
 Example (placeholder-mint CVM, partial-fill stress, 20 traders):
 
 ```sh
-RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
+RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+  ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --scenario partial-fill --fee-rate-bps 30 --traders 20 --duration-secs 25 --poll-orders 0.1
 ```

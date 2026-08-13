@@ -23,7 +23,7 @@ use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, NoteOpening, OrderOpening, TradingGate,
     TradingPauseReason, DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
-use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits, TrustProfile};
+use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits};
 use darknyx_tee::settle::Groth16ProofBytes;
 use darkpool_matcher::{
     book::{Order, OrderSide, OrderStatus, OrderType},
@@ -143,10 +143,10 @@ async fn seed_oracle(cache: &OracleCache, twap: u64) {
                 // the toy matcher prices exactly.
                 exponent: -2,
                 publish_time_ms: 0,
-                vaa_sequence: 1,
-                trust_profile: TrustProfile::RouterQuorumV1,
+                source_sequence: 1,
+                source: darknyx_tee::oracle::OracleSourceKind::DebugFixtureV1,
                 last_updated_ms: 0, // seed_unverified stamps it
-                vaa: Vec::new(),
+                evidence: Vec::new(),
             },
         )
         .await;

@@ -31,7 +31,7 @@ interface WireInstrument {
   tick_size?: unknown;
   min_order_size?: unknown;
   trading_enabled?: unknown;
-  oracle?: { type?: unknown; pubkey?: unknown };
+  oracle?: { type?: unknown; pubkey?: unknown; source?: unknown };
 }
 
 interface ValidatedWireInstrument {
@@ -40,6 +40,7 @@ interface ValidatedWireInstrument {
   minOrderSize: string;
   tradingEnabled: boolean;
   oracleFeed: string;
+  oracleSource: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
 }
 
 export interface BootstrapTrustedVenueOptions {
@@ -190,9 +191,14 @@ export async function bootstrapTrustedVenue(
       typeof wire.trading_enabled !== "boolean" ||
       wire.oracle?.type !== "pyth_pull_v2" ||
       typeof wire.oracle.pubkey !== "string" ||
-      !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey)
+      !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey) ||
+      (wire.oracle.source !== "pyth-router-quorum-v1" &&
+        wire.oracle.source !== "pyth-solana-push-v1")
     ) {
       throw new Error("venue returned a malformed instrument");
+    }
+    if (wire.oracle.source !== release.expectedOracleMode) {
+      throw new Error("venue oracle source does not match the client release pin");
     }
     if (seen.has(wire.symbol))
       throw new Error(`duplicate instrument ${wire.symbol}`);
@@ -207,6 +213,7 @@ export async function bootstrapTrustedVenue(
         minOrderSize: wire.min_order_size,
         tradingEnabled: wire.trading_enabled,
         oracleFeed: wire.oracle.pubkey,
+        oracleSource: wire.oracle.source,
       } satisfies ValidatedWireInstrument,
       base,
       quote,
@@ -256,10 +263,14 @@ export async function bootstrapTrustedVenue(
       minOrderSize,
       tradingEnabled: wire.tradingEnabled && market.enabled,
       oracleFeed: wire.oracleFeed,
+      oracleSource: wire.oracleSource,
     });
   }
 
   const status = await fetchSystemStatus(release.gatewayUrl, { fetchImpl });
+  if (status.oracle_mode !== release.expectedOracleMode) {
+    throw new Error("venue status oracle source does not match the client release pin");
+  }
   return Object.freeze({
     attestation,
     finalizedGovernanceSlot,

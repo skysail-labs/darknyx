@@ -24,7 +24,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
 use super::state::ApiState;
-use crate::oracle::{vaa::TrustProfile, CachedPrice};
+use crate::oracle::{CachedPrice, OracleSourceKind};
 
 #[derive(Debug, Deserialize)]
 pub struct OracleSeedRequest {
@@ -69,8 +69,8 @@ pub async fn seed_oracle(
                 confidence: req.confidence,
                 exponent: req.exponent,
                 publish_time_ms: 0,
-                vaa_sequence: 0,
-                trust_profile: TrustProfile::LegacyWormholeV1,
+                source_sequence: 0,
+                source: OracleSourceKind::DebugFixtureV1,
                 // `seed_unverified` stamps this to `now_ms()` before insert,
                 // so the entry is fresh by construction. The matcher's
                 // freshness check then passes for the configured
@@ -82,7 +82,7 @@ pub async fn seed_oracle(
                 // VAA; the v3 on-chain re-verify path would, but
                 // that's behind a `verify_match_batch` ix the loadgen
                 // doesn't exercise.
-                vaa: Vec::new(),
+                evidence: Vec::new(),
             },
         )
         .await;

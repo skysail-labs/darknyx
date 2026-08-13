@@ -464,7 +464,6 @@ HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
-test -n "$DARKNYX_TEE_PYTH_API_KEY"  # upgraded authenticated Hermes credential
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -476,7 +475,7 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
-DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
@@ -567,7 +566,8 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # PLACEHOLDER-MINT regime. Synthetic orders carry stub proofs, so their
 # settles fail gracefully (and under a flood you'll see Helius 429s — an RPC
 # capacity limit, not a code bug). Validates intake + paging, NOT settle.
-RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
+RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+  ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --fee-rate-bps 30 --traders 10 --duration-secs 25
 ```

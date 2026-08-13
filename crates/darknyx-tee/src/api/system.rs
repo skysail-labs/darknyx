@@ -24,6 +24,9 @@ pub struct SystemStatus {
     /// An oracle cache is attached (the clearing-price reference). Per-feed
     /// staleness is the matcher's own policy; this only reports presence.
     pub oracle_configured: bool,
+    /// Versioned boot-selected oracle producer/trust boundary.
+    pub oracle_mode: Option<&'static str>,
+    pub oracle_max_age_ms: Option<u64>,
     /// The TEE's current view of the Solana slot (drives expiry sweeps).
     pub current_slot: u64,
     pub version: &'static str,
@@ -40,6 +43,8 @@ pub async fn get_status(State(state): State<Arc<ApiState>>) -> Json<SystemStatus
         matcher_running,
         settle_enabled,
         oracle_configured: state.oracle.is_some(),
+        oracle_mode: state.oracle_mode.map(|mode| mode.as_str()),
+        oracle_max_age_ms: state.oracle_mode.map(|mode| mode.freshness().max_age_ms),
         current_slot: state.current_slot.load(Ordering::Relaxed),
         version: state.version,
     })

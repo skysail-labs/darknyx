@@ -38,7 +38,7 @@ use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, TradingGate, DEFAULT_MAX_ORACLE_AGE_MS,
     DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
-use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits, TrustProfile};
+use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::order_canonical::OrderCanonical;
@@ -219,10 +219,10 @@ async fn http_submit_two_crossing_orders_produces_match() {
                 confidence: 0,
                 exponent: -8,
                 publish_time_ms: 0,
-                vaa_sequence: 1,
-                trust_profile: TrustProfile::RouterQuorumV1,
+                source_sequence: 1,
+                source: darknyx_tee::oracle::OracleSourceKind::DebugFixtureV1,
                 last_updated_ms: 0,
-                vaa: Vec::new(),
+                evidence: Vec::new(),
             },
         )
         .await;
@@ -392,10 +392,10 @@ async fn http_submit_without_crossing_produces_no_match() {
                 confidence: 0,
                 exponent: -8,
                 publish_time_ms: 0,
-                vaa_sequence: 2,
-                trust_profile: TrustProfile::RouterQuorumV1,
+                source_sequence: 2,
+                source: darknyx_tee::oracle::OracleSourceKind::DebugFixtureV1,
                 last_updated_ms: 0,
-                vaa: Vec::new(),
+                evidence: Vec::new(),
             },
         )
         .await;

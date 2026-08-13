@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
 
-use super::vaa::TrustProfile;
+use super::source::OracleSourceKind;
 
 /// Identifier for a Pyth price feed. Hex-encoded 32-byte feed id
 /// from <https://pyth.network/developers/price-feed-ids>. E.g.
@@ -30,19 +30,20 @@ pub struct CachedPrice {
     pub exponent: i32,
     /// Pyth-reported publish time, milliseconds since UNIX epoch.
     pub publish_time_ms: u64,
-    /// Signed VAA sequence. It must increase when `publish_time_ms` increases;
-    /// exact replays never refresh local arrival health.
-    pub vaa_sequence: u64,
-    /// Explicit signer/emitter profile that authenticated this update.
-    pub trust_profile: TrustProfile,
+    /// Source-monotonic identity: router VAA sequence or finalized Pyth push
+    /// account `posted_slot`. It must advance with publish time; exact replays
+    /// never refresh local arrival health.
+    pub source_sequence: u64,
+    /// Explicit authentication provenance for this update.
+    pub source: OracleSourceKind,
     /// UNIX epoch milliseconds when this process accepted the update. Used
     /// alongside signed publish time: a healthy local fetch loop cannot make
     /// an old signed update fresh.
     pub last_updated_ms: u64,
-    /// Raw VAA bytes that backed this update. Kept for the
-    /// future v3 path where the on-chain `verify_match_batch`
-    /// re-verifies Pyth signatures directly.
-    pub vaa: Vec<u8>,
+    /// Source evidence. Router mode retains the raw VAA for a possible future
+    /// on-chain re-verification path; finalized push mode leaves this empty
+    /// because the verified Solana account is the evidence boundary.
+    pub evidence: Vec<u8>,
 }
 
 /// `OracleSnapshot` is what the matcher tick consumes — same shape
@@ -192,19 +193,19 @@ impl OracleCache {
                 continue;
             };
             if entry.publish_time_ms < previous.publish_time_ms
-                || entry.vaa_sequence < previous.vaa_sequence
+                || entry.source_sequence < previous.source_sequence
                 || (entry.publish_time_ms > previous.publish_time_ms
-                    && entry.vaa_sequence <= previous.vaa_sequence)
+                    && entry.source_sequence <= previous.source_sequence)
             {
                 return Err(OracleCacheError::NonMonotonic {
                     feed_id: feed_id.clone(),
                     previous_publish_time_ms: previous.publish_time_ms,
-                    previous_sequence: previous.vaa_sequence,
+                    previous_sequence: previous.source_sequence,
                     publish_time_ms: entry.publish_time_ms,
-                    sequence: entry.vaa_sequence,
+                    sequence: entry.source_sequence,
                 });
             }
-            // `(publish_time_ms, vaa_sequence)` identifies the message. Two
+            // `(publish_time_ms, source_sequence)` identifies the message. Two
             // payloads carrying that SAME pair but different authenticated
             // content means the source served us two different messages under
             // one identity — that is the conflict worth rejecting.
@@ -218,12 +219,12 @@ impl OracleCache {
             // below already skips only on BOTH fields matching — the two
             // predicates disagreed, and this one was the wrong half.
             if entry.publish_time_ms == previous.publish_time_ms
-                && entry.vaa_sequence == previous.vaa_sequence
+                && entry.source_sequence == previous.source_sequence
             {
                 let exact = entry.twap == previous.twap
                     && entry.confidence == previous.confidence
                     && entry.exponent == previous.exponent
-                    && entry.trust_profile == previous.trust_profile;
+                    && entry.source == previous.source;
                 if !exact {
                     return Err(OracleCacheError::ConflictingReplay {
                         feed_id: feed_id.clone(),
@@ -237,7 +238,7 @@ impl OracleCache {
         for (feed_id, mut entry) in entries.drain(..) {
             if guard.get(&feed_id).is_some_and(|previous| {
                 entry.publish_time_ms == previous.publish_time_ms
-                    && entry.vaa_sequence == previous.vaa_sequence
+                    && entry.source_sequence == previous.source_sequence
             }) {
                 continue;
             }
@@ -420,10 +421,10 @@ mod tests {
             confidence: 100_000,
             exponent: -8,
             publish_time_ms,
-            vaa_sequence: sequence,
-            trust_profile: TrustProfile::RouterQuorumV1,
+            source_sequence: sequence,
+            source: OracleSourceKind::PythRouterQuorumV1,
             last_updated_ms: 0,
-            vaa: vec![1, 2, 3],
+            evidence: vec![1, 2, 3],
         }
     }
 
@@ -593,7 +594,7 @@ mod tests {
 
         let stored = cache.get(FEED).await.expect("entry present");
         assert_eq!(stored.twap, 15_500_000_000, "the newer price must win");
-        assert_eq!(stored.vaa_sequence, 11);
+        assert_eq!(stored.source_sequence, 11);
 
         // The genuine conflict — same publish_time AND same sequence, different
         // authenticated content — is still rejected.
@@ -714,7 +715,7 @@ mod tests {
             .expect_err("one backwards feed must reject the whole batch");
         assert!(matches!(error, OracleCacheError::NonMonotonic { .. }));
         assert_eq!(cache.get("aa").await.unwrap().twap, 15_000_000_000);
-        assert_eq!(cache.get("aa").await.unwrap().vaa_sequence, 10);
+        assert_eq!(cache.get("aa").await.unwrap().source_sequence, 10);
     }
 
     #[tokio::test]
