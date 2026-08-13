@@ -27,6 +27,11 @@ export interface TeeInstrument {
   oracle: {
     type: "pyth_pull_v2";
     pubkey: string;
+    source: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
+    account?: string;
+    publish_time_ms: number | null;
+    age_ms: number | null;
+    max_age_ms: number | null;
   };
 }
 

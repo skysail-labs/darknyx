@@ -395,10 +395,32 @@ components:
             racing 503 from an order write.
         oracle:
           type: object
-          required: [type, pubkey]
+          required: [type, pubkey, source, publish_time_ms, age_ms, max_age_ms]
           properties:
-            type: { type: string, enum: [pyth_pull_v2] }
-            pubkey: { type: string, description: Pyth feed identifier (typically 32-byte hex). }
+            type:
+              type: string
+              enum: [pyth_pull_v2]
+              description: Stable Pyth adapter-family discriminator; inspect source for the active transport/trust boundary.
+            pubkey: { type: string, description: Pyth feed identifier (32-byte hex). }
+            source:
+              type: string
+              enum: [pyth-router-quorum-v1, pyth-solana-push-v1]
+              description: Versioned oracle source selected exclusively at CVM boot.
+            account:
+              type: string
+              description: Derived upgraded Pyth push-account PDA; present only for pyth-solana-push-v1.
+            publish_time_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Signed Pyth publish time of the currently cached price, or null before the first accepted update.
+            age_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Current age of the signed publish time, or null before the first accepted update.
+            max_age_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Source-specific fail-closed signed-age budget (5 s router; 90 s finalized push).
 
     PlaceOrderRequest:
       type: object
@@ -2076,7 +2098,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [degraded, matcher_running, settle_enabled, oracle_configured, current_slot, version]
+                required: [degraded, matcher_running, settle_enabled, oracle_configured, oracle_mode, oracle_max_age_ms, current_slot, version]
                 properties:
                   degraded:
                     type: boolean
@@ -2090,6 +2112,14 @@ paths:
                   oracle_configured:
                     type: boolean
                     description: An oracle cache (clearing-price reference) is attached.
+                  oracle_mode:
+                    type: [string, 'null']
+                    enum: [pyth-router-quorum-v1, pyth-solana-push-v1, null]
+                    description: Versioned oracle source selected exclusively at boot.
+                  oracle_max_age_ms:
+                    type: [integer, 'null']
+                    format: uint64
+                    description: Source-specific signed-price age budget.
                   current_slot: { type: integer, format: uint64 }
                   version: { type: string }
 

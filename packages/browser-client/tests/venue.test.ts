@@ -73,7 +73,11 @@ function attestation(): TeeAttestation {
 }
 
 function venueFetch(
-  options: { mismatchedTick?: boolean; marketEnabled?: boolean } = {},
+  options: {
+    mismatchedTick?: boolean;
+    marketEnabled?: boolean;
+    oracleSource?: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
+  } = {},
 ): typeof fetch {
   const [vault] = vaultConfigPda(PROGRAM);
   const [market] = marketConfigPda(PROGRAM, BASE, QUOTE);
@@ -105,7 +109,11 @@ function venueFetch(
           tick_size: options.mismatchedTick ? "101" : "100",
           min_order_size: "10000",
           trading_enabled: true,
-          oracle: { type: "pyth_pull_v2", pubkey: "ab".repeat(32) },
+          oracle: {
+            type: "pyth_pull_v2",
+            pubkey: "ab".repeat(32),
+            source: options.oracleSource ?? "pyth-solana-push-v1",
+          },
         },
       ]);
     }
@@ -115,6 +123,8 @@ function venueFetch(
         matcher_running: true,
         settle_enabled: true,
         oracle_configured: true,
+        oracle_mode: options.oracleSource ?? "pyth-solana-push-v1",
+        oracle_max_age_ms: 90_000,
         current_slot: 4243,
         version: "test",
       });
@@ -135,6 +145,7 @@ const RELEASE = {
   rpcUrl: "https://rpc.example/",
   vaultProgramId: PROGRAM.toBase58(),
   expectedComposeHash: "ab".repeat(32),
+  expectedOracleMode: "pyth-solana-push-v1" as const,
 };
 
 describe("strict browser venue bootstrap", () => {
@@ -185,6 +196,16 @@ describe("strict browser venue bootstrap", () => {
           String(input).endsWith("/api/darknyx/session"),
         ),
     ).toBe(false);
+  });
+
+  it("fails closed when the boot-selected oracle source differs from the release pin", async () => {
+    await expect(
+      bootstrapTrustedVenue(RELEASE, {
+        fetchImpl: venueFetch({ oracleSource: "pyth-router-quorum-v1" }),
+        origin: "https://app.example",
+        attestationVerifier: async () => attestation(),
+      }),
+    ).rejects.toThrow("oracle source does not match the client release pin");
   });
 
   it("fails closed on signer-set drift and a disabled governed market", async () => {

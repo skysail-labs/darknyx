@@ -75,7 +75,7 @@ crates/darknyx-tee/src/
 │       system.rs, transparency.rs
 ├── keys/                 dstack key derivation
 ├── matcher/              book, interval driver, lifecycle, fill/opening state
-├── oracle/               Hermes accumulator/VAA verification and shared cache
+├── oracle/               boot-selected Pyth source verification and shared cache
 ├── merkle/               K cold-boot/live mirrors
 ├── prover/               witness, leaf/constraint guards, ark/rapidsnark/icicle
 ├── settle/               lock, proof, ALT, Tx D, outcomes, metrics, sweepers
@@ -176,7 +176,7 @@ context; clients cancel and place a fresh order.
 Any configured market missing/disabled at finalized governance refresh, any
 signer/config mismatch, or an untrustworthy finalized governance/configuration
 refresh state pauses **new trading venue-wide**. Cancellation, outcome
-reconciliation, and cleanup continue. Hermes/oracle refresh failures are scoped
+reconciliation, and cleanup continue. Oracle refresh failures are scoped
 to markets bound to the affected feed; healthy markets continue.
 
 The current on-chain `VaultConfig.tee_pubkeys` is global, so one vault assumes
@@ -251,14 +251,21 @@ account/session setting served through `/v1/stream`.
 
 ## 6. Oracle model
 
-Each market names a Pyth feed. A shared sync task fetches all unique feeds in
-one authenticated Hermes accumulator request. Deployment selects a complete,
-versioned trust profile—legacy Wormhole 13-of-19 or upgraded Pyth router
-3-of-5—and verification binds the exact signer set, quorum, Pyth emitter, and
-Merkle-included price message. Profiles cannot be mixed or inferred from an
-incoming VAA.
+Each market names a Pyth feed. Exactly one versioned source owns the shared
+cache for a CVM boot:
 
-The cache preserves the signed Pyth publish time and VAA sequence. It rejects
+- `pyth-router-quorum-v1` is the mainnet low-latency path. It uses the upgraded
+  authenticated Pyth router, independently verifies the pinned 3-of-5 signer
+  set, emitter, and Merkle-included price message, polls once per second, and
+  fails closed when signed price age exceeds 5 seconds.
+- `pyth-solana-push-v1` is the development path. It reads upgraded sponsored
+  `PriceUpdateV2` accounts through the configured private Solana RPC at
+  finalized commitment, derives every feed PDA, and checks receiver ownership,
+  write authority, feed identity, full verification, and finalized posted slot.
+  Pyth's roughly one-minute heartbeat is covered by a 90-second signed-age
+  budget. It is not the launch configuration for the two-second product.
+
+The cache preserves the signed Pyth publish time and source sequence. It rejects
 stale, future-dated, replay-conflicting, or non-monotonic batches atomically;
 an exact replay cannot refresh local health. The raw Pyth mantissa/exponent is
 converted with checked integer arithmetic into each governed market's atomic
@@ -271,9 +278,11 @@ reason. New place/modify and matching pause only for markets bound to the
 affected feed, while healthy markets, cancellation, and settlement
 reconciliation continue. Recovery of governance health cannot clear an oracle
 pause (or vice versa), and a healthy market cannot clear another's oracle
-reason. Normal refresh uses one authenticated batched Hermes request; if it
-fails, a bounded per-feed fallback isolates a bad feed while preserving strict
-verification on every accepted update.
+reason. Router mode batches feeds and can isolate a bad feed with bounded
+fallbacks. Push mode reads all derived accounts in one finalized RPC request
+and applies each independently. In either mode, a transient fetch failure never
+evicts the last verified value or blocks proving/settlement work; new matching
+continues only while that value remains within the mode's signed-age budget.
 
 The oracle, signed limits, tick size, minimum size, and circuit-breaker band are
 not VALID_MATCH_BATCH inputs. They are attested-matcher policy. The proof binds:

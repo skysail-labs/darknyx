@@ -11,8 +11,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
-use crate::oracle::hermes::{DEFAULT_HERMES_ENDPOINT, UPGRADED_HERMES_ENDPOINT};
-use crate::oracle::vaa::TrustProfile;
+use crate::oracle::hermes::UPGRADED_HERMES_ENDPOINT;
+use crate::oracle::OracleMode;
 
 pub const MAX_MARKETS_PER_CVM: usize = 16;
 
@@ -87,11 +87,12 @@ pub struct Config {
     /// market via `DARKNYX_TEE_MARKETS_JSON`; the singular compatibility path
     /// uses `DARKNYX_TEE_FEED_IDS`. Each entry is a 64-char-hex Pyth feed id.
     pub feed_ids: Vec<String>,
-    /// Complete signer/emitter/quorum profile for the Pyth payload generation.
-    /// This is explicit and versioned; it is never selected from VAA fields.
-    pub pyth_trust_profile: TrustProfile,
-    /// Hermes base URL. The router profile defaults to the upgraded authenticated
-    /// endpoint; the legacy profile defaults to the pre-cutover endpoint.
+    /// Exactly one versioned oracle producer. Development defaults to finalized
+    /// upgraded Pyth Core push accounts; mainnet policy explicitly selects the
+    /// licensed low-latency router mode.
+    pub oracle_mode: OracleMode,
+    /// Hermes base URL. Used only by `pyth-router-quorum-v1` and defaulted to
+    /// the authenticated upgraded service. There is no legacy endpoint path.
     pub hermes_endpoint: String,
     /// Bearer credential supplied only through encrypted deployment env. Its
     /// `Debug` implementation is redacted.
@@ -221,6 +222,15 @@ fn validate_hermes_endpoint(endpoint: &str) -> Result<()> {
     {
         bail!(
             "DARKNYX_TEE_HERMES_ENDPOINT must not contain credentials, query parameters, or a fragment"
+        );
+    }
+    if !loopback
+        && (parsed.scheme() != "https"
+            || parsed.host_str() != Some("pyth.dourolabs.app")
+            || parsed.path().trim_end_matches('/') != "/hermes")
+    {
+        bail!(
+            "DARKNYX_TEE_HERMES_ENDPOINT must be the upgraded authenticated Pyth router endpoint (or loopback for tests)"
         );
     }
     Ok(())
@@ -481,15 +491,11 @@ impl Config {
                     .collect()
             })
             .unwrap_or_default();
-        let pyth_trust_profile =
-            env_string_or("DARKNYX_TEE_PYTH_TRUST_PROFILE", TrustProfile::LEGACY_NAME)
-                .parse::<TrustProfile>()
-                .context("DARKNYX_TEE_PYTH_TRUST_PROFILE")?;
-        let default_hermes_endpoint = match pyth_trust_profile {
-            TrustProfile::LegacyWormholeV1 => DEFAULT_HERMES_ENDPOINT,
-            TrustProfile::RouterQuorumV1 => UPGRADED_HERMES_ENDPOINT,
-        };
-        let hermes_endpoint = env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", default_hermes_endpoint);
+        let oracle_mode = env_string_or("DARKNYX_TEE_ORACLE_MODE", OracleMode::default().as_str())
+            .parse::<OracleMode>()
+            .context("DARKNYX_TEE_ORACLE_MODE")?;
+        let hermes_endpoint =
+            env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", UPGRADED_HERMES_ENDPOINT);
         validate_hermes_endpoint(&hermes_endpoint)?;
         let pyth_api_key = env_nonempty("DARKNYX_TEE_PYTH_API_KEY").map(SecretString);
 
@@ -539,11 +545,20 @@ impl Config {
         };
         validate_market_oracle_invariant(&markets)?;
         let mut seen_feeds = HashSet::new();
-        let feed_ids = markets
+        let feed_ids: Vec<String> = markets
             .iter()
             .map(|market| market.oracle_feed_id.clone())
             .filter(|feed| !feed.is_empty() && seen_feeds.insert(feed.clone()))
             .collect();
+        if oracle_mode == OracleMode::PythRouterQuorumV1
+            && !feed_ids.is_empty()
+            && pyth_api_key.is_none()
+        {
+            bail!(
+                "DARKNYX_TEE_PYTH_API_KEY is required when DARKNYX_TEE_ORACLE_MODE={} and feeds are configured",
+                OracleMode::ROUTER_NAME
+            );
+        }
         let governed_market =
             env_nonempty("DARKNYX_TEE_MARKETS_JSON").is_some() || (base_mint_set && quote_mint_set);
         let primary = markets
@@ -562,7 +577,7 @@ impl Config {
             dstack_socket,
             allow_test_auth,
             feed_ids,
-            pyth_trust_profile,
+            oracle_mode,
             hermes_endpoint,
             pyth_api_key,
             sync_from_slot: parse_u64_env("DARKNYX_TEE_SYNC_FROM_SLOT", 0)?,
@@ -724,8 +739,9 @@ mod tests {
 
     #[test]
     fn hermes_endpoint_rejects_secret_bearing_or_plaintext_remote_urls() {
-        validate_hermes_endpoint("https://pyth.example/hermes").unwrap();
+        validate_hermes_endpoint("https://pyth.dourolabs.app/hermes").unwrap();
         validate_hermes_endpoint("http://127.0.0.1:8080").unwrap();
+        assert!(validate_hermes_endpoint("https://pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("http://pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://key@pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://pyth.example/hermes?key=secret").is_err());

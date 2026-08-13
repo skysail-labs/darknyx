@@ -24,6 +24,7 @@ const allowed = new Set([
   "venue-id",
   "vault-program-id",
   "expected-compose-hash",
+  "expected-oracle-mode",
   "expected-mrtd",
   "artifact-key-id",
   "circuit-version",
@@ -54,6 +55,13 @@ const hex64 = (name) => {
   const value = required(name);
   if (!/^[0-9a-f]{64}$/.test(value)) {
     throw new Error(`--${name} must be 32-byte lowercase hex`);
+  }
+  return value;
+};
+const oracleMode = () => {
+  const value = required("expected-oracle-mode");
+  if (value !== "pyth-router-quorum-v1" && value !== "pyth-solana-push-v1") {
+    throw new Error("--expected-oracle-mode is not a supported versioned source");
   }
   return value;
 };
@@ -165,6 +173,7 @@ try {
     rpc_url: new URL("/api/darknyx/rpc", origin).toString(),
     vault_program_id: required("vault-program-id"),
     expected_compose_hash: hex64("expected-compose-hash"),
+    expected_oracle_mode: oracleMode(),
     ...(args.has("expected-mrtd")
       ? { expected_mrtd: hex64("expected-mrtd") }
       : {}),

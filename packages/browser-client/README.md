@@ -91,6 +91,9 @@ fresh content-addressed application build. The private key is accepted only as
 zeroes only its decoded `keyBytes` buffer; the base64 environment value and the
 OpenSSL `KeyObject` cannot be explicitly erased by Node. Run assembly in a
 short-lived isolated process and unset the environment value immediately.
+Pass `--expected-oracle-mode=pyth-solana-push-v1` for development releases or
+`--expected-oracle-mode=pyth-router-quorum-v1` for the low-latency launch
+release; bootstrap rejects a venue whose reported source differs from this pin.
 
 With that assembled release served by the standalone trader host, the explicit
 live browser gate is:

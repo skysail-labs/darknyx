@@ -135,9 +135,6 @@ umask 077
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
-# Obtain this bearer credential from Pyth/Douro Labs. It is required by the
-# upgraded Hermes endpoint and must stay only in this encrypted env file.
-test -n "$DARKNYX_TEE_PYTH_API_KEY"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -149,7 +146,7 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
-DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
@@ -162,6 +159,12 @@ DARKNYX_TEE_NUM_TREES=$K
 DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1
 EOF
 ```
+
+This rehearsal intentionally selects `pyth-solana-push-v1`: it reads upgraded
+Pyth sponsored push accounts through `DARKNYX_TEE_SOLANA_RPC_URL` at finalized
+commitment and needs no Pyth API key. A launch release instead selects
+`pyth-router-quorum-v1`, supplies `DARKNYX_TEE_PYTH_API_KEY` only through this
+encrypted env, and pins that source in the browser release manifest.
 
 Omitting both mint variables selects the explicit placeholder-mint loadgen mode:
 intake and matcher paging remain available, but the on-chain settlement driver is
@@ -439,10 +442,6 @@ boots exactly two markets at C2:
 set -a
 . packages/sdk/.env
 set +a
-# Export the private Hermes credential from its local secret store; the
-# generator fails closed rather than producing an oracle-paused deployment.
-test -n "$DARKNYX_TEE_PYTH_API_KEY"
-
 # Creates/reuses the second market and writes public, gitignored fixture data.
 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/setup-second-devnet-market.mjs

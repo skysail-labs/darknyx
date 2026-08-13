@@ -13,6 +13,7 @@ export interface BrowserApplicationRelease {
   rpc_url: string;
   vault_program_id: string;
   expected_compose_hash: string;
+  expected_oracle_mode: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
   expected_mrtd?: string;
   artifact_manifest_url: string;
   artifact_set_id: string;
@@ -31,6 +32,7 @@ const REQUIRED = [
   "rpc_url",
   "vault_program_id",
   "expected_compose_hash",
+  "expected_oracle_mode",
   "artifact_manifest_url",
   "artifact_set_id",
   "artifact_protocol_version",
@@ -81,6 +83,8 @@ export function parseBrowserApplicationRelease(
     !BASE58.test(release.vault_program_id) ||
     typeof release.expected_compose_hash !== "string" ||
     !HEX64.test(release.expected_compose_hash) ||
+    (release.expected_oracle_mode !== "pyth-router-quorum-v1" &&
+      release.expected_oracle_mode !== "pyth-solana-push-v1") ||
     (release.expected_mrtd !== undefined &&
       (typeof release.expected_mrtd !== "string" ||
         !HEX64.test(release.expected_mrtd))) ||
@@ -119,6 +123,7 @@ export function releaseVenueConfig(
     rpcUrl: release.rpc_url,
     vaultProgramId: release.vault_program_id,
     expectedComposeHash: release.expected_compose_hash,
+    expectedOracleMode: release.expected_oracle_mode,
     ...(release.expected_mrtd ? { expectedMrtd: release.expected_mrtd } : {}),
   };
 }

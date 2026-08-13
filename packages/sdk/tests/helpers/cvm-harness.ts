@@ -52,6 +52,7 @@ import { proveValidInput } from "./valid-input-prover.js";
 import { be32ToBigInt, loadOrCreateKeypair } from "./e2e-helpers.js";
 import { deriveDepositInnerHash } from "../../src/utxo/deposit-inner.js";
 import { nodeValidDepositProver } from "../../src/zk/valid-deposit-prover.js";
+import { fetchPythCorePushPrice } from "../../src/oracle/pyth-push.js";
 
 const REPO_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -122,7 +123,7 @@ export const scaledQuote = (
   return (baseAmount * price) / priceScale;
 };
 
-/** Round a positive test price down to the finalized market tick. Live Hermes
+/** Round a positive test price down to the finalized market tick. Live oracle
  *  prices are not guaranteed to be tick-aligned, while production intake now
  *  rejects every off-tick nonzero limit (U-08). */
 export const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
@@ -166,21 +167,25 @@ export async function fetchBootSessionId(gateway: string): Promise<Uint8Array> {
   return Uint8Array.from(Buffer.from(body.boot_session_id, "hex"));
 }
 
-/** Fetch the live raw SOL/USD price integer the CVM's oracle uses. */
-export async function fetchOracleAnchor(): Promise<bigint> {
+/** Fetch the finalized upgraded Pyth Core push EMA the CVM uses in dev mode. */
+export async function fetchOracleAnchorForFeed(feedId: string): Promise<bigint> {
   if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
-  const url = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`;
-  const j = (await (await fetch(url)).json()) as {
-    parsed?: { price: { price: string; expo: number } }[];
-  };
-  if (!j.parsed || j.parsed.length === 0) {
-    throw new Error(`Hermes returned no price data for ${SOL_USD_FEED}`);
-  }
-  const raw = BigInt(j.parsed[0].price.price);
+  const rpc = process.env.SOLANA_RPC_URL?.trim();
+  if (!rpc) throw new Error("SOLANA_RPC_URL is required for Pyth push prices");
+  const price = await fetchPythCorePushPrice(
+    new Connection(rpc, "finalized"),
+    feedId,
+  );
+  const raw = price.emaPrice;
   console.log(
-    `  · oracle anchor (raw SOL/USD): ${raw} (expo ${j.parsed[0].price.expo})`,
+    `  · oracle anchor (finalized Pyth push EMA): ${raw} (expo ${price.exponent}, age ${Date.now() - Number(price.publishTime * 1000n)} ms)`,
   );
   return raw;
+}
+
+/** Fetch the live raw SOL/USD EMA integer the CVM's oracle uses. */
+export async function fetchOracleAnchor(): Promise<bigint> {
+  return fetchOracleAnchorForFeed(SOL_USD_FEED);
 }
 
 /** Acquire a bearer token from the CVM's bootstrap admin creds. */

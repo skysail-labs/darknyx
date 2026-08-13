@@ -13,7 +13,7 @@
 //!      driver, and output channel per configured pair).
 //!   5. Spawn long-running tokio tasks:
 //!      - one `MatcherDriver` per market — ticks every `BATCH_MS`;
-//!      - one shared `oracle_sync` — refreshes every configured Hermes feed;
+//!      - one shared `oracle_sync` — refreshes every configured Pyth feed;
 //!      - one settlement scheduler per market, sharing the prover, ALT pool,
 //!        signer set, and venue-wide batch-concurrency budget.
 //!   6. Thread the matcher registry into `ApiState` so signed symbols route
@@ -34,12 +34,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, TradingGate, TradingPauseReason,
-    DEFAULT_MAX_ORACLE_AGE_MS, DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
 use darknyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
-use darknyx_tee::oracle::cache::{FreshnessPolicy, OracleCache, OracleUnits};
+use darknyx_tee::oracle::cache::{OracleCache, OracleUnits};
 use darknyx_tee::oracle::hermes::HermesClient;
+use darknyx_tee::oracle::push::{spawn_push_oracle_sync, PushSyncConfig};
 use darknyx_tee::oracle::sync::{spawn_oracle_sync, MarketOracleBinding, SyncConfig};
+use darknyx_tee::oracle::{OracleMode, TrustProfile};
 #[cfg(feature = "icicle")]
 use darknyx_tee::prover::IcicleMatchBatchProver;
 #[cfg(feature = "rapidsnark")]
@@ -301,15 +302,15 @@ async fn main() -> Result<()> {
     }
 
     let oracle = OracleCache::new();
+    let oracle_policy = cfg.oracle_mode.freshness();
     if !cfg.feed_ids.is_empty() {
         for market_gate in &market_trading_gates {
             market_gate.pause_for(TradingPauseReason::Oracle);
         }
         tracing::info!(
-            profile = cfg.pyth_trust_profile.as_str(),
-            endpoint = cfg.hermes_endpoint,
-            api_key_configured = cfg.pyth_api_key.is_some(),
-            "trading starts PAUSED until the first authenticated, fresh oracle batch"
+            source = cfg.oracle_mode.as_str(),
+            max_age_ms = oracle_policy.max_age_ms,
+            "trading starts PAUSED until the first verified, fresh oracle update"
         );
     }
     let current_slot = Arc::new(AtomicU64::new(1));
@@ -356,8 +357,8 @@ async fn main() -> Result<()> {
                     market.oracle_feed_id.clone()
                 },
                 batch_ms: 2000,
-                max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
-                max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+                max_oracle_age_ms: oracle_policy.max_age_ms,
+                max_oracle_future_skew_ms: oracle_policy.max_future_skew_ms,
                 oracle_units: market_oracle_units[market_index],
                 max_matches_per_batch: PRODUCTION_BATCH_N,
             },
@@ -387,27 +388,43 @@ async fn main() -> Result<()> {
         );
         None
     } else {
-        let client = HermesClient::with_endpoint_and_token(
-            &cfg.hermes_endpoint,
-            cfg.pyth_api_key.as_ref().map(|secret| secret.expose()),
-        )?;
-        let handle = spawn_oracle_sync(
-            oracle.clone(),
-            client,
-            SyncConfig {
-                feed_ids: cfg.feed_ids.clone(),
-                market_bindings: oracle_bindings,
-                trust_profile: cfg.pyth_trust_profile,
-                freshness: FreshnessPolicy {
-                    max_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
-                    max_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
-                },
-                interval: Duration::from_secs(1),
-            },
-        );
+        let handle = match cfg.oracle_mode {
+            OracleMode::PythRouterQuorumV1 => {
+                let client = HermesClient::with_endpoint_and_token(
+                    &cfg.hermes_endpoint,
+                    cfg.pyth_api_key.as_ref().map(|secret| secret.expose()),
+                )?;
+                spawn_oracle_sync(
+                    oracle.clone(),
+                    client,
+                    SyncConfig {
+                        feed_ids: cfg.feed_ids.clone(),
+                        market_bindings: oracle_bindings,
+                        trust_profile: TrustProfile::RouterQuorumV1,
+                        freshness: oracle_policy,
+                        interval: cfg.oracle_mode.refresh_interval(),
+                    },
+                )
+            }
+            OracleMode::PythSolanaPushV1 => {
+                let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?
+                    .with_commitment(Commitment::Finalized);
+                spawn_push_oracle_sync(
+                    oracle.clone(),
+                    rpc,
+                    PushSyncConfig {
+                        feed_ids: cfg.feed_ids.clone(),
+                        market_bindings: oracle_bindings,
+                        freshness: oracle_policy,
+                        interval: cfg.oracle_mode.refresh_interval(),
+                    },
+                )
+            }
+        };
         tracing::info!(
             feed_count = cfg.feed_ids.len(),
-            profile = cfg.pyth_trust_profile.as_str(),
+            source = cfg.oracle_mode.as_str(),
+            max_age_ms = oracle_policy.max_age_ms,
             "batched oracle sync task spawned"
         );
         Some(handle)
@@ -546,6 +563,7 @@ async fn main() -> Result<()> {
     };
     let api_state = api_state
         .with_instruments(instruments)
+        .with_oracle_mode(cfg.oracle_mode)
         .with_market_runtimes(matchers, current_slot, oracle.clone())
         .with_market_trading_gates(market_gates)
         .with_settle_state(settle_state)

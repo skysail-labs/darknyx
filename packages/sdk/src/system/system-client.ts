@@ -17,6 +17,8 @@ export interface SystemStatus {
   matcher_running: boolean;
   settle_enabled: boolean;
   oracle_configured: boolean;
+  oracle_mode: "pyth-router-quorum-v1" | "pyth-solana-push-v1" | null;
+  oracle_max_age_ms: number | null;
   current_slot: number;
   version: string;
 }

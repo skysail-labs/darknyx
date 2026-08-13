@@ -14,6 +14,7 @@ const release = {
   rpc_url: "https://app.example/api/darknyx/rpc",
   vault_program_id: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   expected_compose_hash: "ab".repeat(32),
+  expected_oracle_mode: "pyth-solana-push-v1" as const,
   artifact_manifest_url: "https://app.example/artifacts/manifest.json",
   artifact_set_id: "client-artifacts-v1",
   artifact_protocol_version: 1,
@@ -32,6 +33,7 @@ describe("production browser release", () => {
       rpcUrl: "https://app.example/api/darknyx/rpc",
       vaultProgramId: release.vault_program_id,
       expectedComposeHash: release.expected_compose_hash,
+      expectedOracleMode: "pyth-solana-push-v1",
     });
     expect(decodeReleasePublicKey(parsed.artifact_public_key)).toEqual(
       new Uint8Array(32).fill(7),

@@ -11,6 +11,8 @@ export interface VenueReleaseConfig {
   vaultProgramId: string;
   /** Audited compose hash pinned by the client release, never the gateway. */
   expectedComposeHash: string;
+  /** Oracle source this client release accepts for the venue. */
+  expectedOracleMode: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
   expectedMrtd?: string;
   /** Relative, same-origin endpoint. Defaults to `/api/darknyx/session`. */
   sessionEndpoint?: string;
@@ -27,6 +29,7 @@ export interface TrustedInstrument {
   minOrderSize: bigint;
   tradingEnabled: boolean;
   oracleFeed: string;
+  oracleSource: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
 }
 
 export interface TrustedVenueIdentity {

@@ -34,8 +34,8 @@ pub mod vault_config;
 
 pub use client::redact_endpoint;
 pub use client::{
-    AddressTxPage, BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo, RpcAddressTx,
-    RpcInstruction, RpcSignatureInfo, RpcSignatureStatus, RpcSimulationResult, RpcTransaction,
-    SolanaRpcClient, TxSortOrder, MAX_MULTIPLE_ACCOUNTS,
+    AddressTxPage, BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo,
+    RpcAccountsWithContext, RpcAddressTx, RpcInstruction, RpcSignatureInfo, RpcSignatureStatus,
+    RpcSimulationResult, RpcTransaction, SolanaRpcClient, TxSortOrder, MAX_MULTIPLE_ACCOUNTS,
 };
 pub use error::RpcError;
