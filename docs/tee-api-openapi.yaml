@@ -420,7 +420,7 @@ components:
             max_age_ms:
               type: [integer, 'null']
               format: uint64
-              description: Source-specific fail-closed signed-age budget (5 s router; 90 s finalized push).
+              description: Source-specific fail-closed signed-age budget (5 s router; 7 min development finalized push).
 
     PlaceOrderRequest:
       type: object

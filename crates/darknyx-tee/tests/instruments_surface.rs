@@ -74,7 +74,7 @@ async fn instruments_list_is_public() {
     assert_eq!(arr[0]["trading_enabled"], true);
     assert_eq!(arr[0]["oracle"]["type"], "pyth_pull_v2");
     assert_eq!(arr[0]["oracle"]["source"], "pyth-solana-push-v1");
-    assert_eq!(arr[0]["oracle"]["max_age_ms"], 90_000);
+    assert_eq!(arr[0]["oracle"]["max_age_ms"], 420_000);
     assert!(arr[0]["oracle"]["account"].as_str().is_some());
 }
 
