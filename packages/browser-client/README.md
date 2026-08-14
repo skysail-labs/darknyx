@@ -112,7 +112,7 @@ RUN_CVM_BROWSER_E2E=1 \
 It launches real Chrome and succeeds only after the production bundle verifies
 the TDX quote, signed compose measurement, finalized signer/config accounts,
 and live governed markets. It does not provision custody or ask for a passkey;
-the separate browser-custody suite covers that permissioned flow.
+this package's `test:custody` suite covers that permissioned flow separately.
 
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,

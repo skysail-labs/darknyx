@@ -675,9 +675,10 @@ adversarial same-origin test. Passing performance alone selects nothing. If the
 review fails, use a signed Tauri shell with native custody/proving and internal
 IPC; do not bridge secrets over localhost HTTP.
 
-The first focused mechanism spike is now **[MEASURED]** in
-[`packages/browser-custody-spike`](../packages/browser-custody-spike) with its
-evidence contract in
+The first focused mechanism spike is **[MEASURED AND RETIRED]**. Its executable
+prototype was removed after the selected design landed in
+`packages/browser-client`; Git history retains the prototype and its evidence
+contract remains in
 [`docs/benchmarks/browser-custody/README.md`](benchmarks/browser-custody/README.md).
 It provisioned a 64-byte seed inside a Worker, persisted only AES-GCM ciphertext
 in IndexedDB, unlocked through a user-verified WebAuthn PRF credential, rejected
