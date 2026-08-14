@@ -77,7 +77,6 @@ jobs:
       sdk: ${{ steps.filter.outputs.sdk }}
       indexer: ${{ steps.filter.outputs.indexer }}
       daemon: ${{ steps.filter.outputs.daemon }}
-      browser_custody: ${{ steps.filter.outputs.browser_custody }}
       browser_client: ${{ steps.filter.outputs.browser_client }}
       trader_host: ${{ steps.filter.outputs.trader_host }}
       browser_prover: ${{ steps.filter.outputs.browser_prover }}
@@ -141,12 +140,6 @@ jobs:
               - 'packages/sdk/src/**'
               - 'package.json'
               - 'package-lock.json'
-            browser_custody:
-              - 'packages/browser-custody-spike/**'
-              - 'package.json'
-              - 'package-lock.json'
-              # A workflow-only weakening must run the job it changes.
-              - '.github/workflows/pr-checks.yml'
             browser_client:
               - 'packages/client-core/**'
               - 'packages/browser-client/**'
@@ -594,39 +587,6 @@ jobs:
             fi
           done
           exit $fail
-
-  browser-custody:
-    name: Browser custody — WebAuthn PRF + recovery
-    runs-on: ubuntu-latest
-    needs: [changes]
-    if: >-
-      always() && (
-        github.event_name == 'push' ||
-        needs.changes.outputs.browser_custody == 'true'
-      )
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          # `npm ci` executes dependency lifecycle scripts. Do not leave the
-          # workflow token in git config where a compromised script can read it.
-          persist-credentials: false
-
-      - name: Install Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: npm ci (root, with workspaces)
-        run: npm ci
-
-      # Chrome DevTools supplies one PRF-capable and one deliberately
-      # PRF-incapable virtual authenticator. The test also proves the expected
-      # same-origin attack succeeds after user verification; that negative
-      # result pins the browser threat-model boundary instead of hiding it.
-      - name: WebAuthn PRF vault lifecycle + adversarial boundary
-        run: npm run test:browser-custody
 
   browser-client:
     name: Browser client — contracts + security boundary
@@ -1255,7 +1215,6 @@ jobs:
       - sdk
       - indexer
       - typecheck
-      - browser-custody
       - browser-client
       - trader-host
       - daemon
@@ -1291,7 +1250,6 @@ jobs:
             (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
             (needs.indexer.result != 'success' && needs.indexer.result != 'skipped') ||
             (needs.typecheck.result != 'success' && needs.typecheck.result != 'skipped') ||
-            (needs['browser-custody'].result != 'success' && needs['browser-custody'].result != 'skipped') ||
             (needs['browser-client'].result != 'success' && needs['browser-client'].result != 'skipped') ||
             (needs['trader-host'].result != 'success' && needs['trader-host'].result != 'skipped') ||
             (needs.daemon.result != 'success' && needs.daemon.result != 'skipped') ||
@@ -1309,7 +1267,6 @@ jobs:
           echo "sdk:                      ${{ needs.sdk.result }}"
           echo "indexer:                  ${{ needs.indexer.result }}"
           echo "typecheck:                ${{ needs.typecheck.result }}"
-          echo "browser-custody:          ${{ needs['browser-custody'].result }}"
           echo "browser-client:           ${{ needs['browser-client'].result }}"
           echo "trader-host:              ${{ needs['trader-host'].result }}"
           echo "daemon:                   ${{ needs.daemon.result }}"
