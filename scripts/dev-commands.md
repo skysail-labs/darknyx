@@ -443,7 +443,8 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$HELIUS")              # cold-boot floor (so the sync rebuilds the CURRENT tree)
 cat > /tmp/darknyx.env <<EOF
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
-DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
+DARKNYX_TEE_DEPLOYMENT_TIER=development
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
@@ -465,9 +466,10 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | Var | Used by | Notes |
 |---|---|---|
 | `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
-| `DARKNYX_TEE_PYTH_TRUST_PROFILE` | oracle trust root | Strict versioned profile: `legacy-wormhole-v1` or `router-quorum-v1`. Production compose selects the upgraded router 3-of-5 profile; no profile is inferred from a VAA. |
-| `DARKNYX_TEE_HERMES_ENDPOINT` | oracle transport | Profile-dependent default. Production compose pins `https://pyth.dourolabs.app/hermes`. |
-| `DARKNYX_TEE_PYTH_API_KEY` | authenticated Hermes | Bearer credential supplied only through encrypted deploy env. Missing/invalid auth keeps new trading paused; never log or commit it. |
+| `DARKNYX_TEE_DEPLOYMENT_TIER` | boot policy | Set `development` explicitly for CVM/devnet push rehearsals. Mainnet composes default to `mainnet`, which rejects push mode or a missing router credential. |
+| `DARKNYX_TEE_ORACLE_MODE` | oracle source + freshness | Exactly one versioned mode: `pyth-solana-push-v1` (development, finalized Solana push account, 7 min) or `pyth-router-quorum-v1` (mainnet low-latency, upgraded router 3-of-5, 5 s). |
+| `DARKNYX_TEE_HERMES_ENDPOINT` | router-only transport | The router mode accepts the upgraded `https://pyth.dourolabs.app/hermes` endpoint (loopback is allowed only for tests). Ignored by push mode. |
+| `DARKNYX_TEE_PYTH_API_KEY` | router-only credential | Bearer credential supplied only through encrypted deploy env. Required in router mode; ignored by push mode. Never log or commit it. |
 | `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
 | `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58; supply both or neither. **Omit both → placeholder dev mints with settlement disabled** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints and have finalized `VaultConfig` + `MarketConfig` available. |
 | `DARKNYX_TEE_MARKET_SYMBOL` | API + signed order routing | Display/canonical order symbol for the configured mint pair (default `SOL-USDC`; 1–32 bytes). |
@@ -479,7 +481,7 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
 | `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` | settle scheduler | whole batches driven concurrently across the **entire CVM** (not per market; 1..=8, default 1). Raise only under the benchmark methodology; CPU proof contention can erase the IO overlap. |
 | `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
-| `DARKNYX_TEE_FEED_IDS` | oracle | Legacy one-market comma-separated Pyth ids. Multi-market deploys take each feed from `DARKNYX_TEE_MARKETS_JSON`; all unique feeds share one authenticated Hermes batch request per refresh. |
+| `DARKNYX_TEE_FEED_IDS` | oracle | Single-market comma-separated Pyth ids. Multi-market deploys take each feed from `DARKNYX_TEE_MARKETS_JSON`. Router mode batches unique feeds; push mode reads their derived accounts in one finalized RPC call. |
 
 A **malformed** (non-empty) value now **fails startup** (config fail-fast);
 an **empty** `${VAR}` falls back to the default.
@@ -554,7 +556,7 @@ price improvement), and **both fee notes** (`note_fee_base` +
 
 **Knobs:** `DARKNYX_CVM_BASE_QTY` (per-run-unique trade size — defaults to
 `Date.now()%900000+1000` so re-runs don't collide on a NoteLock PDA),
-`DARKNYX_CVM_PRICE` (override the Hermes anchor), `DARKNYX_CVM_FEE_RATE_BPS` (must
+`DARKNYX_CVM_PRICE` (override the live Pyth anchor), `DARKNYX_CVM_FEE_RATE_BPS` (must
 match the CVM's `DARKNYX_TEE_FEE_RATE_BPS`), `DARKNYX_CVM_SETTLE_TIMEOUT_MS`.
 
 **Confirm on-chain afterwards** (post-sharding `leaf_count` is a u64 at offset
@@ -642,6 +644,8 @@ Helius:
 umask 077
 cat > /tmp/darknyx-lg.env <<EOF
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_DEPLOYMENT_TIER=development
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$HELIUS")
 DARKNYX_TEE_FEE_RATE_BPS=30
 EOF
@@ -650,11 +654,12 @@ phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx-lg.en
 ```
 
 **Run** — price the orders at the **live oracle** (else the clearing price
-drifts far from the matcher's Hermes feed and the circuit breaker trips → 0
+drifts far from the matcher's live Pyth feed and the circuit breaker trips → 0
 matches), and `--fee-rate-bps` MUST equal the CVM's rate:
 
 ```sh
-RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
+RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+  ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 
 cargo run -q -p darknyx-tee-loadgen -- \
   --endpoint "$GW" \
@@ -674,7 +679,7 @@ the true intake ceiling).
 
 **Useful flags** (`crates/darknyx-tee-loadgen/src/config.rs`):
 `--traders`, `--orders-per-trader-per-sec`, `--duration-secs`,
-`--cancel-rate`, `--workload uniform`, `--oracle-twap <hermes raw>`,
+`--cancel-rate`, `--workload uniform`, `--oracle-twap <raw Pyth EMA>`,
 `--fee-rate-bps <= CVM rate>`, `--expiry-slot` (default 2e9 — must exceed
 the live Solana slot or the matcher sweeps orders as expired),
 `--api-key/--api-secret/--passphrase` (default to the compose bootstrap
@@ -771,7 +776,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | CVM e2e: `tree not empty` | tree has stale leaves | `node scripts/reset-merkle-tree.mjs` before the run (§4.5) |
 | Intake **all 4xx** (`opening does not match note_commitment`) | CVM mints ≠ the deposited notes' mints, OR the order's `note_amount` ≠ intake's fee-inclusive derivation | redeploy CVM with the `e2e-config` mints; ensure `--fee-rate-bps` / `DARKNYX_CVM_FEE_RATE_BPS` match `DARKNYX_TEE_FEE_RATE_BPS` |
 | Loadgen: **0 matches**, logs show `swept expired orders` | `--expiry-slot` below the live Solana slot | use the default 2e9 (or `>` the live slot) |
-| Loadgen: **0 matches**, no sweep | orders mispriced vs the live oracle → circuit breaker | set `--oracle-twap` to the live Hermes raw price (§7) |
+| Loadgen: **0 matches**, no sweep | orders mispriced vs the live oracle → circuit breaker | set `--oracle-twap` to the finalized push-account EMA (§7) |
 | Settle: `InvalidMarkerExpiry (6018)` | marker expiry outside `clock.slot < e <= clock.slot+300` | margin is 250 in the worker; ensure the CVM's RPC slot is fresh (slot poller) |
 | Settle: `<slot> is not a recent slot` (CreateLookupTable) | ALT `recent_slot` ahead of the simulating replica | the worker backs off 32 slots; transient — retry |
 | Settle: `did not confirm … [None]` | ALT not active yet, or tx dropped | the worker waits a slot + rebroadcasts; a hard timeout now errors `AltNotActive` (retryable) |
@@ -797,7 +802,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Matching-engine program id (retiring) | `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe` |
 | CVM image | `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (built by the `tee-image` workflow on a `tee-v3-hardening-*` tag; GH repo `skysail-labs/darknyx`) |
 | Gateway URL form | `https://<app_id>-8080.dstack-pha-<node>.phala.network` — `<node>` is per-CVM; probe it |
-| Pyth Hermes SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
+| Pyth SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | Placeholder dev mints | base `[1,0…,0xb1]`, quote `[1,0…,0x9e]` (loadgen regime) |
 | Test keypair dir (gitignored) | `.devnet/keypairs/` |
 | Runtime config (gitignored) | `.devnet/e2e-config.json` (now incl. `numTrees` + `merkleTreePdas[]`) |

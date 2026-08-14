@@ -1,11 +1,11 @@
-//! Hermes HTTPS client. Talks to `hermes.pyth.network` (or a
-//! configurable mirror) and returns parsed price updates ready
+//! Hermes HTTPS client. Talks to Pyth's authenticated upgraded Hermes service
+//! (or an explicitly configured mirror) and returns parsed price updates ready
 //! for the VAA verifier.
 //!
 //! Endpoint shape (Hermes v2 API):
 //!
 //! ```text
-//! GET https://hermes.pyth.network/v2/updates/price/latest
+//! GET https://pyth.dourolabs.app/hermes/v2/updates/price/latest
 //!     ?ids[]=<feed_id_hex>
 //!     [&ids[]=<another_feed_id>]
 //! ```
@@ -37,11 +37,9 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-/// Default Hermes endpoint. Override via `HermesClient::with_endpoint`
-/// if we need to point at hermes-beta.pyth.network or a
-/// self-hosted mirror.
-pub const DEFAULT_HERMES_ENDPOINT: &str = "https://hermes.pyth.network";
 pub const UPGRADED_HERMES_ENDPOINT: &str = "https://pyth.dourolabs.app/hermes";
+/// The authenticated upgraded service is the default for new configurations.
+pub const DEFAULT_HERMES_ENDPOINT: &str = UPGRADED_HERMES_ENDPOINT;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HermesError {
@@ -295,6 +293,11 @@ struct RawPrice {
 mod tests {
     use super::*;
     use reqwest::header::AUTHORIZATION;
+
+    #[test]
+    fn default_endpoint_is_the_authenticated_upgraded_service() {
+        assert_eq!(DEFAULT_HERMES_ENDPOINT, "https://pyth.dourolabs.app/hermes");
+    }
 
     #[test]
     fn fetch_many_builds_one_authenticated_request_for_all_feeds() {

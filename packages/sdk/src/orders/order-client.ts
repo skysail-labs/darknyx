@@ -9,8 +9,10 @@
 
 import { cancelCanonicalDigest } from "./canonical.js";
 import type { PlaceOrderRequest, OrderSigner } from "./build-order.js";
+import { apiUrl } from "../api-url.js";
 
-const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
+const toHex = (b: Uint8Array): string =>
+  Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** A structured API error (mirrors the REST error envelope `{ code, message }`
  *  + the `x-request-id` correlation header). */
@@ -53,7 +55,8 @@ export interface ModifyOrderResponse {
 /** A signed cancel body (mirrors the server `CancelOrderRequest`). */
 export interface CancelOrderRequest {
   trading_key: string;
-  cancel_nonce: number;
+  /** Canonical decimal u64 string; JSON numbers cannot preserve the full range. */
+  cancel_nonce: string;
   /** 32-byte hex boot session the cancel signature is scoped to (S-07). */
   session_id: string;
   trading_key_signature: string;
@@ -62,7 +65,8 @@ export interface CancelOrderRequest {
 /** A modify body: a signed cancel of the old order + a full replacement. */
 export interface ModifyOrderRequest {
   cancel_signature: string;
-  cancel_nonce: number;
+  /** Canonical decimal u64 string; JSON numbers cannot preserve the full range. */
+  cancel_nonce: string;
   replacement: PlaceOrderRequest;
 }
 
@@ -93,8 +97,8 @@ export async function placeOrder(
   opts: OrderClientOptions,
   order: PlaceOrderRequest,
 ): Promise<PlaceOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(new URL("/orders", opts.baseUrl).toString(), {
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, "orders"), {
     method: "POST",
     headers: authHeaders(opts.token),
     body: JSON.stringify(order),
@@ -108,15 +112,12 @@ export async function cancelOrder(
   orderIdHex: string,
   cancel: CancelOrderRequest,
 ): Promise<CancelOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${orderIdHex}`, opts.baseUrl).toString(),
-    {
-      method: "DELETE",
-      headers: authHeaders(opts.token),
-      body: JSON.stringify(cancel),
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
+    method: "DELETE",
+    headers: authHeaders(opts.token),
+    body: JSON.stringify(cancel),
+  });
   return decode<CancelOrderResponse>(res);
 }
 
@@ -126,15 +127,12 @@ export async function modifyOrder(
   oldOrderIdHex: string,
   modify: ModifyOrderRequest,
 ): Promise<ModifyOrderResponse> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${oldOrderIdHex}`, opts.baseUrl).toString(),
-    {
-      method: "PUT",
-      headers: authHeaders(opts.token),
-      body: JSON.stringify(modify),
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${oldOrderIdHex}`), {
+    method: "PUT",
+    headers: authHeaders(opts.token),
+    body: JSON.stringify(modify),
+  });
   return decode<ModifyOrderResponse>(res);
 }
 
@@ -143,13 +141,10 @@ export async function getOrder(
   opts: OrderClientOptions,
   orderIdHex: string,
 ): Promise<unknown> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(
-    new URL(`/orders/${orderIdHex}`, opts.baseUrl).toString(),
-    {
-      headers: { authorization: `Bearer ${opts.token}` },
-    },
-  );
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
+    headers: { authorization: `Bearer ${opts.token}` },
+  });
   return decode<unknown>(res);
 }
 
@@ -183,7 +178,7 @@ export async function buildCancel(args: {
     throw new Error("sign() must return a 64-byte signature");
   return {
     trading_key: toHex(args.tradingKey),
-    cancel_nonce: Number(args.cancelNonce),
+    cancel_nonce: args.cancelNonce.toString(),
     session_id: toHex(args.sessionId),
     trading_key_signature: toHex(sig),
   };

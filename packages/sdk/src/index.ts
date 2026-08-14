@@ -19,6 +19,7 @@ export * from "./zk/groth16-format.js";
 export * from "./idl/vault-client.js";
 export * from "./idl/seeds.js";
 export * from "./client.js";
+export * from "./api-url.js";
 // Order canonical encoders + the consumed-input-bound fill-memo surface.
 export {
   ORDER_DOMAIN,
@@ -40,6 +41,7 @@ export * from "./orders/fill-memo.js";
 export * from "./orders/builders.js";
 export * from "./orders/orders-ws-client.js";
 export * from "./system/system-client.js";
+export * from "./oracle/pyth-push.js";
 // Order submission (Phase 5 / D2): buildOrder assembly, the VALID_INPUT prover
 // + witness fetch, and the REST + multiplexed /v1/stream clients.
 export * from "./orders/build-order.js";

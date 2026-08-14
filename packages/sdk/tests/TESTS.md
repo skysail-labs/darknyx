@@ -42,6 +42,7 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `order-canonical-parity.test.ts` | (see above)                                              |
 | `order-id.test.ts`               | deterministic HD order_id derivation                     |
 | `order-submission.test.ts`       | order-client / trading-ws-client submit path             |
+| `api-url.test.ts`                | direct + reverse-proxy API path composition              |
 | `leaf-index.test.ts`             | `leafIndexFromLogs` / `noteCreatedFromLogs` pure parsing |
 | `wallet.test.ts`                 | wallet/note-store behaviour                              |
 | `helpers/merkle-shadow.test.ts`  | in-memory Merkle shadow witness                          |

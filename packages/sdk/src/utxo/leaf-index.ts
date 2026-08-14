@@ -54,6 +54,13 @@ const NOTE_MERGED_DISC = eventDiscriminator("NoteMerged");
 const NOTE_CREATED_LEAF_OFFSET = 1;
 const NOTE_MERGED_LEAF_OFFSET = 1 + 32 + 32 + 1; // 66
 
+function readU64LE(bytes: Uint8Array, offset: number): bigint {
+  return new DataView(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  ).getBigUint64(offset, true);
+}
 
 /** A `NoteCreated` event's shard + position: which tree the deposit landed in
  *  and the leaf index within it. Both are needed to build a per-shard witness
@@ -84,7 +91,7 @@ export function noteCreatedFromLogs(
     if (!matches) continue;
     return {
       treeId: bytes[8],
-      leafIndex: bytes.readBigUInt64LE(8 + NOTE_CREATED_LEAF_OFFSET),
+      leafIndex: readU64LE(bytes, 8 + NOTE_CREATED_LEAF_OFFSET),
     };
   }
   return null;
@@ -110,7 +117,7 @@ export function leafIndexFromLogs(
       }
     }
     if (!matches) continue;
-    return bytes.readBigUInt64LE(8 + leafOffset);
+    return readU64LE(bytes, 8 + leafOffset);
   }
   return null;
 }

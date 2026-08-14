@@ -26,12 +26,12 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-84 (commit 64f01e7,
-    # Audit 7 settlement-efficiency slice; pot19 N=16 proving key fetched via
-    # Git LFS during the image build).
+    # Source tag for audit cross-reference: tee-v3-hardening-86 (commit f1dcf5a,
+    # seven-minute development push-oracle freshness; pot19 N=16 proving key
+    # fetched via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:731741d0fe13b08cc6d9a639e855883fc762b66cc492cf02356e5c3eb27b43c3
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:fff91701219740553c658d93a407af2f06a86be90ba3927c0ac302855a7ce81e
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -96,16 +96,18 @@ services:
       DARKNYX_TEE_LOG: ${DARKNYX_TEE_LOG:-info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info}
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
 
-      # Real Pyth feed for the matcher's oracle. Every configured feed is
-      # requested in ONE authenticated Hermes batch per refresh. The explicit
-      # profile pins the complete upgraded router signer set, quorum, and Pyth
-      # emitter; the TEE never infers a trust profile from the payload.
+      # Real Pyth feed for the matcher's oracle. Exactly one versioned source
+      # owns the cache per boot. Dev/CVM rehearsals read the upgraded sponsored
+      # push account at finalized commitment (7 min signed-age budget). Mainnet
+      # switches this to pyth-router-quorum-v1 (5 s) and supplies the upgraded
+      # authenticated router endpoint/key through encrypted env.
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
-      DARKNYX_TEE_PYTH_TRUST_PROFILE: "router-quorum-v1"
-      DARKNYX_TEE_HERMES_ENDPOINT: "https://pyth.dourolabs.app/hermes"
-      # Upgraded Hermes bearer credential. Supplied through the encrypted
-      # deploy env; missing/invalid auth leaves the oracle pause reason set, so
-      # cancellation/reconciliation continue while new trading stays closed.
+      # Mainnet is an explicit fail-closed tier: the binary rejects push mode
+      # and a missing router credential before it starts serving traffic.
+      DARKNYX_TEE_DEPLOYMENT_TIER: ${DARKNYX_TEE_DEPLOYMENT_TIER:-mainnet}
+      DARKNYX_TEE_ORACLE_MODE: ${DARKNYX_TEE_ORACLE_MODE:-pyth-solana-push-v1}
+      DARKNYX_TEE_HERMES_ENDPOINT: ${DARKNYX_TEE_HERMES_ENDPOINT:-https://pyth.dourolabs.app/hermes}
+      # Router-only bearer credential; ignored by the Solana-push mode.
       DARKNYX_TEE_PYTH_API_KEY: ${DARKNYX_TEE_PYTH_API_KEY}
 
       # State directory for the auth snapshot (accounts.db). Points at

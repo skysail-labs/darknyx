@@ -16,17 +16,15 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import {
-  noteCommitmentV2,
-  poseidonHashBytesBE,
-  pubkeyToFrPair,
-} from "./note.js";
+import { noteCommitmentV2, pubkeyToFrPair } from "./note.js";
 import { buildMergeInstruction } from "../idl/vault-client.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { bn254ToBE32 } from "../keys/key-generators.js";
 import { deriveNoteUseTag } from "./note-use.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
+export { deriveMergeOutputInnerHash } from "./merge-inner.js";
+import { deriveMergeOutputInnerHash } from "./merge-inner.js";
 
 const MAX_K = 4;
 
@@ -65,45 +63,6 @@ const u8ToBigBE = (x: Uint8Array): bigint => {
   for (const b of x) acc = (acc << 8n) | BigInt(b);
   return acc;
 };
-
-const DOMAIN_MERGE_INNER = 26n;
-
-/**
- * Derive `Poseidon6(26, c0, c1, c2, c3, active_bitmap)` exactly as
- * VALID_MERGE does. The input is the K=2/K=4 public commitment vector; zero
- * entries are canonical inactive padding and K=2 is padded to four slots.
- */
-export async function deriveMergeOutputInnerHash(
-  inputCommitments: readonly Uint8Array[],
-): Promise<bigint> {
-  if (inputCommitments.length !== 2 && inputCommitments.length !== 4) {
-    throw new Error("merge commitments must contain exactly 2 or 4 slots");
-  }
-  const slots = Array.from({ length: MAX_K }, () => 0n);
-  let activeBitmap = 0;
-  for (let i = 0; i < inputCommitments.length; i++) {
-    const commitment = inputCommitments[i];
-    if (commitment.length !== 32) {
-      throw new Error(`merge commitment ${i} must be 32 bytes`);
-    }
-    const value = u8ToBigBE(commitment);
-    slots[i] = value;
-    if (value !== 0n) activeBitmap |= 1 << i;
-  }
-  if (activeBitmap === 0) {
-    throw new Error("merge must contain at least one active commitment");
-  }
-  return u8ToBigBE(
-    await poseidonHashBytesBE([
-      DOMAIN_MERGE_INNER,
-      slots[0],
-      slots[1],
-      slots[2],
-      slots[3],
-      BigInt(activeBitmap),
-    ]),
-  );
-}
 
 export function getMergeFunction({
   client,

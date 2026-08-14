@@ -28,11 +28,11 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# ─── PR 4b — oracle module (Hermes + VAA verify) ─────────────────────
-# reqwest: HTTPS client used to fetch from hermes.pyth.network.
+# ─── Oracle module (authenticated router + finalized push-account modes) ───
+# reqwest: HTTPS client used by the router and Solana JSON-RPC adapters.
 # Rustls-only TLS (no OpenSSL on the host).
 reqwest    = { workspace = true }
-# serde + serde_json: parse Hermes JSON responses.
+# serde + serde_json: parse router and Solana JSON responses.
 serde      = { workspace = true }
 serde_json = { workspace = true }
 # k256: pure-Rust secp256k1 used for ecrecover when verifying

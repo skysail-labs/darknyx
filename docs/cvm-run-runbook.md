@@ -135,9 +135,6 @@ umask 077
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
-# Obtain this bearer credential from Pyth/Douro Labs. It is required by the
-# upgraded Hermes endpoint and must stay only in this encrypted env file.
-test -n "$DARKNYX_TEE_PYTH_API_KEY"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -149,7 +146,8 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
-DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
+DARKNYX_TEE_DEPLOYMENT_TIER=development
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
@@ -163,16 +161,23 @@ DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1
 EOF
 ```
 
+This rehearsal intentionally selects `pyth-solana-push-v1`: it reads upgraded
+Pyth sponsored push accounts through `DARKNYX_TEE_SOLANA_RPC_URL` at finalized
+commitment and needs no Pyth API key. A launch release instead selects
+`pyth-router-quorum-v1`, supplies `DARKNYX_TEE_PYTH_API_KEY` only through this
+encrypted env, and pins that source in the browser release manifest.
+
 Omitting both mint variables selects the explicit placeholder-mint loadgen mode:
 intake and matcher paging remain available, but the on-chain settlement driver is
 disabled. Supplying only one mint is a startup error. With both real mints set,
 the CVM requires finalized, well-formed `VaultConfig` and `MarketConfig` accounts;
 it will not fall back to env market/fee values.
 
-> Keep the three credential variables exported in the shell that runs the CVM
-> tests/loadgen, and keep the Pyth bearer credential available for deployment.
-> The API/auth harness credentials fail fast when missing. Missing or invalid
-> Pyth auth leaves the affected market's independent oracle pause reason set:
+> Keep the three API/auth credential variables exported in the shell that runs
+> the CVM tests/loadgen. In router mode, keep the Pyth bearer credential
+> available for deployment. Push mode ignores the Pyth API key. The API/auth
+> harness credentials fail fast when missing. In router mode, missing, invalid,
+> or unauthorized Pyth auth leaves the affected market's independent oracle pause reason set:
 > place/modify and matching remain closed for markets bound to that feed while
 > healthy markets, cancel, and settlement reconciliation continue.
 > In real-market mode, the CVM and e2e harness must use the finalized on-chain
@@ -181,6 +186,32 @@ it will not fall back to env market/fee values.
 > the loadgen's fee rate. A mismatch changes fee-inclusive collateral and makes
 > every synthetic note fail `verify_commitment`. `DARKNYX_TEE_NUM_TREES` must
 > equal the on-chain `numTrees` in real-market mode.
+
+### 3.1 Mainnet oracle and governance preflight
+
+Mainnet deploy envs must set
+`DARKNYX_TEE_DEPLOYMENT_TIER=mainnet`,
+`DARKNYX_TEE_ORACLE_MODE=pyth-router-quorum-v1`, and a non-empty
+`DARKNYX_TEE_PYTH_API_KEY`. Both CPU and GPU images reject any other mainnet
+combination at boot. A syntactically present credential is not evidence of the
+required feed grant; after deploy, verify every configured row from
+`GET /instruments` reports `oracle.source=pyth-router-quorum-v1`, a non-null
+publish time within the five-second budget, and `trading_enabled=true`.
+
+Before launch, execute and record both Squads paths from
+[`governance.md` §§4–6](governance.md):
+
+1. Through the operations 3-of-5 vault, propose, approve, and execute a bounded
+   staging `MarketConfig` update or TEE-key rotation; independently read the
+   finalized account and confirm the intended change only.
+2. Through the cold root/upgrade 4-of-7 vault, rehearse the documented upgrade
+   authority plus `initialize`/root bootstrap sequence and independently verify
+   the resulting program authority, `VaultConfig.admin`, and root key.
+3. Before either vault approves a TEE-key rotation, every signer independently
+   verifies the fresh TDX quote, MRTD, compose hash, report-data signer set, and
+   finalized on-chain key proposal as specified in
+   [`tee-attestation-flow.md` §5](tee-attestation-flow.md). Record the Squads
+   proposal/execution signatures and each verifier's evidence.
 
 ---
 
@@ -439,10 +470,6 @@ boots exactly two markets at C2:
 set -a
 . packages/sdk/.env
 set +a
-# Export the private Hermes credential from its local secret store; the
-# generator fails closed rather than producing an oracle-paused deployment.
-test -n "$DARKNYX_TEE_PYTH_API_KEY"
-
 # Creates/reuses the second market and writes public, gitignored fixture data.
 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/setup-second-devnet-market.mjs

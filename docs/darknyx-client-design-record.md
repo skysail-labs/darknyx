@@ -1,9 +1,9 @@
 # Darknyx Client — design record and implementation plan
 
-> Status: **ACTIVE DESIGN RECORD — Phase 0 foundation, Apple M3 proving, and the
-> automated browser-custody mechanism spike are complete; physical x86,
-> physical-authenticator/wallet qualification, firm-up, MM-demand, and trader
-> evidence are still open.**
+> Status: **ACTIVE DESIGN RECORD — browser-first implementation is selected for
+> ordinary traders under the accepted hosted-origin trust model, and Phase 1 is
+> active. Physical x86, physical-authenticator/wallet qualification, firm-up,
+> MM-demand, and trader evidence remain launch/product gates.**
 >
 > Supersedes the August 2026 native-first client notes. Their product
 > decomposition, security boundaries and MM framing are carried forward; their
@@ -16,9 +16,12 @@
 > **§3 of this document is the mechanism by which client work stays valid when
 > they move.**
 >
-> **Read §2 and §5 before implementing anything.** Six decisions are blocked on
-> measurements that have not been taken. Three of those measurements are client
-> work and are also blocking the liquidity record's §9.
+> Implementation stack and per-layer gates:
+> [`browser-client-product-plan.md`](browser-client-product-plan.md).
+>
+> **Read §2 and §5 before implementing anything.** The browser-first direction
+> does not resolve the remaining launch gates or tier decisions; several still
+> depend on client measurements and the liquidity record's §9.
 
 ---
 
@@ -96,8 +99,8 @@ wins and the ordering should be revisited.
 - Any component that names a tier.
 - Any order-attribute schema treated as closed.
 - Any coupling from the intent plane into the prover.
-- Any packaging commitment (installer, extension, native-messaging host) before
-  D1 resolves.
+- Any packaging work outside the selected browser-first, Tauri-compatible
+  contract. Launch qualification may still select the Tauri implementation.
 
 ---
 
@@ -127,7 +130,7 @@ classified here.
 
 | Concern                                                                                        | Gated on                                         |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Trader packaging (browser / desktop app / agent + extension)                                   | D1                                               |
+| Trader packaging launch default (browser / Tauri fallback)                                     | D1 qualification gates                           |
 | Whether tier 2 is flags-only or has an indication layer                                        | D2 (liquidity §9.2)                              |
 | Firm-up model and therefore client liveness requirements                                       | D3                                               |
 | Prover backend and threading model                                                             | D4                                               |
@@ -240,9 +243,9 @@ does not replace it.
 
 ## 4. Phase 0 — investigations and benchmarks
 
-**Nothing in §6 onward should be scoped until this completes.** Phase 0 is
-roughly three to four weeks and unblocks both this document and the liquidity
-record.
+Phase 0 qualification continues in parallel with the packaging-neutral §6
+foundation. It blocks launch-default and tier decisions, not implementation of
+the invariant core.
 
 ### 4.1 Investigations (non-benchmark)
 
@@ -384,14 +387,14 @@ branch point.
 
 ## 5. Decision register
 
-| ID     | Decision                                     | Gated on                      | Default if unresolved                                                                                                                    |
-| ------ | -------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **D1** | Trader packaging                             | G1–G3, G7, I6, custody review | Evidence branch: embedded Chrome only if performance and custody both pass; otherwise Tauri/native                                       |
-| **D2** | Tier 2 shape: flags-only vs indication layer | Liquidity §9.2 ← I2, I3, I7   | Undecided. **Blocks Phase 4 entirely.**                                                                                                  |
-| **D3** | Firm-up model                                | D2, I5, G4                    | Pre-proved-and-held (§7.2) — strictly better than behavioural, cheaper than auto-firm.                                                   |
-| **D4** | Prover backend + threading                   | G1–G7                         | Chrome Worker/snarkjs or native Circom+rapidsnark. Backend stays abstract behind the existing injected-prover interface.                 |
-| **D5** | Local reputation/firm-up record keeping      | Liquidity §9.3                | Client keeps its own local record regardless, for self-monitoring and dispute. Cheap and independent of where authoritative state lives. |
-| **D6** | Signer model for resting tier-2 orders       | D2, I3, I7                    | Unresolved. **See §8.3 — the current external-wallet default does not survive flags-only tier 2.**                                       |
+| ID     | Decision                                     | Gated on                                            | Default if unresolved                                                                                                                      |
+| ------ | -------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **D1** | Trader packaging                             | Launch qualification: G1–G3, G7, I6, custody review | **Implementation selected:** browser-first for ordinary traders under the hosted-origin trust model; Tauri remains the compatible fallback |
+| **D2** | Tier 2 shape: flags-only vs indication layer | Liquidity §9.2 ← I2, I3, I7                         | Undecided. **Blocks Phase 4 entirely.**                                                                                                    |
+| **D3** | Firm-up model                                | D2, I5, G4                                          | Pre-proved-and-held (§7.2) — strictly better than behavioural, cheaper than auto-firm.                                                     |
+| **D4** | Prover backend + threading                   | G1–G7                                               | Chrome Worker/snarkjs or native Circom+rapidsnark. Backend stays abstract behind the existing injected-prover interface.                   |
+| **D5** | Local reputation/firm-up record keeping      | Liquidity §9.3                                      | Client keeps its own local record regardless, for self-monitoring and dispute. Cheap and independent of where authoritative state lives.   |
+| **D6** | Signer model for resting tier-2 orders       | D2, I3, I7                                          | Unresolved. **See §8.3 — the current external-wallet default does not survive flags-only tier 2.**                                         |
 
 ### 5.1 D1 and D2 are coupled decisions
 
@@ -442,9 +445,10 @@ pairing credentials, optional operational signer. Encrypted at rest; OS secure
 storage where available; locked on inactivity; no secrets in logs, crash dumps or
 telemetry; frozen derivation and domain separation preserved.
 
-**Deferred to D1:** whether this lives in a native process, a browser extension,
-or a page-scoped store behind WebAuthn-PRF-derived encryption. Build the
-interface first; the three implementations differ below it.
+The selected implementation begins with a page-scoped store behind
+WebAuthn-PRF-derived encryption. The typed interface remains packaging-neutral:
+if launch qualification rejects the hosted-origin boundary, the same contract
+moves behind a signed Tauri host without widening the UI capability surface.
 
 ### 6.2 Chain and tree synchroniser
 
@@ -597,7 +601,8 @@ classifier — the mitigation and the measurement are the same work.
 
 ### 7.5 Packaging
 
-Deferred to D1. Candidates, in rough order of preference pending evidence:
+Browser-first is selected for implementation and remains conditional for
+launch. The retained fallback order is:
 
 1. **Browser, multi-threaded WASM** — zero install; the default unless G1–G3 fail.
 2. **Single signed desktop app (Tauri) bundling UI + native prover** — internal
@@ -654,7 +659,7 @@ wallet on every cycle. Under flags-only, either the scoped operational signer
 stops being MM-only and becomes available to block traders, or tier 2 needs
 indications. **This is D6 and it is currently unowned.**
 
-### 8.4 Browser key custody, if D1 resolves browser-first
+### 8.4 Browser key custody — selected implementation boundary
 
 A Worker isolates secrets from the UI thread; it does not isolate them from a
 same-origin compromise. Non-extractable WebCrypto keys can still be _used_ by
@@ -685,12 +690,12 @@ The adversarial same-origin test also succeeded in recovering the seed after
 the virtual user approved WebAuthn. This is the expected and decisive boundary:
 the browser implementation protects copied at-rest data and keeps secrets out
 of the normal UI API, but it does **not** protect against malicious code served
-by the trusted application origin. Browser-first therefore remains viable only
-under a conventional hardened-dApp threat model. Physical authenticator and
+by the trusted application origin. Darknyx accepts that conventional hardened-
+dApp boundary for the browser-first implementation. Physical authenticator and
 wallet-under-COOP/COEP qualification, release/update hardening, and the focused
-XSS/supply-chain review remain open before D1 closes. If malicious release
-delivery is in scope, the same typed vault contract moves behind a signed Tauri
-host: normally a Rust module in that host process, not a localhost daemon.
+XSS/supply-chain review remain open launch gates. If any gate rejects that
+boundary, the same typed vault contract moves behind a signed Tauri host:
+normally a Rust module in that host process, not a localhost daemon.
 
 ---
 
@@ -758,7 +763,7 @@ signer-policy rejections; version compatibility.
 
 ## 11. Phasing
 
-### Phase 0 — investigate and measure _(blocks everything)_
+### Phase 0 — investigate and measure _(parallel qualification track)_
 
 I1–I7; the current-circuit benchmark matrix; G1–G7 evaluated.
 **Output: D1, D3, D4 decided on evidence, and the client-side inputs to liquidity
@@ -773,8 +778,8 @@ rotation. The auditor itself waits for §6.8's API fields.
 
 ### Phase 2 — decision point
 
-Resolve D1, D2, D6 jointly with the liquidity record's §9.2. Same session, same
-evidence, same trader interviews.
+Reconfirm D1's launch qualification and resolve D2/D6 jointly with the liquidity
+record's §9.2. Same session, same evidence, same trader interviews.
 
 ### Phase 3 — intent plane and tier 1
 

@@ -1,15 +1,15 @@
-//! Pyth pull-pattern oracle. Background `sync` task pulls fresh
-//! prices from `hermes.pyth.network` over HTTPS, verifies the
-//! Wormhole guardian signatures in-process, and writes the result
-//! into a shared `OracleCache`. The matcher tick (§5.4) reads from
-//! the cache at every batch fire.
+//! Pyth oracle boundary. Exactly one boot-selected producer writes the shared
+//! cache: either the authenticated upgraded router service (verified 3-of-5 in
+//! process) or finalized upgraded Pyth Core push accounts on Solana. The
+//! matcher reads only the cache and therefore never waits on oracle I/O.
 //!
-//! See `docs/tee-architecture.md` §5.6 for the full design + the
-//! v2-vs-v3 trust trade-off discussion.
+//! See `docs/tee-architecture.md` §6 for the source and freshness model.
 
 pub mod accumulator;
 pub mod cache;
 pub mod hermes;
+pub mod push;
+pub mod source;
 pub mod sync;
 pub mod vaa;
 
@@ -22,5 +22,7 @@ pub use hermes::{
     HermesBatchUpdate, HermesClient, HermesError, HermesPriceUpdate, DEFAULT_HERMES_ENDPOINT,
     UPGRADED_HERMES_ENDPOINT,
 };
+pub use push::{derive_push_feed_address, spawn_push_oracle_sync, PushSyncConfig};
+pub use source::{OracleMode, OracleSourceKind};
 pub use sync::{spawn_oracle_sync, MarketOracleBinding, SyncConfig};
 pub use vaa::{verify as verify_vaa, verify_for_profile, ParsedVaa, TrustProfile, VaaError};

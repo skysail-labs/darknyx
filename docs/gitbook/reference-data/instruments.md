@@ -27,7 +27,7 @@ The response is a JSON **array**, not an object envelope:
     "min_order_size": "10000000",
     "trading_enabled": true,
     "oracle": {
-      "type": "pyth_pull_v2",
+      "type": "pyth_push_v2",
       "pubkey": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
     }
   }
@@ -53,7 +53,7 @@ venue. Use the returned `symbol` unchanged in signed order requests.
 | `tick_size` | string | Raw integer price increment in protocol price units. |
 | `min_order_size` | string | Raw integer minimum base amount in smallest token units. |
 | `trading_enabled` | boolean | Current readiness for new placement, modification, and matching on this market. Cancellation and settlement recovery remain available when false. |
-| `oracle.type` | string | Oracle adapter used by the matcher. |
+| `oracle.type` | string | Oracle adapter used by the matcher (`pyth_pull_v2` or `pyth_push_v2`). |
 | `oracle.pubkey` | string | Pyth feed identifier. Despite the wire name, this value may be a 32-byte hex feed id rather than a base58 Solana account. |
 
 Use the SDK's market helpers and the on-chain `MarketConfig` decimals and

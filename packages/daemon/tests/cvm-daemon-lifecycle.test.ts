@@ -60,6 +60,7 @@ import {
   OrderSide,
   depositNoteFromReceipt,
   type StoredNote,
+  fetchPythCorePushPrice,
 } from "@darknyx/sdk";
 import {
   Daemon,
@@ -120,12 +121,10 @@ const SOL_USD_FEED =
  *  near it (a far-off fixed price never crosses) — same anchor cvm-settle-e2e uses. */
 async function oracleAnchor(): Promise<bigint> {
   if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
-  const r = await fetch(
-    `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`,
-  );
-  const j = (await r.json()) as { parsed?: { price: { price: string } }[] };
-  if (!j.parsed?.length) throw new Error("Hermes returned no price");
-  return BigInt(j.parsed[0].price.price);
+  return (await fetchPythCorePushPrice(
+    new Connection(RPC, "finalized"),
+    SOL_USD_FEED,
+  )).emaPrice;
 }
 const loadKp = (rel: string) =>
   Keypair.fromSecretKey(

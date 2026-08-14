@@ -8,7 +8,10 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { Keypair, PublicKey } from "@solana/web3.js";
 
-import { onchainRootVerifier } from "../src/zk/valid-input-prover.js";
+import {
+  onchainRootVerifier,
+  parseMerkleRootRing,
+} from "../src/zk/valid-input-prover.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -18,6 +21,7 @@ const ROOT_HISTORY_SIZE = 64;
 const MERKLE_TREE_ACCOUNT_LEN = 2_744;
 const CURRENT_ROOT_OFFSET = 16;
 const ROOTS_RING_OFFSET = 48;
+const ROOTS_HEAD_OFFSET = 2_736;
 const TREE_ID_OFFSET = 2_737;
 const DISCRIMINATOR = createHash("sha256")
   .update("account:MerkleTree")
@@ -35,6 +39,7 @@ function mtAccount(
   DISCRIMINATOR.copy(buf, 0);
   Buffer.from(current).copy(buf, CURRENT_ROOT_OFFSET);
   ring.forEach((r, i) => Buffer.from(r).copy(buf, ROOTS_RING_OFFSET + i * 32));
+  buf[ROOTS_HEAD_OFFSET] = ring.length;
   buf[TREE_ID_OFFSET] = treeId;
   return buf;
 }
@@ -61,6 +66,16 @@ function mockConn(
 const r = (b: number) => new Uint8Array(32).fill(b);
 
 describe("onchainRootVerifier (C-09)", () => {
+  it("orders the current and historical roots newest first", () => {
+    const parsed = parseMerkleRootRing(
+      mtAccount(r(0x44), [r(0x11), r(0x22), r(0x33)]),
+      0,
+    );
+    expect(parsed.acceptedRoots.map((root) => root[0])).toEqual([
+      0x44, 0x33, 0x22, 0x11,
+    ]);
+  });
+
   it("accepts the current_root", async () => {
     const rpc = mockConn(mtAccount(r(0xab), []));
     const verify = onchainRootVerifier({

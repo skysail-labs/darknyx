@@ -59,6 +59,7 @@ import {
   authToken,
   CvmHarness,
   fetchBootSessionId,
+  fetchOracleAnchorForFeed,
   floorPriceToTick,
   FEE_RATE_BPS,
   gwFetch,
@@ -122,21 +123,7 @@ const SETTLE_TIMEOUT_MS = Number(
 );
 
 async function fetchAnchor(feedId: string): Promise<bigint> {
-  const response = await fetch(
-    `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feedId}`,
-  );
-  if (!response.ok) {
-    throw new Error(`Hermes ${feedId} returned ${response.status}`);
-  }
-  const body = (await response.json()) as {
-    parsed?: { price: { price: string; expo: number } }[];
-  };
-  const price = body.parsed?.[0]?.price;
-  if (!price) throw new Error(`Hermes returned no price for ${feedId}`);
-  console.log(
-    `  · oracle ${feedId.slice(0, 8)}…=${price.price} expo=${price.expo}`,
-  );
-  return BigInt(price.price);
+  return fetchOracleAnchorForFeed(feedId);
 }
 
 async function fundPersona(
@@ -268,7 +255,7 @@ maybeDescribe(
         ).then(() => undefined),
       );
 
-      const anchors = await timer.step("fetch both Hermes anchors", () =>
+      const anchors = await timer.step("fetch both finalized Pyth push anchors", () =>
         Promise.all(
           cfg.markets.map((market) => fetchAnchor(market.oracleFeedId)),
         ),
@@ -467,7 +454,7 @@ maybeDescribe(
         );
         return {
           trading_key: hex(tradingKey),
-          cancel_nonce: Number(cancelNonce),
+          cancel_nonce: cancelNonce.toString(),
           session_id: hex(bootSessionId),
           trading_key_signature: hex(signature),
         };
@@ -520,7 +507,7 @@ maybeDescribe(
           },
           body: JSON.stringify({
             cancel_signature: hex(modifySignature),
-            cancel_nonce: 1,
+            cancel_nonce: "1",
             replacement: crossMarketReplacement.body,
           }),
         },

@@ -22,6 +22,7 @@ use crate::oracle::{
         OracleUnits,
     },
     hermes::{HermesBatchUpdate, HermesClient},
+    source::OracleSourceKind,
     vaa::{self, TrustProfile},
 };
 
@@ -41,6 +42,9 @@ pub struct SyncConfig {
     /// One entry per market. Multiple markets may share one feed while using
     /// different governed decimals/scales.
     pub market_bindings: Vec<MarketOracleBinding>,
+    /// Internal verifier selection. Runtime construction pins this to the
+    /// upgraded router profile; the legacy value remains only for historical
+    /// byte fixtures in unit tests.
     pub trust_profile: TrustProfile,
     pub freshness: FreshnessPolicy,
     /// Refresh cadence. Default 1 s — fast enough that the
@@ -54,13 +58,20 @@ impl Default for SyncConfig {
         Self {
             feed_ids: Vec::new(),
             market_bindings: Vec::new(),
-            trust_profile: TrustProfile::LegacyWormholeV1,
+            trust_profile: TrustProfile::RouterQuorumV1,
             freshness: FreshnessPolicy {
                 max_age_ms: 5_000,
                 max_future_skew_ms: 1_000,
             },
             interval: Duration::from_secs(1),
         }
+    }
+}
+
+fn source_kind(cfg: &SyncConfig) -> OracleSourceKind {
+    match cfg.trust_profile {
+        TrustProfile::RouterQuorumV1 => OracleSourceKind::PythRouterQuorumV1,
+        TrustProfile::LegacyWormholeV1 => OracleSourceKind::DebugFixtureV1,
     }
 }
 
@@ -94,9 +105,15 @@ pub fn spawn_oracle_sync(
             let started = Instant::now();
             match refresh_batch_prepared(&client, &cache, &cfg, &requested).await {
                 Ok((accepted, replayed)) => {
-                    reconcile_market_health(&cache, &cfg).await;
+                    reconcile_market_health(
+                        &cache,
+                        &cfg.market_bindings,
+                        cfg.freshness,
+                        source_kind(&cfg),
+                    )
+                    .await;
                     tracing::debug!(
-                        profile = cfg.trust_profile.as_str(),
+                        source = source_kind(&cfg).as_str(),
                         feed_count = cfg.feed_ids.len(),
                         hermes_requests = 1,
                         accepted,
@@ -107,7 +124,7 @@ pub fn spawn_oracle_sync(
                 }
                 Err(batch_error) => {
                     tracing::warn!(
-                        profile = cfg.trust_profile.as_str(),
+                        source = source_kind(&cfg).as_str(),
                         feed_count = cfg.feed_ids.len(),
                         refresh_ms = started.elapsed().as_millis() as u64,
                         error = %batch_error,
@@ -134,24 +151,35 @@ pub fn spawn_oracle_sync(
                     }
                     while let Some(joined) = refreshes.join_next().await {
                         let Ok((feed_id, feed_cfg, result)) = joined else {
-                            // A task panic/cancellation is an internal sync
-                            // failure rather than an attributable feed failure.
-                            // Fail closed across the venue; the next normal
-                            // cycle can recover each market independently.
-                            for binding in &cfg.market_bindings {
-                                binding.trading_gate.pause_for(TradingPauseReason::Oracle);
-                            }
+                            // A task panic/cancellation is not attributable to
+                            // one feed. Reconcile every market from its verified
+                            // cached snapshot: freshness still gates each market
+                            // independently, so a fresh market need not pause for
+                            // another feed's internal refresh failure.
+                            reconcile_market_health(
+                                &cache,
+                                &cfg.market_bindings,
+                                cfg.freshness,
+                                source_kind(&cfg),
+                            )
+                            .await;
                             tracing::error!(
-                                profile = cfg.trust_profile.as_str(),
-                                "oracle sync: isolated refresh task failed; all markets PAUSED"
+                                source = source_kind(&cfg).as_str(),
+                                "oracle sync: isolated refresh task failed; retaining verified cache while fresh"
                             );
                             continue;
                         };
                         match result {
                             Ok((accepted, replayed)) => {
-                                reconcile_market_health(&cache, &feed_cfg).await;
+                                reconcile_market_health(
+                                    &cache,
+                                    &feed_cfg.market_bindings,
+                                    feed_cfg.freshness,
+                                    source_kind(&feed_cfg),
+                                )
+                                .await;
                                 tracing::debug!(
-                                    profile = cfg.trust_profile.as_str(),
+                                    source = source_kind(&feed_cfg).as_str(),
                                     feed_id = feed_id,
                                     accepted,
                                     replayed,
@@ -159,12 +187,18 @@ pub fn spawn_oracle_sync(
                                 );
                             }
                             Err(error) => {
-                                pause_feed_markets(&cfg, &feed_id);
+                                reconcile_market_health(
+                                    &cache,
+                                    &feed_cfg.market_bindings,
+                                    feed_cfg.freshness,
+                                    source_kind(&feed_cfg),
+                                )
+                                .await;
                                 tracing::warn!(
-                                    profile = cfg.trust_profile.as_str(),
+                                    source = source_kind(&feed_cfg).as_str(),
                                     feed_id = feed_id,
                                     error = %error,
-                                    "oracle sync: isolated feed refresh failed; affected markets PAUSED"
+                                    "oracle sync: isolated feed refresh failed; retaining verified cache while fresh"
                                 );
                             }
                         }
@@ -190,20 +224,15 @@ fn config_for_feed(cfg: &SyncConfig, feed_id: &str) -> SyncConfig {
     }
 }
 
-fn pause_feed_markets(cfg: &SyncConfig, feed_id: &str) {
-    for binding in cfg
-        .market_bindings
-        .iter()
-        .filter(|binding| binding.feed_id.eq_ignore_ascii_case(feed_id))
-    {
-        binding.trading_gate.pause_for(TradingPauseReason::Oracle);
-    }
-}
-
-async fn reconcile_market_health(cache: &OracleCache, cfg: &SyncConfig) {
-    for binding in &cfg.market_bindings {
+pub(crate) async fn reconcile_market_health(
+    cache: &OracleCache,
+    bindings: &[MarketOracleBinding],
+    freshness: FreshnessPolicy,
+    source: OracleSourceKind,
+) {
+    for binding in bindings {
         match cache
-            .snapshot(&binding.feed_id, cfg.freshness, binding.units)
+            .snapshot(&binding.feed_id, freshness, binding.units)
             .await
         {
             Ok(_) => {
@@ -215,7 +244,7 @@ async fn reconcile_market_health(cache: &OracleCache, cfg: &SyncConfig) {
                     tracing::info!(
                         symbol = binding.symbol,
                         feed_id = binding.feed_id,
-                        profile = cfg.trust_profile.as_str(),
+                        source = source.as_str(),
                         "oracle trust/freshness recovered; market trading RESUMED"
                     );
                 }
@@ -390,10 +419,10 @@ async fn apply_batch_update_at_prepared(
                 confidence: msg.ema_conf,
                 exponent: msg.exponent,
                 publish_time_ms,
-                vaa_sequence: verified_vaa.sequence,
-                trust_profile: cfg.trust_profile,
+                source_sequence: verified_vaa.sequence,
+                source: source_kind(cfg),
                 last_updated_ms: 0,
-                vaa: parsed.vaa.to_vec(),
+                evidence: parsed.vaa.to_vec(),
             },
         ));
     }
@@ -608,15 +637,21 @@ mod tests {
                     confidence: 0,
                     exponent: -8,
                     publish_time_ms: 0,
-                    vaa_sequence: 1,
-                    trust_profile: TrustProfile::LegacyWormholeV1,
+                    source_sequence: 1,
+                    source: OracleSourceKind::DebugFixtureV1,
                     last_updated_ms: 0,
-                    vaa: Vec::new(),
+                    evidence: Vec::new(),
                 },
             )
             .await;
 
-        reconcile_market_health(&cache, &cfg).await;
+        reconcile_market_health(
+            &cache,
+            &cfg.market_bindings,
+            cfg.freshness,
+            source_kind(&cfg),
+        )
+        .await;
         assert!(
             sol_gate.is_paused_for(TradingPauseReason::Oracle),
             "missing SOL feed remains fail-closed"
@@ -624,17 +659,6 @@ mod tests {
         assert!(
             btc_gate.is_open(),
             "fresh BTC feed resumes only the BTC market"
-        );
-
-        pause_feed_markets(&cfg, FEED);
-        assert!(
-            btc_gate.is_open(),
-            "a failed SOL fallback must not pause BTC"
-        );
-        pause_feed_markets(&cfg, OTHER_FEED);
-        assert!(
-            btc_gate.is_paused_for(TradingPauseReason::Oracle),
-            "the failed BTC fallback pauses its own market"
         );
 
         let sol_only = config_for_feed(&cfg, FEED);

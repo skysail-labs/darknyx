@@ -47,7 +47,10 @@ describe("buildOrder", () => {
     orderId[15] = 1;
 
     const kp = nacl.sign.keyPair();
-    const policy = limitPolicy({ priceLimit: 150_000_000n });
+    const policy = limitPolicy({
+      priceLimit: 150_000_000n,
+      expirySlot: 320_145_000n,
+    });
     const sessionId = new Uint8Array(32).fill(0x66);
 
     const body = await buildOrder({
@@ -134,7 +137,7 @@ describe("buildOrder", () => {
         },
         symbol: "X",
         side: OrderSide.Ask,
-        policy: limitPolicy({ priceLimit: 1n }),
+        policy: limitPolicy({ priceLimit: 1n, expirySlot: 320_145_000n }),
         amount: 2n ** 60n,
         orderId: new Uint8Array(16).fill(1),
         sessionId: new Uint8Array(32).fill(0x66),

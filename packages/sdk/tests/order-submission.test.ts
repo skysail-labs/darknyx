@@ -131,7 +131,7 @@ describe("proveAndBuildOrder", () => {
       note: { commitment, innerHash, amount },
       symbol: "SOL-USDC",
       side: OrderSide.Ask,
-      policy: limitPolicy({ priceLimit: 100n }),
+      policy: limitPolicy({ priceLimit: 100n, expirySlot: 5_500n }),
       amount,
       orderId: new Uint8Array(16).fill(2),
       sessionId: new Uint8Array(32).fill(0x66),
@@ -221,7 +221,7 @@ describe("TradingClient (/v1/stream session)", () => {
     const { client, sock } = await connected();
     const cancelP = client.cancel("ab", {
       trading_key: "00",
-      cancel_nonce: 1,
+      cancel_nonce: "1",
       // Required since S-07: a cancel signature is scoped to a boot session.
       // The test body omitted it and nothing caught that, because test files
       // were never typechecked.

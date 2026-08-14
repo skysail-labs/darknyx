@@ -13,6 +13,8 @@ import {
   fokPolicy,
   gttExpirySlot,
   gttLimitPolicy,
+  gtcExpirySlot,
+  MAX_ORDER_TTL_SLOTS,
   SLOT_MS,
 } from "../src/orders/builders.js";
 import {
@@ -22,53 +24,79 @@ import {
 } from "../src/orders/canonical.js";
 
 describe("order builders — execution-policy presets", () => {
-  it("limitPolicy rests at a price with no expiry and any partial fill", () => {
-    const p = limitPolicy({ priceLimit: 1_000n });
+  it("limitPolicy rests at a price until its explicit bounded expiry", () => {
+    const p = limitPolicy({ priceLimit: 1_000n, expirySlot: 5_500n });
     expect(p.orderType).toBe(OrderType.Limit);
     expect(p.priceLimit).toBe(1_000n);
     expect(p.minFillSize).toBe(0n);
-    expect(p.expirySlot).toBe(0n);
+    expect(p.expirySlot).toBe(5_500n);
   });
 
   it("limitPolicy rejects a non-positive price", () => {
-    expect(() => limitPolicy({ priceLimit: 0n })).toThrow(CanonicalError);
+    expect(() => limitPolicy({ priceLimit: 0n, expirySlot: 5_500n })).toThrow(
+      CanonicalError,
+    );
+  });
+
+  it("rejects zero instead of encoding it as a fake GTC sentinel", () => {
+    expect(() => limitPolicy({ priceLimit: 1n, expirySlot: 0n })).toThrow(
+      /zero is not GTC/,
+    );
   });
 
   it("market bid is IOC capped at priceCap", () => {
-    const p = marketPolicy({ side: OrderSide.Bid, priceCap: 2_500n });
+    const p = marketPolicy({
+      side: OrderSide.Bid,
+      priceCap: 2_500n,
+      expirySlot: 5_500n,
+    });
     expect(p.orderType).toBe(OrderType.Ioc);
     expect(p.priceLimit).toBe(2_500n);
     expect(p.minFillSize).toBe(0n);
   });
 
   it("market ask is IOC into any clearing price (priceLimit 0)", () => {
-    const p = marketPolicy({ side: OrderSide.Ask });
+    const p = marketPolicy({ side: OrderSide.Ask, expirySlot: 5_500n });
     expect(p.orderType).toBe(OrderType.Ioc);
     expect(p.priceLimit).toBe(0n);
   });
 
   it("market bid without a priceCap is rejected (the note must cover it)", () => {
-    expect(() => marketPolicy({ side: OrderSide.Bid })).toThrow(CanonicalError);
-    expect(() => marketPolicy({ side: OrderSide.Bid, priceCap: 0n })).toThrow(
-      CanonicalError,
-    );
+    expect(() =>
+      marketPolicy({ side: OrderSide.Bid, expirySlot: 5_500n }),
+    ).toThrow(CanonicalError);
+    expect(() =>
+      marketPolicy({
+        side: OrderSide.Bid,
+        priceCap: 0n,
+        expirySlot: 5_500n,
+      }),
+    ).toThrow(CanonicalError);
   });
 
   it("aonPolicy is a resting limit with minFillSize == amount", () => {
-    const p = aonPolicy({ amount: 50n, priceLimit: 10n });
+    const p = aonPolicy({
+      amount: 50n,
+      priceLimit: 10n,
+      expirySlot: 5_500n,
+    });
     expect(p.orderType).toBe(OrderType.Limit);
     expect(p.minFillSize).toBe(50n);
     expect(p.priceLimit).toBe(10n);
   });
 
   it("fokPolicy is immediate all-or-none", () => {
-    const p = fokPolicy({ priceLimit: 7n });
+    const p = fokPolicy({ priceLimit: 7n, expirySlot: 5_500n });
     expect(p.orderType).toBe(OrderType.Fok);
     expect(p.minFillSize).toBe(0n);
   });
 });
 
 describe("GTT — wall-clock to expiry_slot", () => {
+  it("resolves bounded GTC at the maximum lock horizon", () => {
+    expect(gtcExpirySlot(1_000)).toBe(1_000n + MAX_ORDER_TTL_SLOTS);
+    expect(MAX_ORDER_TTL_SLOTS).toBe(4_500n);
+  });
   it("projects a future instant onto a slot, rounding up", () => {
     // 1 second out at 400ms/slot = 2.5 slots → rounds up to 3.
     const slot = gttExpirySlot({

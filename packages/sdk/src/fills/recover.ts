@@ -40,13 +40,16 @@ export interface RecoveredFillOutputs {
   change: StoredNote | null;
 }
 
-const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const toHex = (b: Uint8Array) =>
+  Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 function fromHexExact(value: string, bytes: number): Uint8Array | null {
   if (value.length !== bytes * 2 || !/^[0-9a-fA-F]+$/.test(value)) {
     return null;
   }
-  return Uint8Array.from(Buffer.from(value, "hex"));
+  return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
 }
 
 function be32ToBig(b: Uint8Array): bigint {
@@ -56,10 +59,13 @@ function be32ToBig(b: Uint8Array): bigint {
 }
 
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-  Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
+  a.length === b.length && a.every((value, index) => value === b[index]);
 
-function optionalLeafIndex(value: string | null | undefined): bigint | undefined {
-  if (value === null || value === undefined || !/^\d+$/.test(value)) return undefined;
+function optionalLeafIndex(
+  value: string | null | undefined,
+): bigint | undefined {
+  if (value === null || value === undefined || !/^\d+$/.test(value))
+    return undefined;
   return BigInt(value);
 }
 
@@ -177,9 +183,7 @@ export async function recoverFillFromChain(
     tokenMint: fill.side === "buyer" ? params.baseMint : params.quoteMint,
     amount: amounts.trade,
     role:
-      fill.side === "buyer"
-        ? MATCH_ROLE_TRADE_BUYER
-        : MATCH_ROLE_TRADE_SELLER,
+      fill.side === "buyer" ? MATCH_ROLE_TRADE_BUYER : MATCH_ROLE_TRADE_SELLER,
     leafIndex: optionalLeafIndex(fill.tradeLeafIndex),
   });
   if (!trade) return null;

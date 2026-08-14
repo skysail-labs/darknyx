@@ -13,9 +13,9 @@
  * because `@phala/dcap-qvl` is pure JS.
  */
 
-import { randomBytes } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
 
+import { apiUrl } from "../api-url.js";
 import {
   AttestationError,
   DEFAULT_TCB_ALLOWLIST,
@@ -95,8 +95,18 @@ export interface VerifyTeeAttestationOptions {
   tcbAllowlist?: readonly string[];
 }
 
-const fromHex = (h: string): Uint8Array =>
-  Uint8Array.from(Buffer.from(h.replace(/^0x/, ""), "hex"));
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const fromHex = (value: string): Uint8Array => {
+  const hex = value.replace(/^0x/, "");
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new AttestationError("malformed attestation hex", "malformed");
+  }
+  return Uint8Array.from(hex.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
+};
 
 async function getJson<T>(
   url: string,
@@ -134,13 +144,13 @@ export async function verifyTeeAttestation(
       "pin_required",
     );
   }
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const verifier =
     opts.quoteVerifier ?? createDcapQuoteVerifier({ pccsUrl: opts.pccsUrl });
-  const nonce = Uint8Array.from(randomBytes(32));
+  const nonce = crypto.getRandomValues(new Uint8Array(32));
 
-  const attUrl = new URL("/attestation", apiBaseUrl);
-  attUrl.searchParams.set("reportData", Buffer.from(nonce).toString("hex"));
+  const attUrl = apiUrl(apiBaseUrl, "attestation");
+  attUrl.searchParams.set("reportData", toHex(nonce));
   const att = await getJson<{
     quote: string;
     event_log: string;
@@ -155,7 +165,7 @@ export async function verifyTeeAttestation(
     tee_pubkey: string;
     tee_pubkeys?: string[];
     boot_session_id: string;
-  }>(new URL("/info", apiBaseUrl).toString(), opts.token, fetchImpl);
+  }>(apiUrl(apiBaseUrl, "info").toString(), opts.token, fetchImpl);
   if (info.tee_pubkey !== att.tee_pubkey) {
     throw new AttestationError(
       "/info tee_pubkey != /attestation tee_pubkey",

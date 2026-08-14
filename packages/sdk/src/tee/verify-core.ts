@@ -31,11 +31,12 @@
  *   mr₀ = 48 zero bytes; for each event with the target IMR, in log order,
  *   mrᵢ₊₁ = SHA-384( mrᵢ ‖ digestᵢ )  (digest right-padded to ≥48 bytes).
  *
- * Hashing uses `node:crypto` to match every other SDK crypto module; bundlers
- * polyfill it for the browser build, as they already do for the rest of the SDK.
+ * Hashing uses audited, environment-neutral noble primitives so this strict
+ * verification path is byte-identical in Node and a browser without a crypto
+ * polyfill.
  */
 
-import { createHash } from "node:crypto";
+import { sha256, sha384 } from "@noble/hashes/sha2";
 
 /** A single measured-event entry from the dstack quote `event_log` JSON string.
  *  Mirrors `EventLog` in `dstack/sdk/rust/types/src/dstack.rs`. */
@@ -122,12 +123,40 @@ export const COMPOSE_HASH_EVENT = "compose-hash";
  */
 export const DSTACK_RUNTIME_EVENT_TYPE = 0x08000001;
 
-const RTMR_INIT = Buffer.alloc(48, 0);
+const RTMR_INIT = new Uint8Array(48);
 
 const eq = (a: Uint8Array, b: Uint8Array): boolean =>
-  a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
+  a.length === b.length && a.every((value, index) => value === b[index]);
 
 const normHex = (h: string): string => h.replace(/^0x/, "").toLowerCase();
+
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+
+const fromHex = (value: string): Uint8Array => {
+  const hex = normHex(value);
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex)) {
+    throw new AttestationError(
+      "event log contains malformed hex",
+      "event_log_invalid",
+    );
+  }
+  return Uint8Array.from(hex.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
+};
+
+const concat = (...parts: Uint8Array[]): Uint8Array => {
+  const output = new Uint8Array(
+    parts.reduce((sum, part) => sum + part.length, 0),
+  );
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+};
 
 /** Parse the dstack `event_log` (a JSON string, NOT hex — see B-7). */
 export function parseEventLog(eventLogJson: string): EventLogEntry[] {
@@ -149,26 +178,25 @@ export function parseEventLog(eventLogJson: string): EventLogEntry[] {
  * pre-filled `digest`, padded up to 48 bytes. Mirrors dstack
  * `cc-eventlog::TdxEventLog::digest`.
  */
-function eventDigest(e: EventLogEntry): Buffer {
+function eventDigest(e: EventLogEntry): Uint8Array {
   if (e.event_type === DSTACK_RUNTIME_EVENT_TYPE) {
-    const t = Buffer.alloc(4);
-    t.writeUInt32LE(e.event_type >>> 0, 0);
-    return createHash("sha384")
-      .update(
-        Buffer.concat([
-          t,
-          Buffer.from(":"),
-          Buffer.from(e.event, "utf8"),
-          Buffer.from(":"),
-          Buffer.from(normHex(e.event_payload), "hex"),
-        ]),
-      )
-      .digest();
+    const type = new Uint8Array(4);
+    new DataView(type.buffer).setUint32(0, e.event_type >>> 0, true);
+    const colon = new Uint8Array([0x3a]);
+    return sha384(
+      concat(
+        type,
+        colon,
+        new TextEncoder().encode(e.event),
+        colon,
+        fromHex(e.event_payload),
+      ),
+    );
   }
-  const d = Buffer.from(normHex(e.digest), "hex");
+  const d = fromHex(e.digest);
   if (d.length >= 48) return d;
-  const padded = Buffer.alloc(48, 0); // dstack pads up, never truncates
-  d.copy(padded);
+  const padded = new Uint8Array(48); // dstack pads up, never truncates
+  padded.set(d);
   return padded;
 }
 
@@ -181,15 +209,13 @@ export function replayEventLogRtmr(
   imr: number,
 ): string {
   const events = eventLog.filter((e) => e.imr === imr);
-  if (events.length === 0) return RTMR_INIT.toString("hex");
+  if (events.length === 0) return toHex(RTMR_INIT);
 
-  let mr: Buffer = RTMR_INIT;
+  let mr: Uint8Array = RTMR_INIT;
   for (const e of events) {
-    mr = createHash("sha384")
-      .update(Buffer.concat([mr, eventDigest(e)]))
-      .digest();
+    mr = sha384(concat(mr, eventDigest(e)));
   }
-  return mr.toString("hex");
+  return toHex(mr);
 }
 
 /**
@@ -265,9 +291,7 @@ export function composeHashFromEventLog(
  * mechanism. The invariant is "at most one of the two fields is populated",
  * whichever type claims it.
  */
-export function hasImpossibleEventLogEntry(
-  eventLog: EventLogEntry[],
-): boolean {
+export function hasImpossibleEventLogEntry(eventLog: EventLogEntry[]): boolean {
   return eventLog.some(
     (e) =>
       normHex(e.digest ?? "") !== "" && normHex(e.event_payload ?? "") !== "",
@@ -280,7 +304,7 @@ export function hasImpossibleEventLogEntry(
  * is just the one pubkey.
  */
 export function teeKeySetBytes(pubkeys: Uint8Array[]): Uint8Array {
-  return Buffer.concat(pubkeys.map((p) => Buffer.from(p)));
+  return concat(...pubkeys);
 }
 
 /**
@@ -298,9 +322,7 @@ export function checkReportDataBinding(
 ): AttestationFailure | null {
   if (reportData.length !== 64) return "malformed";
   if (!eq(reportData.subarray(0, 32), nonce)) return "freshness";
-  const expected = createHash("sha256")
-    .update(Buffer.from(boundKeySetBytes))
-    .digest();
+  const expected = sha256(boundKeySetBytes);
   if (!eq(reportData.subarray(32, 64), expected)) return "binding";
   return null;
 }

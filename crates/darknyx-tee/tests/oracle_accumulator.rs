@@ -2,8 +2,8 @@
 //! inclusion verifier (C-05 / A-2).
 //!
 //! Fixture: `tests/fixtures/sol_usd_accumulator.bin` — a real Hermes SOL/USD
-//! `AccumulatorUpdateData` captured live from
-//! `https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6f...`.
+//! `AccumulatorUpdateData` captured from the pre-upgrade service before that
+//! transport was retired.
 //! 1311 bytes, guardian set 7, 1 update, proof depth 13. Recorded ground
 //! truth (see `docs/oracle-accumulator-notes.md`):
 //!   - ema_price = 7471749900, exponent = -8, publish_time = 1783978363

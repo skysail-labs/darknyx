@@ -3,8 +3,8 @@
 //!
 //! Fixture: `tests/fixtures/sol_usd_vaa.bin` — a real Hermes
 //! `AccumulatorUpdateData` response captured live from
-//! `https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6f...`
-//! on 2026-06-27. Signed against Wormhole mainnet guardian set 7.
+//! the pre-upgrade service on 2026-06-27, before that transport was retired.
+//! Signed against Wormhole mainnet guardian set 7.
 //!
 //! These tests prove three load-bearing properties:
 //!

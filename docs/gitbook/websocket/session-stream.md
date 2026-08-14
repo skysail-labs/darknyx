@@ -2,7 +2,6 @@
 description: "The sole authenticated WebSocket, with in-band login, order operations, and dynamic channel subscriptions."
 ---
 
-
 # Session Stream
 
 {% hint style="info" %}
@@ -32,11 +31,11 @@ socket; traffic and pings do not extend that absolute window:
 { "op": "login", "token": "<access_token>", "cancel_on_disconnect": true }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `op` | Yes | `"login"`. |
-| `token` | Yes | A bearer token from [`POST /auth/token`](../api/authentication.md). |
-| `cancel_on_disconnect` | No | If `true`, the engine cancels still-resting orders placed through this session when the socket drops. Recommended for market makers. |
+| Field                  | Required | Description                                                                                                                          |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `op`                   | Yes      | `"login"`.                                                                                                                           |
+| `token`                | Yes      | A bearer token from [`POST /auth/token`](../api/authentication.md).                                                                  |
+| `cancel_on_disconnect` | No       | If `true`, the engine cancels still-resting orders placed through this session when the socket drops. Recommended for market makers. |
 
 To refresh an expiring token, send another `login` on the same socket without
 dropping your subscriptions. The server emits an `auth_expired` reminder about
@@ -56,11 +55,11 @@ new connection.
 { "op": "subscribe", "channels": ["orders", "fills", "tree"] }
 ```
 
-| Channel | Scope | What it pushes |
-|---|---|---|
+| Channel  | Scope       | What it pushes                                                                                                                                        |
+| -------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `orders` | Per-account | Settlement reservations, confirmed fills, terminal failures, cancellations, and expiries. Same payloads as the [Orders Channel](./orders-channel.md). |
-| `fills` | Per-account | Your continuation-fill memos. Same payloads, and the same verify-before-store rule, as the [Fills Channel](./fills-channel.md). |
-| `tree` | Global | Leaf-append events, for keeping an incremental view of the note tree (for example, live portfolio state). |
+| `fills`  | Per-account | Your continuation-fill memos. Same payloads, and the same verify-before-store rule, as the [Fills Channel](./fills-channel.md).                       |
+| `tree`   | Global      | Leaf-append events, for keeping an incremental view of the note tree (for example, live portfolio state).                                             |
 
 `unsubscribe` takes the same `channels` array. Each server push is tagged with a
 top-level `channel` field so you can route it.
@@ -83,10 +82,10 @@ reply; later state changes arrive on the `orders` channel.
 ```json
 { "op": "order.place",  "request_id": "r1", "params": { /* a Place Order body */ } }
 { "op": "order.cancel", "request_id": "r2", "order_id": "aa00…01",
-  "params": { "trading_key": "…", "cancel_nonce": 2, "session_id": "…",
+  "params": { "trading_key": "…", "cancel_nonce": "2", "session_id": "…",
     "trading_key_signature": "…" } }
 { "op": "order.modify", "request_id": "r3", "order_id": "aa00…01",
-  "params": { "cancel_signature": "…", "cancel_nonce": 2,
+  "params": { "cancel_signature": "…", "cancel_nonce": "2",
     "replacement": { /* a Place Order body */ } } }
 ```
 

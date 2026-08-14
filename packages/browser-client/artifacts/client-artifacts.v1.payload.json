@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "protocol": "darknyx",
+  "protocol_version": 1,
+  "artifact_set_id": "darknyx-client-groth16-note-use-2026-08-10",
+  "circuits": {
+    "wallet_create": {
+      "circuit_version": "valid_wallet_create-v3",
+      "public_inputs": 1,
+      "wasm": {
+        "path": "valid_wallet_create/circuit.wasm",
+        "bytes": 2432468,
+        "sha256": "434ee7bcffd8161e118999fc5e88b2ba369993533fc0524fecb75eb4a160fd3f"
+      },
+      "zkey": {
+        "path": "valid_wallet_create/circuit_final.zkey",
+        "bytes": 1511077,
+        "sha256": "64088e70403cb394b0d8c5207a99f7eaa47902dd818eb335607750907439b3ec"
+      },
+      "verification_key": {
+        "path": "valid_wallet_create/verification_key.json",
+        "bytes": 2925,
+        "sha256": "145a3f75078558435c4b7ab209fe0aa7f169b1759db838364242535844d7d048"
+      }
+    },
+    "deposit": {
+      "circuit_version": "valid_deposit-v1",
+      "public_inputs": 5,
+      "wasm": {
+        "path": "valid_deposit/circuit.wasm",
+        "bytes": 3306514,
+        "sha256": "0da4cd4f2d02d1d795acd2c19f061410686e5d7cc6e40e86ca4b1a07e5ffb6c2"
+      },
+      "zkey": {
+        "path": "valid_deposit/circuit_final.zkey",
+        "bytes": 1230947,
+        "sha256": "d109d094a862ade8ca76ce13923150d4bd4799327c36232b7e5f58018b1f25d9"
+      },
+      "verification_key": {
+        "path": "valid_deposit/verification_key.json",
+        "bytes": 3654,
+        "sha256": "31d2f803592ffd6c51c9b7ae3a8ed2f24c38ed1f97e4349843d96c03bf43d958"
+      }
+    },
+    "input": {
+      "circuit_version": "valid_input-v2",
+      "public_inputs": 4,
+      "wasm": {
+        "path": "valid_input/circuit.wasm",
+        "bytes": 3112865,
+        "sha256": "7cc2a3af90e14f333485aff3b64e2226afb4a5cfd368832a36a4b94ff67a8ff3"
+      },
+      "zkey": {
+        "path": "valid_input/circuit_final.zkey",
+        "bytes": 5629973,
+        "sha256": "60443358f00375bb163e15e1659c6c3ea7f8dcb5ef251ba578b3d9d378438ece"
+      },
+      "verification_key": {
+        "path": "valid_input/verification_key.json",
+        "bytes": 3474,
+        "sha256": "f26a82f656a0dc9cc0ac50e3967b0a90e0d7630cd12fa33710e73594c3663072"
+      }
+    },
+    "spend": {
+      "circuit_version": "valid_spend-v2",
+      "public_inputs": 8,
+      "wasm": {
+        "path": "valid_spend/circuit.wasm",
+        "bytes": 3141268,
+        "sha256": "66fd608943190be2ccd1e740793e272c323e66a9f2f74d96c27fd5d10fe4cb61"
+      },
+      "zkey": {
+        "path": "valid_spend/circuit_final.zkey",
+        "bytes": 5848029,
+        "sha256": "8e07f9dc6720fba2867a053a46851a731bb5501a527ac7acfadc7a3b5feab78f"
+      },
+      "verification_key": {
+        "path": "valid_spend/verification_key.json",
+        "bytes": 4208,
+        "sha256": "fd880ec8b56691cbdeba3e1a618a2b237917cf14a3597a4c66c61a4c8e1fd69a"
+      }
+    },
+    "merge_k2": {
+      "circuit_version": "valid_merge_k2-v3",
+      "public_inputs": 6,
+      "wasm": {
+        "path": "valid_merge_k2/circuit.wasm",
+        "bytes": 3271902,
+        "sha256": "82ea90465a1d2f1f2ca9f16385e3d43d0e6b9471e28a05092c5f610e4de8d4da"
+      },
+      "zkey": {
+        "path": "valid_merge_k2/circuit_final.zkey",
+        "bytes": 11758632,
+        "sha256": "f1dc24d9ab84ea452439804b4051c301af47754a66bf68d6a898c831196db279"
+      },
+      "verification_key": {
+        "path": "valid_merge_k2/verification_key.json",
+        "bytes": 3836,
+        "sha256": "72432a3beb1f3cb26d039cfbcf59e29a2e67e15a5149b002410c7350016ada4d"
+      }
+    },
+    "merge_k4": {
+      "circuit_version": "valid_merge_k4-v3",
+      "public_inputs": 8,
+      "wasm": {
+        "path": "valid_merge_k4/circuit.wasm",
+        "bytes": 3368545,
+        "sha256": "67d9fae7a69148099b0f83404d8fce329baa713d57e222a7824453bbe4f3ccc0"
+      },
+      "zkey": {
+        "path": "valid_merge_k4/circuit_final.zkey",
+        "bytes": 22585512,
+        "sha256": "9dd0023db8aeb95c28161c056a116aafc81a586e4166144bda87fa4ce25c8d30"
+      },
+      "verification_key": {
+        "path": "valid_merge_k4/verification_key.json",
+        "bytes": 4207,
+        "sha256": "63c205fde31240b142e0728b8e5a9ed1bd2b2aeebe9dbae0fcced940a75e80da"
+      }
+    }
+  }
+}

@@ -28,7 +28,7 @@ import {
   SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
 } from "@solana/web3.js";
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 
 import {
   VAULT_CONFIG_SEED,
@@ -52,9 +52,7 @@ export interface Groth16OnChainProof {
 
 /** Compute Anchor global instruction discriminator. */
 export function anchorDiscriminator(name: string): Uint8Array {
-  const h = createHash("sha256");
-  h.update(`global:${name}`);
-  return new Uint8Array(h.digest()).slice(0, 8);
+  return sha256(new TextEncoder().encode(`global:${name}`)).slice(0, 8);
 }
 
 /** Helper: append bytes into a growing buffer. */

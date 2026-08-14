@@ -24,6 +24,9 @@ pub struct SystemStatus {
     /// An oracle cache is attached (the clearing-price reference). Per-feed
     /// staleness is the matcher's own policy; this only reports presence.
     pub oracle_configured: bool,
+    /// Versioned boot-selected oracle producer/trust boundary.
+    pub oracle_mode: Option<&'static str>,
+    pub oracle_max_age_ms: Option<u64>,
     /// The TEE's current view of the Solana slot (drives expiry sweeps).
     pub current_slot: u64,
     pub version: &'static str,
@@ -40,6 +43,8 @@ pub async fn get_status(State(state): State<Arc<ApiState>>) -> Json<SystemStatus
         matcher_running,
         settle_enabled,
         oracle_configured: state.oracle.is_some(),
+        oracle_mode: state.oracle_mode.map(|mode| mode.as_str()),
+        oracle_max_age_ms: state.oracle_mode.map(|mode| mode.freshness().max_age_ms),
         current_slot: state.current_slot.load(Ordering::Relaxed),
         version: state.version,
     })
@@ -73,6 +78,38 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::AtomicU64;
     use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn oracle_status_fields_match_the_sdk_wire_contract() {
+        for (mode, expected_name, expected_age) in [
+            (
+                Some(crate::oracle::OracleMode::PythSolanaPushV1),
+                Some("pyth-solana-push-v1"),
+                Some(420_000),
+            ),
+            (
+                Some(crate::oracle::OracleMode::PythRouterQuorumV1),
+                Some("pyth-router-quorum-v1"),
+                Some(5_000),
+            ),
+            (None, None, None),
+        ] {
+            let state = match mode {
+                Some(mode) => ApiState::for_tests().with_oracle_mode(mode),
+                None => ApiState::for_tests(),
+            };
+            let Json(status) = get_status(State(Arc::new(state))).await;
+            let wire = serde_json::to_value(status).unwrap();
+            assert_eq!(
+                wire["oracle_mode"],
+                serde_json::to_value(expected_name).unwrap()
+            );
+            assert_eq!(
+                wire["oracle_max_age_ms"],
+                serde_json::to_value(expected_age).unwrap()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn partial_market_pause_is_available_but_degraded() {

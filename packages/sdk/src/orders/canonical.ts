@@ -15,7 +15,7 @@
  * Wire spec: `docs/tee-architecture.md` §11.2.
  */
 
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
 
 /**
  * `v5` drops the order-level `user_commitment` (audit 2026-07-25 T-07 / PF-10):
@@ -190,9 +190,7 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
 
 /** SHA-256 over `orderCanonicalBytes` — the message the trading-key signature is over. */
 export function orderCanonicalDigest(o: OrderCanonical): Uint8Array {
-  return new Uint8Array(
-    createHash("sha256").update(orderCanonicalBytes(o)).digest(),
-  );
+  return sha256(orderCanonicalBytes(o));
 }
 
 /**
@@ -232,7 +230,5 @@ export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
 }
 
 export function cancelCanonicalDigest(c: CancelCanonical): Uint8Array {
-  return new Uint8Array(
-    createHash("sha256").update(cancelCanonicalBytes(c)).digest(),
-  );
+  return sha256(cancelCanonicalBytes(c));
 }

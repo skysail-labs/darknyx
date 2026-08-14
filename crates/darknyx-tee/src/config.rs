@@ -11,8 +11,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
-use crate::oracle::hermes::{DEFAULT_HERMES_ENDPOINT, UPGRADED_HERMES_ENDPOINT};
-use crate::oracle::vaa::TrustProfile;
+use crate::oracle::hermes::UPGRADED_HERMES_ENDPOINT;
+use crate::oracle::OracleMode;
 
 pub const MAX_MARKETS_PER_CVM: usize = 16;
 
@@ -87,11 +87,12 @@ pub struct Config {
     /// market via `DARKNYX_TEE_MARKETS_JSON`; the singular compatibility path
     /// uses `DARKNYX_TEE_FEED_IDS`. Each entry is a 64-char-hex Pyth feed id.
     pub feed_ids: Vec<String>,
-    /// Complete signer/emitter/quorum profile for the Pyth payload generation.
-    /// This is explicit and versioned; it is never selected from VAA fields.
-    pub pyth_trust_profile: TrustProfile,
-    /// Hermes base URL. The router profile defaults to the upgraded authenticated
-    /// endpoint; the legacy profile defaults to the pre-cutover endpoint.
+    /// Exactly one versioned oracle producer. Development defaults to finalized
+    /// upgraded Pyth Core push accounts; mainnet policy explicitly selects the
+    /// licensed low-latency router mode.
+    pub oracle_mode: OracleMode,
+    /// Hermes base URL. Used only by `pyth-router-quorum-v1` and defaulted to
+    /// the authenticated upgraded service. There is no legacy endpoint path.
     pub hermes_endpoint: String,
     /// Bearer credential supplied only through encrypted deployment env. Its
     /// `Debug` implementation is redacted.
@@ -223,6 +224,15 @@ fn validate_hermes_endpoint(endpoint: &str) -> Result<()> {
             "DARKNYX_TEE_HERMES_ENDPOINT must not contain credentials, query parameters, or a fragment"
         );
     }
+    if !loopback
+        && (parsed.scheme() != "https"
+            || parsed.host_str() != Some("pyth.dourolabs.app")
+            || parsed.path().trim_end_matches('/') != "/hermes")
+    {
+        bail!(
+            "DARKNYX_TEE_HERMES_ENDPOINT must be the upgraded authenticated Pyth router endpoint (or loopback for tests)"
+        );
+    }
     Ok(())
 }
 
@@ -278,6 +288,30 @@ fn validate_feed_id(feed: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn normalize_feed_id(feed: &str, field: &str) -> Result<String> {
+    validate_feed_id(feed, field)?;
+    Ok(feed.strip_prefix("0x").unwrap_or(feed).to_ascii_lowercase())
+}
+
+fn validate_deployment_oracle_policy(
+    tier: &str,
+    mode: OracleMode,
+    has_pyth_api_key: bool,
+) -> Result<()> {
+    match tier {
+        "development" => Ok(()),
+        "mainnet" if mode != OracleMode::PythRouterQuorumV1 => bail!(
+            "mainnet requires DARKNYX_TEE_ORACLE_MODE={}",
+            OracleMode::ROUTER_NAME
+        ),
+        "mainnet" if !has_pyth_api_key => {
+            bail!("mainnet requires non-empty DARKNYX_TEE_PYTH_API_KEY")
+        }
+        "mainnet" => Ok(()),
+        other => bail!("DARKNYX_TEE_DEPLOYMENT_TIER must be development or mainnet, got {other:?}"),
+    }
+}
+
 fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     let rows: Vec<MarketSpecJson> =
         serde_json::from_str(raw).context("DARKNYX_TEE_MARKETS_JSON: invalid JSON")?;
@@ -291,7 +325,6 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     for (index, row) in rows.into_iter().enumerate() {
         let prefix = format!("DARKNYX_TEE_MARKETS_JSON[{index}]");
         validate_symbol(&row.symbol, &format!("{prefix}.symbol"))?;
-        validate_feed_id(&row.oracle_feed_id, &format!("{prefix}.oracle_feed_id"))?;
         let base_mint = parse_mint_value(&format!("{prefix}.base_mint"), &row.base_mint)?;
         let quote_mint = parse_mint_value(&format!("{prefix}.quote_mint"), &row.quote_mint)?;
         if base_mint == quote_mint {
@@ -307,11 +340,10 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
             symbol: row.symbol,
             base_mint,
             quote_mint,
-            oracle_feed_id: row
-                .oracle_feed_id
-                .strip_prefix("0x")
-                .unwrap_or(&row.oracle_feed_id)
-                .to_ascii_lowercase(),
+            oracle_feed_id: normalize_feed_id(
+                &row.oracle_feed_id,
+                &format!("{prefix}.oracle_feed_id"),
+            )?,
         });
     }
     Ok(markets)
@@ -481,17 +513,15 @@ impl Config {
                     .collect()
             })
             .unwrap_or_default();
-        let pyth_trust_profile =
-            env_string_or("DARKNYX_TEE_PYTH_TRUST_PROFILE", TrustProfile::LEGACY_NAME)
-                .parse::<TrustProfile>()
-                .context("DARKNYX_TEE_PYTH_TRUST_PROFILE")?;
-        let default_hermes_endpoint = match pyth_trust_profile {
-            TrustProfile::LegacyWormholeV1 => DEFAULT_HERMES_ENDPOINT,
-            TrustProfile::RouterQuorumV1 => UPGRADED_HERMES_ENDPOINT,
-        };
-        let hermes_endpoint = env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", default_hermes_endpoint);
+        let oracle_mode = env_string_or("DARKNYX_TEE_ORACLE_MODE", OracleMode::default().as_str())
+            .parse::<OracleMode>()
+            .context("DARKNYX_TEE_ORACLE_MODE")?;
+        let hermes_endpoint =
+            env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", UPGRADED_HERMES_ENDPOINT);
         validate_hermes_endpoint(&hermes_endpoint)?;
         let pyth_api_key = env_nonempty("DARKNYX_TEE_PYTH_API_KEY").map(SecretString);
+        let deployment_tier = env_string_or("DARKNYX_TEE_DEPLOYMENT_TIER", "development");
+        validate_deployment_oracle_policy(&deployment_tier, oracle_mode, pyth_api_key.is_some())?;
 
         let dstack_socket = std::env::var("DSTACK_SIMULATOR_ENDPOINT")
             .ok()
@@ -525,10 +555,11 @@ impl Config {
                          compatibility path; use DARKNYX_TEE_MARKETS_JSON for multiple markets"
                     );
                 }
-                let oracle_feed_id = legacy_feed_ids.first().cloned().unwrap_or_default();
-                if !oracle_feed_id.is_empty() {
-                    validate_feed_id(&oracle_feed_id, "DARKNYX_TEE_FEED_IDS[0]")?;
-                }
+                let oracle_feed_id = legacy_feed_ids
+                    .first()
+                    .map(|feed| normalize_feed_id(feed, "DARKNYX_TEE_FEED_IDS[0]"))
+                    .transpose()?
+                    .unwrap_or_default();
                 vec![MarketSpec {
                     symbol: market_symbol.clone(),
                     base_mint,
@@ -539,11 +570,20 @@ impl Config {
         };
         validate_market_oracle_invariant(&markets)?;
         let mut seen_feeds = HashSet::new();
-        let feed_ids = markets
+        let feed_ids: Vec<String> = markets
             .iter()
             .map(|market| market.oracle_feed_id.clone())
             .filter(|feed| !feed.is_empty() && seen_feeds.insert(feed.clone()))
             .collect();
+        if oracle_mode == OracleMode::PythRouterQuorumV1
+            && !feed_ids.is_empty()
+            && pyth_api_key.is_none()
+        {
+            bail!(
+                "DARKNYX_TEE_PYTH_API_KEY is required when DARKNYX_TEE_ORACLE_MODE={} and feeds are configured",
+                OracleMode::ROUTER_NAME
+            );
+        }
         let governed_market =
             env_nonempty("DARKNYX_TEE_MARKETS_JSON").is_some() || (base_mint_set && quote_mint_set);
         let primary = markets
@@ -562,7 +602,7 @@ impl Config {
             dstack_socket,
             allow_test_auth,
             feed_ids,
-            pyth_trust_profile,
+            oracle_mode,
             hermes_endpoint,
             pyth_api_key,
             sync_from_slot: parse_u64_env("DARKNYX_TEE_SYNC_FROM_SLOT", 0)?,
@@ -634,6 +674,31 @@ mod tests {
             parse_markets_json(&missing_feed).is_err(),
             "every strict multi-market row must name its own oracle feed"
         );
+    }
+
+    #[test]
+    fn legacy_feed_ids_are_canonical_lowercase() {
+        assert_eq!(
+            normalize_feed_id(&"AB".repeat(32), "legacy").unwrap(),
+            "ab".repeat(32)
+        );
+    }
+
+    #[test]
+    fn mainnet_requires_authenticated_router_mode() {
+        validate_deployment_oracle_policy("development", OracleMode::PythSolanaPushV1, false)
+            .unwrap();
+        assert!(
+            validate_deployment_oracle_policy("mainnet", OracleMode::PythSolanaPushV1, true,)
+                .is_err()
+        );
+        assert!(validate_deployment_oracle_policy(
+            "mainnet",
+            OracleMode::PythRouterQuorumV1,
+            false,
+        )
+        .is_err());
+        validate_deployment_oracle_policy("mainnet", OracleMode::PythRouterQuorumV1, true).unwrap();
     }
 
     #[test]
@@ -724,8 +789,9 @@ mod tests {
 
     #[test]
     fn hermes_endpoint_rejects_secret_bearing_or_plaintext_remote_urls() {
-        validate_hermes_endpoint("https://pyth.example/hermes").unwrap();
+        validate_hermes_endpoint("https://pyth.dourolabs.app/hermes").unwrap();
         validate_hermes_endpoint("http://127.0.0.1:8080").unwrap();
+        assert!(validate_hermes_endpoint("https://pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("http://pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://key@pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://pyth.example/hermes?key=secret").is_err());

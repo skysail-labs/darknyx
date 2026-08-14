@@ -39,7 +39,7 @@
 #      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
-#   4. Add secrets `PHALA_CLOUD_API_KEY`, `HELIUS_API_KEY`, and `PYTH_API_KEY`.
+#   4. Add secrets `PHALA_CLOUD_API_KEY` and `HELIUS_API_KEY`.
 # The K shard signers are deterministic per app_id; this workflow re-rotates +
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
@@ -92,7 +92,6 @@ jobs:
     timeout-minutes: 50
     env:
       HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
-      PYTH_API_KEY: ${{ secrets.PYTH_API_KEY }}
       CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -174,7 +173,8 @@ jobs:
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
           {
             echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
-            echo "DARKNYX_TEE_PYTH_API_KEY=$PYTH_API_KEY"
+            echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
+            echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
             echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
@@ -331,7 +331,8 @@ jobs:
             FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
             {
               echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
-              echo "DARKNYX_TEE_PYTH_API_KEY=$PYTH_API_KEY"
+              echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
+              echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
               echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"

@@ -1,3 +1,5 @@
+import { apiUrl } from "../api-url.js";
+
 /**
  * Public system endpoints — `GET /system/status` (liveness / degraded-mode)
  * and `GET /time` (server slot + unix ms). Both are unauthenticated.
@@ -15,6 +17,8 @@ export interface SystemStatus {
   matcher_running: boolean;
   settle_enabled: boolean;
   oracle_configured: boolean;
+  oracle_mode: "pyth-router-quorum-v1" | "pyth-solana-push-v1" | null;
+  oracle_max_age_ms: number | null;
   current_slot: number;
   version: string;
 }
@@ -31,8 +35,8 @@ export async function fetchSystemStatus(
   baseUrl: string,
   opts: { fetchImpl?: typeof fetch } = {},
 ): Promise<SystemStatus> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(new URL("/system/status", baseUrl).toString());
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(baseUrl, "system/status"));
   if (!res.ok)
     throw new Error(`/system/status ${res.status}: ${await res.text()}`);
   return (await res.json()) as SystemStatus;
@@ -43,8 +47,8 @@ export async function fetchServerTime(
   baseUrl: string,
   opts: { fetchImpl?: typeof fetch } = {},
 ): Promise<ServerTime> {
-  const f = opts.fetchImpl ?? fetch;
-  const res = await f(new URL("/time", baseUrl).toString());
+  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const res = await f(apiUrl(baseUrl, "time"));
   if (!res.ok) throw new Error(`/time ${res.status}: ${await res.text()}`);
   return (await res.json()) as ServerTime;
 }

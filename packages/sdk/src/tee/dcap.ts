@@ -29,7 +29,8 @@ import { AttestationError, type VerifiedQuoteReport } from "./verify-core.js";
  */
 export type QuoteVerifier = (quote: Uint8Array) => Promise<VerifiedQuoteReport>;
 
-const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
+const toHex = (bytes: Uint8Array): string =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 const errMsg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
 
@@ -47,7 +48,7 @@ export function createDcapQuoteVerifier(
   return async (quote: Uint8Array): Promise<VerifiedQuoteReport> => {
     let verified: VerifiedReport;
     try {
-      verified = await getCollateralAndVerify(Buffer.from(quote), pccsUrl);
+      verified = await getCollateralAndVerify(quote, pccsUrl);
     } catch (e) {
       throw new AttestationError(
         `dcap verification failed: ${errMsg(e)}`,

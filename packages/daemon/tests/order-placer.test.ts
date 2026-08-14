@@ -210,7 +210,7 @@ describe("RestOrderPlacer", () => {
     expect(resp).toEqual(ACCEPT);
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0];
-    expect(url).toBe("https://gw.example/orders");
+    expect(String(url)).toBe("https://gw.example/orders");
     expect(init.method).toBe("POST");
     expect(init.headers.authorization).toBe("Bearer tok");
   });

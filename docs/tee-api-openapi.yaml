@@ -395,10 +395,32 @@ components:
             racing 503 from an order write.
         oracle:
           type: object
-          required: [type, pubkey]
+          required: [type, pubkey, source, publish_time_ms, age_ms, max_age_ms]
           properties:
-            type: { type: string, enum: [pyth_pull_v2] }
-            pubkey: { type: string, description: Pyth feed identifier (typically 32-byte hex). }
+            type:
+              type: string
+              enum: [pyth_pull_v2, pyth_push_v2]
+              description: Pyth adapter-family discriminator paired with source (router quorum uses pull_v2; finalized Solana accounts use push_v2).
+            pubkey: { type: string, description: Pyth feed identifier (32-byte hex). }
+            source:
+              type: string
+              enum: [pyth-router-quorum-v1, pyth-solana-push-v1]
+              description: Versioned oracle source selected exclusively at CVM boot.
+            account:
+              type: string
+              description: Derived upgraded Pyth push-account PDA; present only for pyth-solana-push-v1.
+            publish_time_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Signed Pyth publish time of the currently cached price, or null before the first accepted update.
+            age_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Current age of the signed publish time, or null before the first accepted update.
+            max_age_ms:
+              type: [integer, 'null']
+              format: uint64
+              description: Source-specific fail-closed signed-age budget (5 s router; 7 min development finalized push).
 
     PlaceOrderRequest:
       type: object
@@ -461,9 +483,10 @@ components:
           type: integer
           format: uint64
           description: |
-            Solana slot past which this order auto-expires. Bounded by the
-            protocol maximum (currently 4,500 slots) to prevent an unbounded
-            collateral-lock window.
+            Future Solana slot past which this order auto-expires. It must
+            leave the matcher settlement buffer and is bounded by the protocol
+            maximum (currently 4,500 slots) to prevent an unbounded
+            collateral-lock window. Zero is not a GTC sentinel.
         order_id:
           type: string
           description: 16-byte client-chosen id, hex. Must be unique + non-zero.
@@ -578,7 +601,7 @@ components:
       required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
         trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
-        cancel_nonce: { type: integer, format: uint64 }
+        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients. }
         session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. It is not quote-bound; substitution causes rejection. }
         trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
 
@@ -594,7 +617,7 @@ components:
       required: [cancel_signature, cancel_nonce, replacement]
       properties:
         cancel_signature: { type: string, description: 64-byte signature over the old order's canonical cancel body. }
-        cancel_nonce: { type: integer, format: uint64 }
+        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string. }
         replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
     ModifyOrderResponse:
@@ -1606,8 +1629,8 @@ paths:
         '400':
           description: |
             Validation error, including malformed fields, off-tick price,
-            opening mismatch, stale proof root (1010), or invalid VALID_INPUT
-            proof (1011).
+            opening mismatch, stale proof root (1010), invalid VALID_INPUT
+            proof (1011), or an expired/settlement-unsafe expiry (1012).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -2076,7 +2099,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [degraded, matcher_running, settle_enabled, oracle_configured, current_slot, version]
+                required: [degraded, matcher_running, settle_enabled, oracle_configured, oracle_mode, oracle_max_age_ms, current_slot, version]
                 properties:
                   degraded:
                     type: boolean
@@ -2090,6 +2113,14 @@ paths:
                   oracle_configured:
                     type: boolean
                     description: An oracle cache (clearing-price reference) is attached.
+                  oracle_mode:
+                    type: [string, 'null']
+                    enum: [pyth-router-quorum-v1, pyth-solana-push-v1, null]
+                    description: Versioned oracle source selected exclusively at boot.
+                  oracle_max_age_ms:
+                    type: [integer, 'null']
+                    format: uint64
+                    description: Source-specific signed-price age budget.
                   current_slot: { type: integer, format: uint64 }
                   version: { type: string }
 
@@ -2358,7 +2389,7 @@ x-websocket:
             required: [trading_key, cancel_nonce, session_id, trading_key_signature]
             properties:
               trading_key: { type: string }
-              cancel_nonce: { type: integer }
+              cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
               session_id: { type: string, description: Current 32-byte /info.boot_session_id, hex. Not quote-bound; substitution causes intake rejection. }
               trading_key_signature: { type: string }
 
@@ -2379,7 +2410,7 @@ x-websocket:
             required: [cancel_signature, cancel_nonce, replacement]
             properties:
               cancel_signature: { type: string }
-              cancel_nonce: { type: integer }
+              cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
               replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
   server_channels:

@@ -170,7 +170,8 @@ reconciliation continue.
 6. Account and stream routers aggregate all matcher broadcasts without exposing
    the private account/order/market joins.
 7. Governance and drain gate reasons are venue-wide, while oracle reasons are
-   per market. Normal oracle refresh remains one batched Hermes request; a
+   per market. Router mode batches all feeds; push mode reads all derived feed
+   accounts in one finalized RPC request. A
    failed batch falls back to bounded per-feed refreshes so one bad feed cannot
    starve healthy caches. `/instruments[].trading_enabled` exposes the
    market-local snapshot, and order intake rechecks it before mutation.

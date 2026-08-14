@@ -28,7 +28,8 @@ import {
 } from "../keys/key-generators.js";
 import { isContributoryX25519PublicKey } from "../keys/fill-encryption.js";
 
-const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
+const toHex = (b: Uint8Array): string =>
+  Array.from(b, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** A spendable note the order is collateralized by. */
 export interface OrderNote {
