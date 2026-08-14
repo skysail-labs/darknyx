@@ -516,6 +516,25 @@ export class BrowserTraderController {
       : { mint: market.quoteMint, decimals: market.quoteDecimals };
   }
 
+  async #requirePrivateRuntime(): Promise<{
+    runtime: BrowserPrivateRuntime;
+    account: BrowserAccountOperations;
+  }> {
+    if ((await this.#vault.status()).state !== "unlocked") {
+      throw new Error("unlock the private vault first");
+    }
+    // Unlock/provision makes the custody Worker usable before finalized-chain
+    // recovery and the authenticated stream have finished opening. Account
+    // actions can therefore race the in-flight runtime even though the header
+    // already (correctly) reports "Vault unlocked". Join that work instead of
+    // misreporting the unlocked vault as locked.
+    await this.#openRuntime();
+    if (!this.#runtime || !this.#account) {
+      throw new Error("private vault runtime did not finish initializing");
+    }
+    return { runtime: this.#runtime, account: this.#account };
+  }
+
   async #runAccountAmount(
     kind: "deposit" | "withdraw",
     draft: { marketSymbol: string; asset: "base" | "quote"; amount: string },
@@ -523,10 +542,9 @@ export class BrowserTraderController {
     if (this.#accountOperationInFlight) return;
     this.#accountOperationInFlight = true;
     try {
-      if (!this.#account || !this.#runtime)
-        throw new Error("unlock the private vault first");
+      const { account, runtime } = await this.#requirePrivateRuntime();
       const asset = this.#asset(draft.marketSymbol, draft.asset);
-      const result = await this.#account[kind]({
+      const result = await account[kind]({
         tokenMint: asset.mint,
         amount: decimalToAtoms(draft.amount, asset.decimals),
       });
@@ -539,7 +557,7 @@ export class BrowserTraderController {
             ? `${kind} finalized on Solana`
             : "transaction submitted; finalized reconciliation is still pending",
       };
-      await this.#runtime.refresh(`${kind} ${result.status}`);
+      await runtime.refresh(`${kind} ${result.status}`);
     } catch (error) {
       this.#accountOperation = {
         kind,
@@ -559,10 +577,9 @@ export class BrowserTraderController {
     if (this.#accountOperationInFlight) return;
     this.#accountOperationInFlight = true;
     try {
-      if (!this.#account || !this.#runtime)
-        throw new Error("unlock the private vault first");
+      const { account, runtime } = await this.#requirePrivateRuntime();
       const asset = this.#asset(marketSymbol, assetKind);
-      const result = await this.#account.merge(asset.mint);
+      const result = await account.merge(asset.mint);
       this.#accountOperation = {
         kind: "merge",
         state: result.status,
@@ -572,7 +589,7 @@ export class BrowserTraderController {
             ? "note consolidation finalized on Solana"
             : "merge submitted; finalized reconciliation is still pending",
       };
-      await this.#runtime.refresh(`merge ${result.status}`);
+      await runtime.refresh(`merge ${result.status}`);
     } catch (error) {
       this.#accountOperation = {
         kind: "merge",
