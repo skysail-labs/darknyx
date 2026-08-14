@@ -178,24 +178,26 @@ describe("makeConnectionScan", () => {
           },
         ];
       },
-      getTransaction: async (
-        signature: string,
+      getTransactions: async (
+        signatures: string[],
         config: { commitment: string },
       ) => {
-        expect(signature).toBe("sig-finalized");
+        expect(signatures).toEqual(["sig-finalized"]);
         expect(config.commitment).toBe("finalized");
-        return {
-          slot: 456,
-          meta: { logMessages: ["Program log: finalized"] },
-          transaction: {
-            message: {
-              accountKeys: [programId],
-              compiledInstructions: [
-                { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
-              ],
+        return [
+          {
+            slot: 456,
+            meta: { logMessages: ["Program log: finalized"] },
+            transaction: {
+              message: {
+                accountKeys: [programId],
+                compiledInstructions: [
+                  { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
+                ],
+              },
             },
           },
-        };
+        ];
       },
     } as unknown as Connection;
 
@@ -204,5 +206,51 @@ describe("makeConnectionScan", () => {
     expect(rows[0].slot).toBe(456);
     expect(rows[0].ixDatas[0]).toEqual(ixData);
     expect(rows[0].logMessages).toEqual(["Program log: finalized"]);
+  });
+
+  it("bounds history at the recovery floor and batches transaction reads by 50", async () => {
+    const programId = new PublicKey(fill(32, 0x77));
+    const requested: string[][] = [];
+    const signatures = Array.from({ length: 51 }, (_, index) => ({
+      signature: `sig-${index}`,
+      slot: 200 - index,
+      err: null,
+      memo: null,
+      blockTime: null,
+      confirmationStatus: "finalized" as const,
+    }));
+    signatures.push({
+      signature: "below-floor",
+      slot: 149,
+      err: null,
+      memo: null,
+      blockTime: null,
+      confirmationStatus: "finalized",
+    });
+    const connection = {
+      getSignaturesForAddress: async () => signatures,
+      getTransactions: async (batch: string[]) => {
+        requested.push(batch);
+        return batch.map((_signature, index) => ({
+          slot: index,
+          meta: { logMessages: [] },
+          transaction: {
+            message: {
+              accountKeys: [programId],
+              compiledInstructions: [
+                { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
+              ],
+            },
+          },
+        }));
+      },
+    } as unknown as Connection;
+
+    const rows = await makeConnectionScan(connection, programId)({
+      sinceSlot: 150,
+    });
+    expect(requested.map((batch) => batch.length)).toEqual([50, 1]);
+    expect(requested.flat()).not.toContain("below-floor");
+    expect(rows).toHaveLength(51);
   });
 });

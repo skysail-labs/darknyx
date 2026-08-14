@@ -146,6 +146,7 @@ const RELEASE = {
   vaultProgramId: PROGRAM.toBase58(),
   expectedComposeHash: "ab".repeat(32),
   expectedOracleMode: "pyth-solana-push-v1" as const,
+  recoveryStartSlot: 0,
 };
 
 describe("strict browser venue bootstrap", () => {

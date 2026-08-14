@@ -74,8 +74,11 @@ overwrite an existing artifact directory, so a release always starts from a
 fresh content-addressed application build. The private key is accepted only as
 `DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64` and is zeroed after signing.
 Pass `--expected-oracle-mode=pyth-solana-push-v1` for development releases or
-`--expected-oracle-mode=pyth-router-quorum-v1` for the low-latency launch
-release; bootstrap rejects a venue whose reported source differs from this pin.
+`pyth-router-quorum-v1` for the licensed low-latency source. Also pass the
+first finalized slot of the current recovery-compatible protocol epoch as
+`--recovery-start-slot=...`; tree resets and incompatible note migrations must
+start a new epoch so a fresh browser never scans unusable historical leaves.
+Bootstrap rejects a venue whose reported oracle source differs from this pin.
 
 With that assembled release served by the standalone trader host, the explicit
 live browser gate is:
