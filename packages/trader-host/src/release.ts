@@ -1,4 +1,5 @@
 import type { PublicRelease } from "./types.js";
+import { isLoopbackHttp } from "./http.js";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -30,7 +31,7 @@ function httpsUrl(value: unknown, label: string): string {
   } catch {
     throw new Error(`${label} must be a valid HTTPS URL`);
   }
-  const local = url.protocol === "http:" && url.hostname === "localhost";
+  const local = isLoopbackHttp(url);
   if (
     (url.protocol !== "https:" && !local) ||
     url.username ||
@@ -38,7 +39,9 @@ function httpsUrl(value: unknown, label: string): string {
     url.search ||
     url.hash
   ) {
-    throw new Error(`${label} must be a credential-free HTTPS URL`);
+    throw new Error(
+      `${label} must be credential-free HTTPS or http://localhost`,
+    );
   }
   return url.toString();
 }

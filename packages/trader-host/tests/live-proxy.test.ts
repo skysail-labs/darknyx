@@ -51,6 +51,7 @@ async function listen(
 async function setup() {
   const upstreamRequests: Array<{
     path: string;
+    body: string;
     cookie?: string;
     authorization?: string;
   }> = [];
@@ -59,12 +60,13 @@ async function setup() {
     for await (const chunk of request) body += String(chunk);
     upstreamRequests.push({
       path: request.url ?? "",
+      body,
       ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}),
       ...(request.headers.authorization
         ? { authorization: request.headers.authorization }
         : {}),
     });
-    response.setHeader("content-type", "application/json");
+    response.setHeader("content-type", "text/plain");
     response.end(
       body ||
         JSON.stringify({
@@ -138,10 +140,32 @@ function openSocket(url: string, cookie: string): Promise<WebSocket> {
   });
 }
 
+function rejectedSocketStatus(url: string, cookie: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, { headers: hostHeaders(cookie) });
+    socket.once("unexpected-response", (_request, response) => {
+      resolve(response.statusCode ?? 0);
+      response.destroy();
+    });
+    socket.once("open", () =>
+      reject(new Error("socket was unexpectedly admitted")),
+    );
+    socket.once("error", () => undefined);
+  });
+}
+
 function nextMessage(socket: WebSocket): Promise<string> {
   return new Promise((resolve) =>
     socket.once("message", (data) => resolve(String(data))),
   );
+}
+
+function closeSocket(socket: WebSocket): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    socket.once("close", () => resolve());
+    socket.close();
+  });
 }
 
 describe("same-origin live proxy", () => {
@@ -152,6 +176,9 @@ describe("same-origin live proxy", () => {
       headers: { ...hostHeaders(cookie), authorization: "Bearer browser" },
     });
     expect(info.status).toBe(200);
+    expect(info.headers.get("content-type")).toBe(
+      "application/json; charset=utf-8",
+    );
     expect(await info.json()).toMatchObject({ path: "/gateway/info" });
 
     const rpc = await fetch(`${base}/api/darknyx/rpc`, {
@@ -170,7 +197,44 @@ describe("same-origin live proxy", () => {
       upstreamRequests.every(({ cookie: value }) => value === undefined),
     ).toBe(true);
     expect(upstreamRequests[0]?.authorization).toBe("Bearer browser");
+    expect(JSON.parse(upstreamRequests.at(-1)?.body ?? "{}")).toMatchObject({
+      method: "getSlot",
+      params: [{ commitment: "finalized" }],
+    });
     expect(JSON.stringify(await rpc.json())).not.toContain("api-key");
+  });
+
+  it("normalizes nested RPC commitments to finalized", async () => {
+    const { base, cookie, upstreamRequests } = await setup();
+    const response = await fetch(`${base}/api/darknyx/rpc`, {
+      method: "POST",
+      headers: {
+        ...hostHeaders(cookie),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getAccountInfo",
+        params: [
+          "account",
+          {
+            commitment: "processed",
+            nested: { commitment: "confirmed" },
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(upstreamRequests.at(-1)?.body ?? "{}")).toMatchObject({
+      params: [
+        "account",
+        {
+          commitment: "finalized",
+          nested: { commitment: "finalized" },
+        },
+      ],
+    });
   });
 
   it("requires a signed session and rejects unknown venue and RPC methods", async () => {
@@ -209,7 +273,7 @@ describe("same-origin live proxy", () => {
     const venueMessage = nextMessage(venue);
     venue.send(JSON.stringify({ op: "login", token: "t".repeat(64) }));
     await expect(venueMessage).resolves.toContain('"op":"login"');
-    venue.close();
+    await closeSocket(venue);
 
     const rpc = await openSocket(`${wsBase}/api/darknyx/rpc`, cookie);
     const rpcMessage = nextMessage(rpc);
@@ -233,5 +297,35 @@ describe("same-origin live proxy", () => {
       }),
     );
     await expect(closed).resolves.toBe(1008);
+  });
+
+  it("caps live relays per authenticated browser session", async () => {
+    const { base, cookie } = await setup();
+    const url = `${base.replace("http://", "ws://")}/api/darknyx/venue/v1/stream`;
+    const sockets: WebSocket[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      sockets.push(await openSocket(url, cookie));
+    }
+    await expect(rejectedSocketStatus(url, cookie)).resolves.toBe(429);
+    await closeSocket(sockets[0]!);
+    const replacement = await openSocket(url, cookie);
+    await Promise.all([
+      closeSocket(replacement),
+      ...sockets.slice(1).map(closeSocket),
+    ]);
+  });
+
+  it("closes keep-alive after rejecting an oversized request body", async () => {
+    const { base, cookie } = await setup();
+    const response = await fetch(`${base}/api/darknyx/venue/orders`, {
+      method: "POST",
+      headers: {
+        ...hostHeaders(cookie),
+        "content-type": "application/json",
+      },
+      body: "x".repeat(2 * 1024 * 1024 + 1),
+    });
+    expect(response.status).toBe(413);
+    expect(response.headers.get("connection")).toBe("close");
   });
 });

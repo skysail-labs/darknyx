@@ -1,8 +1,9 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { once } from "node:events";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
-import { fetchBounded, gatewayBase } from "./http.js";
+import { fetchBounded, gatewayBase, isLoopbackHttp } from "./http.js";
 import { authenticatedSessionId } from "./session.js";
 import type { ReleaseHostOptions } from "./types.js";
 
@@ -11,6 +12,9 @@ const RPC_PATH = "/api/darknyx/rpc";
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_WS_MESSAGE_BYTES = 1024 * 1024;
+const MAX_WS_BUFFERED_BYTES = 2 * MAX_WS_MESSAGE_BYTES;
+const MAX_WS_CONNECTIONS_PER_SESSION = 4;
+const WS_KEEPALIVE_MS = 30_000;
 
 const RPC_METHODS = new Set([
   "getAccountInfo",
@@ -27,13 +31,27 @@ const RPC_METHODS = new Set([
   "isBlockhashValid",
 ]);
 const RPC_WS_METHODS = new Set(["signatureSubscribe", "signatureUnsubscribe"]);
+const RPC_CONFIG_INDEX = new Map<string, number>([
+  ["getAccountInfo", 1],
+  ["getMultipleAccounts", 1],
+  ["getSignaturesForAddress", 1],
+  ["getTransaction", 1],
+  ["getSlot", 0],
+  ["getLatestBlockhash", 0],
+  ["getBlockHeight", 0],
+  ["getBalance", 1],
+  ["getTokenAccountBalance", 1],
+  ["getMinimumBalanceForRentExemption", 1],
+  ["isBlockhashValid", 1],
+  ["signatureSubscribe", 1],
+]);
 
 interface RateWindow {
   window: number;
   count: number;
 }
 
-interface LiveProxy {
+export interface LiveProxy {
   handles(pathname: string): boolean;
   handleHttp(
     request: IncomingMessage,
@@ -65,20 +83,34 @@ async function requestBytes(request: IncomingMessage): Promise<Uint8Array> {
   return Buffer.concat(chunks);
 }
 
-async function responseBytes(
-  response: Response,
+async function streamResponse(
+  upstream: Response,
+  downstream: ServerResponse,
   timeoutMs: number,
-): Promise<Uint8Array> {
-  const declared = response.headers.get("content-length");
+): Promise<void> {
+  const declared = upstream.headers.get("content-length");
   if (
     declared !== null &&
     (!/^\d+$/.test(declared) || Number(declared) > MAX_RESPONSE_BYTES)
   ) {
     throw new Error("upstream_response_too_large");
   }
-  if (!response.body) return new Uint8Array();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  downstream.writeHead(upstream.status, {
+    "content-type": "application/json; charset=utf-8",
+    ...(declared !== null ? { "content-length": declared } : {}),
+    "cache-control": "no-store",
+    ...(upstream.headers.get("retry-after")
+      ? { "retry-after": upstream.headers.get("retry-after")! }
+      : {}),
+    ...(upstream.headers.get("x-request-id")
+      ? { "x-request-id": upstream.headers.get("x-request-id")! }
+      : {}),
+  });
+  if (!upstream.body) {
+    downstream.end();
+    return;
+  }
+  const reader = upstream.body.getReader();
   let total = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
@@ -96,19 +128,15 @@ async function responseBytes(
         await reader.cancel();
         throw new Error("upstream_response_too_large");
       }
-      chunks.push(value);
+      if (!downstream.write(value)) {
+        await Promise.race([once(downstream, "drain"), timeout]);
+      }
     }
   } finally {
     if (timer) clearTimeout(timer);
     reader.releaseLock();
   }
-  const output = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return output;
+  downstream.end();
 }
 
 function rawBytes(data: RawData): Buffer {
@@ -117,28 +145,82 @@ function rawBytes(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-function rpcPayload(value: unknown, methods: ReadonlySet<string>): boolean {
-  const requests = Array.isArray(value) ? value : [value];
-  return (
-    requests.length > 0 &&
-    requests.length <= 50 &&
-    requests.every(
-      (request) =>
-        request !== null &&
-        typeof request === "object" &&
-        !Array.isArray(request) &&
-        (request as Record<string, unknown>).jsonrpc === "2.0" &&
-        typeof (request as Record<string, unknown>).method === "string" &&
-        methods.has((request as Record<string, unknown>).method as string),
-    )
-  );
+function normalizeCommitments(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) normalizeCommitments(item);
+    return;
+  }
+  const object = value as Record<string, unknown>;
+  for (const [key, nested] of Object.entries(object)) {
+    if (key === "commitment") object[key] = "finalized";
+    else normalizeCommitments(nested);
+  }
 }
 
-function parseRpc(bytes: Uint8Array, methods: ReadonlySet<string>): boolean {
+function normalizeRpcPayload(
+  value: unknown,
+  methods: ReadonlySet<string>,
+): unknown | null {
+  const requests = Array.isArray(value) ? value : [value];
+  if (requests.length === 0 || requests.length > 50) return null;
+  for (const request of requests) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      Array.isArray(request)
+    ) {
+      return null;
+    }
+    const object = request as Record<string, unknown>;
+    if (
+      object.jsonrpc !== "2.0" ||
+      typeof object.method !== "string" ||
+      !methods.has(object.method)
+    ) {
+      return null;
+    }
+    if (object.params !== undefined && !Array.isArray(object.params)) {
+      return null;
+    }
+    const params = (object.params ?? []) as unknown[];
+    normalizeCommitments(params);
+    const configIndex = RPC_CONFIG_INDEX.get(object.method);
+    if (configIndex !== undefined) {
+      while (params.length <= configIndex) params.push(undefined);
+      const existing = params[configIndex];
+      if (
+        existing !== undefined &&
+        (existing === null ||
+          typeof existing !== "object" ||
+          Array.isArray(existing))
+      ) {
+        return null;
+      }
+      params[configIndex] = {
+        ...((existing as Record<string, unknown> | undefined) ?? {}),
+        commitment: "finalized",
+      };
+      object.params = params;
+    }
+  }
+  return Array.isArray(value) ? requests : requests[0];
+}
+
+function normalizeRpc(
+  bytes: Uint8Array,
+  methods: ReadonlySet<string>,
+): Uint8Array | null {
   try {
-    return rpcPayload(JSON.parse(new TextDecoder().decode(bytes)), methods);
+    const normalized = normalizeRpcPayload(
+      JSON.parse(new TextDecoder().decode(bytes)),
+      methods,
+    );
+    return normalized === null
+      ? null
+      : new TextEncoder().encode(JSON.stringify(normalized));
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -220,16 +302,18 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   if (!options.gatewayUpstreamUrl || !options.rpcUpstreamUrl) {
     throw new Error("live proxy requires both gateway and RPC upstreams");
   }
-  const gateway = gatewayBase(options.gatewayUpstreamUrl);
+  const gateway = gatewayBase(options.gatewayUpstreamUrl, {
+    allowLoopbackHttp: true,
+  });
   const rpc = new URL(options.rpcUpstreamUrl);
-  const localRpc = rpc.protocol === "http:" && rpc.hostname === "localhost";
+  const localRpc = isLoopbackHttp(rpc);
   if (
     (rpc.protocol !== "https:" && !localRpc) ||
     rpc.username ||
     rpc.password ||
     rpc.hash
   ) {
-    throw new Error("RPC upstream must be an HTTPS URL");
+    throw new Error("RPC upstream must be HTTPS or http://localhost");
   }
   const expectedGateway = new URL(
     `${VENUE_PREFIX}/`,
@@ -245,6 +329,8 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   const timeoutMs = options.proxyTimeoutMs ?? 20_000;
   const rateLimit = options.maxProxyRequestsPerMinute ?? 600;
   const rates = new Map<string, RateWindow>();
+  const activeRelays = new Map<string, number>();
+  let lastSweptWindow = -1;
   const webSocketServer = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_MESSAGE_BYTES,
@@ -256,8 +342,11 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
     if (!session) return null;
     const now = options.now?.() ?? Date.now();
     const window = Math.floor(now / 60_000);
-    for (const [key, value] of rates) {
-      if (value.window < window) rates.delete(key);
+    if (window !== lastSweptWindow) {
+      for (const [key, value] of rates) {
+        if (value.window < window) rates.delete(key);
+      }
+      lastSweptWindow = window;
     }
     const current = rates.get(session);
     if (current?.window === window && current.count >= rateLimit) return null;
@@ -272,11 +361,12 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   };
 
   const relay = (
+    session: string,
     request: IncomingMessage,
     socket: Duplex,
     head: Buffer,
     target: URL,
-    validate: (bytes: Uint8Array) => boolean,
+    transform: (bytes: Uint8Array) => Uint8Array | null,
   ) => {
     webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
       const upstream = new WebSocket(websocketUrl(target), {
@@ -287,6 +377,16 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
       });
       const pending: Array<{ data: RawData; binary: boolean }> = [];
       let pendingBytes = 0;
+      let downstreamAlive = true;
+      let upstreamAlive = true;
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        const current = activeRelays.get(session) ?? 0;
+        if (current <= 1) activeRelays.delete(session);
+        else activeRelays.set(session, current - 1);
+      };
       const closeBoth = (code = 1011, reason = "proxy unavailable") => {
         if (downstream.readyState < WebSocket.CLOSING)
           downstream.close(code, reason);
@@ -295,37 +395,78 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
       };
       downstream.on("message", (data, binary) => {
         const bytes = rawBytes(data);
-        if (!validate(bytes)) return closeBoth(1008, "message rejected");
+        const normalized = transform(bytes);
+        if (!normalized) return closeBoth(1008, "message rejected");
         if (upstream.readyState === WebSocket.OPEN) {
-          upstream.send(data, { binary });
+          if (
+            upstream.bufferedAmount + normalized.length >
+            MAX_WS_BUFFERED_BYTES
+          ) {
+            return closeBoth(1009, "relay buffer exceeded");
+          }
+          upstream.send(normalized, { binary });
         } else if (upstream.readyState === WebSocket.CONNECTING) {
-          pendingBytes += bytes.length;
+          pendingBytes += normalized.length;
           if (pendingBytes > MAX_WS_MESSAGE_BYTES) {
             closeBoth(1009, "pending data too large");
           } else {
-            pending.push({ data, binary });
+            pending.push({ data: Buffer.from(normalized), binary });
           }
         }
       });
       upstream.on("open", () => {
         for (const message of pending) {
+          const length = rawBytes(message.data).length;
+          if (
+            upstream.bufferedAmount + length >
+            MAX_WS_BUFFERED_BYTES
+          ) {
+            closeBoth(1009, "relay buffer exceeded");
+            break;
+          }
           upstream.send(message.data, { binary: message.binary });
         }
         pending.length = 0;
+        pendingBytes = 0;
       });
       upstream.on("message", (data, binary) => {
         if (downstream.readyState === WebSocket.OPEN) {
+          if (
+            downstream.bufferedAmount + rawBytes(data).length >
+            MAX_WS_BUFFERED_BYTES
+          ) {
+            return closeBoth(1009, "relay buffer exceeded");
+          }
           downstream.send(data, { binary });
         }
       });
       downstream.on("close", (code, reason) => {
+        clearInterval(keepalive);
+        release();
         forwardClose(upstream, code, reason);
       });
       upstream.on("close", (code, reason) => {
+        clearInterval(keepalive);
         forwardClose(downstream, code, reason);
       });
+      downstream.on("pong", () => (downstreamAlive = true));
+      upstream.on("pong", () => (upstreamAlive = true));
       downstream.on("error", () => closeBoth());
       upstream.on("error", () => closeBoth());
+      const keepalive = setInterval(() => {
+        if (!downstreamAlive || !upstreamAlive) {
+          downstream.terminate();
+          upstream.terminate();
+          release();
+          clearInterval(keepalive);
+          return;
+        }
+        downstreamAlive = false;
+        upstreamAlive = false;
+        if (downstream.readyState === WebSocket.OPEN) downstream.ping();
+        if (upstream.readyState === WebSocket.OPEN) upstream.ping();
+      }, WS_KEEPALIVE_MS);
+      keepalive.unref();
     });
   };
 
@@ -350,11 +491,14 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         try {
           body = await requestBytes(request);
         } catch {
+          response.setHeader("connection", "close");
           return json(response, 413, "request_too_large");
         }
       }
-      if (isRpc && (!body || !parseRpc(body, RPC_METHODS))) {
-        return json(response, 400, "rpc_method_rejected");
+      if (isRpc) {
+        const normalized = body ? normalizeRpc(body, RPC_METHODS) : null;
+        if (!normalized) return json(response, 400, "rpc_method_rejected");
+        body = normalized;
       }
       const target = isRpc
         ? rpc
@@ -383,22 +527,10 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
           },
           timeoutMs,
         );
-        const bytes = await responseBytes(upstream, timeoutMs);
-        response.writeHead(upstream.status, {
-          "content-type":
-            upstream.headers.get("content-type") ?? "application/json",
-          "content-length": String(bytes.length),
-          "cache-control": "no-store",
-          ...(upstream.headers.get("retry-after")
-            ? { "retry-after": upstream.headers.get("retry-after")! }
-            : {}),
-          ...(upstream.headers.get("x-request-id")
-            ? { "x-request-id": upstream.headers.get("x-request-id")! }
-            : {}),
-        });
-        response.end(bytes);
+        await streamResponse(upstream, response, timeoutMs);
       } catch {
-        json(response, 502, "upstream_unavailable");
+        if (response.headersSent) response.destroy();
+        else json(response, 502, "upstream_unavailable");
       }
     },
     install(server) {
@@ -409,27 +541,47 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         } catch {
           return rejectUpgrade(socket, 400);
         }
-        if (
-          request.headers.origin !== options.origin ||
-          !admit(request) ||
-          url.search
-        ) {
+        if (request.headers.origin !== options.origin || url.search) {
           return rejectUpgrade(socket, 401);
         }
+        const session = admit(request);
+        if (!session) return rejectUpgrade(socket, 401);
+        if (
+          (activeRelays.get(session) ?? 0) >=
+          MAX_WS_CONNECTIONS_PER_SESSION
+        ) {
+          return rejectUpgrade(socket, 429);
+        }
+        activeRelays.set(session, (activeRelays.get(session) ?? 0) + 1);
+        const releaseAdmission = () => {
+          const current = activeRelays.get(session) ?? 1;
+          if (current <= 1) activeRelays.delete(session);
+          else activeRelays.set(session, current - 1);
+        };
+        const beginRelay = (
+          target: URL,
+          transform: (bytes: Uint8Array) => Uint8Array | null,
+        ) => {
+          try {
+            relay(session, request, socket, head, target, transform);
+          } catch {
+            releaseAdmission();
+            socket.destroy();
+          }
+        };
         if (url.pathname === `${VENUE_PREFIX}/v1/stream`) {
-          return relay(
-            request,
-            socket,
-            head,
+          return beginRelay(
             new URL("v1/stream", gateway),
-            (bytes) => bytes.length <= MAX_WS_MESSAGE_BYTES,
+            (bytes) =>
+              bytes.length <= MAX_WS_MESSAGE_BYTES ? bytes : null,
           );
         }
         if (url.pathname === RPC_PATH) {
-          return relay(request, socket, head, rpc, (bytes) =>
-            parseRpc(bytes, RPC_WS_METHODS),
+          return beginRelay(rpc, (bytes) =>
+            normalizeRpc(bytes, RPC_WS_METHODS),
           );
         }
+        releaseAdmission();
         rejectUpgrade(socket, 404);
       });
     },

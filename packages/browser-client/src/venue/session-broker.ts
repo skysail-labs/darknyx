@@ -53,7 +53,7 @@ export class SameOriginSessionBroker {
     }
   }
 
-  async establish(): Promise<void> {
+  async establish(signal?: AbortSignal): Promise<void> {
     const endpoint = new URL(
       `${this.#endpoint.pathname}/start`,
       this.#endpoint,
@@ -67,7 +67,9 @@ export class SameOriginSessionBroker {
         "x-darknyx-client": "browser-v1",
       },
       body: JSON.stringify({ venue_id: this.#venueId }),
-      signal: AbortSignal.timeout(this.#timeoutMs),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(this.#timeoutMs)])
+        : AbortSignal.timeout(this.#timeoutMs),
     });
     if (response.status !== 204) {
       throw new Error(`session bootstrap refused access (${response.status})`);

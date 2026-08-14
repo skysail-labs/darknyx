@@ -77,10 +77,17 @@ export async function readJsonBounded(
   return parsed as Record<string, unknown>;
 }
 
-export function gatewayBase(value: string): URL {
+/** The only plaintext URL exception: an explicit localhost development URL. */
+export function isLoopbackHttp(value: URL): boolean {
+  return value.protocol === "http:" && value.hostname === "localhost";
+}
+
+export function gatewayBase(
+  value: string,
+  options: { allowLoopbackHttp?: boolean } = {},
+): URL {
   const gateway = new URL(value);
-  const local =
-    gateway.protocol === "http:" && gateway.hostname === "localhost";
+  const local = options.allowLoopbackHttp === true && isLoopbackHttp(gateway);
   if (
     (gateway.protocol !== "https:" && !local) ||
     gateway.username ||
@@ -88,7 +95,11 @@ export function gatewayBase(value: string): URL {
     gateway.search ||
     gateway.hash
   ) {
-    throw new Error("gateway must be a credential-free HTTPS URL");
+    throw new Error(
+      options.allowLoopbackHttp
+        ? "gateway must be credential-free HTTPS or http://localhost"
+        : "gateway must be a credential-free HTTPS URL",
+    );
   }
   if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
   return gateway;

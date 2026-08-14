@@ -238,4 +238,24 @@ describe("same-origin token broker", () => {
     expect(await broker.token()).toBe("t".repeat(64));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards caller cancellation to signed session establishment", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("session establishment aborted")),
+          );
+        }),
+    ) as typeof fetch;
+    const broker = new SameOriginSessionBroker({
+      venueId: "primary",
+      origin: "https://app.example",
+      fetchImpl,
+    });
+    const establishing = broker.establish(controller.signal);
+    controller.abort();
+    await expect(establishing).rejects.toThrow("aborted");
+  });
 });

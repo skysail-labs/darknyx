@@ -194,6 +194,16 @@ describe("release host", () => {
   });
 
   it("bounds token exchange latency, body size, lifetime, and gateway paths", async () => {
+    expect(() =>
+      createCvmTokenIssuer({
+        gatewayUrl: "http://localhost:8080",
+        resolveCredentials: async () => ({
+          apiKey: "account",
+          apiSecret: "secret",
+          passphrase: "passphrase",
+        }),
+      }),
+    ).toThrow(/HTTPS/);
     const seen: string[] = [];
     const issuer = createCvmTokenIssuer({
       gatewayUrl: "https://gateway.example/venue/",
@@ -465,7 +475,7 @@ describe("release host", () => {
         ...release,
         rpc_url: "https://rpc.example/?api-key=must-not-be-public",
       }),
-    ).toThrow(/credential-free HTTPS URL/);
+    ).toThrow(/credential-free HTTPS/);
   });
 
   it("contains unexpected handler failures behind a 500 boundary", async () => {
