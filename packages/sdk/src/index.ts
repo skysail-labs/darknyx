@@ -19,6 +19,7 @@ export * from "./zk/groth16-format.js";
 export * from "./idl/vault-client.js";
 export * from "./idl/seeds.js";
 export * from "./client.js";
+export * from "./api-url.js";
 // Order canonical encoders + the consumed-input-bound fill-memo surface.
 export {
   ORDER_DOMAIN,

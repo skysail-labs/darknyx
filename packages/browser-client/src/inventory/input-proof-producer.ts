@@ -1,3 +1,5 @@
+import { apiUrl } from "@darknyx/sdk/api-url";
+
 import type { BrowserProverSuite } from "../prover/browser-prover.js";
 import {
   requestVaultInternal,
@@ -59,9 +61,7 @@ export class BrowserInputProofProducer {
   constructor(options: BrowserInputProofProducerOptions) {
     this.#vault = options.vault;
     this.#prover = options.prover;
-    const gateway = new URL(options.gatewayUrl);
-    if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
-    this.#gatewayUrl = gateway.href;
+    this.#gatewayUrl = apiUrl(options.gatewayUrl, "").href;
     this.#tokenProvider = options.tokenProvider;
     this.#fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 10_000;
@@ -73,7 +73,7 @@ export class BrowserInputProofProducer {
   produce: InputProofProducer = async (
     request: InputProofRequest,
   ): Promise<InputProofResult> => {
-    const url = new URL("tree/inclusion", this.#gatewayUrl);
+    const url = apiUrl(this.#gatewayUrl, "tree/inclusion");
     url.searchParams.set("commitment", request.note.commitment);
     url.searchParams.set("tree_id", String(request.treeId));
     const token = await this.#tokenProvider();

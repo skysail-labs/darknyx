@@ -5,6 +5,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
+const WebSocketClient = globalThis.WebSocket ?? (await import("ws")).default;
+
 if (process.env.RUN_CVM_BROWSER_E2E !== "1") {
   process.stdout.write("live production browser test skipped\n");
   process.exit(0);
@@ -34,7 +36,7 @@ if (!chrome) throw new Error("Chrome/Chromium not found; set CHROME_PATH");
 
 class Cdp {
   constructor(url) {
-    this.socket = new WebSocket(url);
+    this.socket = new WebSocketClient(url);
     this.pending = new Map();
     this.events = [];
     this.nextId = 1;
@@ -69,12 +71,29 @@ class Cdp {
     };
   }
 
-  async send(method, params = {}, sessionId) {
+  async send(method, params = {}, sessionId, timeoutMs = 30_000) {
     await this.ready;
     const id = this.nextId++;
     return new Promise((resolveMessage, reject) => {
-      this.pending.set(id, { resolve: resolveMessage, reject });
-      this.socket.send(JSON.stringify({ id, method, params, sessionId }));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      const settle = (callback) => (value) => {
+        clearTimeout(timer);
+        callback(value);
+      };
+      this.pending.set(id, {
+        resolve: settle(resolveMessage),
+        reject: settle(reject),
+      });
+      try {
+        this.socket.send(JSON.stringify({ id, method, params, sessionId }));
+      } catch (error) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(error);
+      }
     });
   }
 
@@ -157,7 +176,7 @@ try {
             title: document.title,
             ready: body.includes("Attested") &&
               body.includes("SOL-USDC") &&
-              body.includes("BTC") &&
+              body.includes("BTC-USDC") &&
               body.includes("Trading enabled") &&
               !body.includes("PAUSED") &&
               body.includes("Create private vault"),
@@ -185,7 +204,9 @@ try {
       title: snapshot.title,
       attested: true,
       instruments: ["SOL-USDC", "BTC-USDC"],
-      vault_locked: true,
+      vault_provisioning_offered: snapshot.body.includes(
+        "Create private vault",
+      ),
     })}\n`,
   );
 } catch (error) {

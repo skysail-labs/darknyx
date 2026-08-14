@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./api-url": {
+      "types": "./dist/api-url.d.ts",
+      "default": "./dist/api-url.js"
+    },
     "./browser-recovery": {
       "types": "./dist/browser-recovery.d.ts",
       "default": "./dist/browser-recovery.js"

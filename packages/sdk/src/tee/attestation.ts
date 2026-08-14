@@ -15,6 +15,7 @@
 
 import { PublicKey } from "@solana/web3.js";
 
+import { apiUrl } from "../api-url.js";
 import {
   AttestationError,
   DEFAULT_TCB_ALLOWLIST,
@@ -148,9 +149,7 @@ export async function verifyTeeAttestation(
     opts.quoteVerifier ?? createDcapQuoteVerifier({ pccsUrl: opts.pccsUrl });
   const nonce = crypto.getRandomValues(new Uint8Array(32));
 
-  const apiBase = new URL(apiBaseUrl);
-  if (!apiBase.pathname.endsWith("/")) apiBase.pathname += "/";
-  const attUrl = new URL("attestation", apiBase);
+  const attUrl = apiUrl(apiBaseUrl, "attestation");
   attUrl.searchParams.set("reportData", toHex(nonce));
   const att = await getJson<{
     quote: string;
@@ -166,7 +165,7 @@ export async function verifyTeeAttestation(
     tee_pubkey: string;
     tee_pubkeys?: string[];
     boot_session_id: string;
-  }>(new URL("info", apiBase).toString(), opts.token, fetchImpl);
+  }>(apiUrl(apiBaseUrl, "info").toString(), opts.token, fetchImpl);
   if (info.tee_pubkey !== att.tee_pubkey) {
     throw new AttestationError(
       "/info tee_pubkey != /attestation tee_pubkey",

@@ -18,6 +18,7 @@ import {
   type MergeInputs,
   type SpendInputs,
 } from "@darknyx/sdk/browser-account";
+import { apiUrl } from "@darknyx/sdk/api-url";
 import {
   bn254ToBE32,
   pubkeyToFrPair,
@@ -159,9 +160,7 @@ export class BrowserAccountOperations {
       this.#options.venue.token(),
     );
     if (!token) throw new Error("session broker returned an empty token");
-    const gateway = new URL(this.#options.release.gatewayUrl);
-    if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
-    const url = new URL("tree/inclusion", gateway);
+    const url = apiUrl(this.#options.release.gatewayUrl, "tree/inclusion");
     url.searchParams.set("commitment", note.commitment);
     url.searchParams.set("tree_id", String(note.treeId));
     const abort = new AbortController();

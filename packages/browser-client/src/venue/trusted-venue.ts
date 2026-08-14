@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import { apiUrl } from "@darknyx/sdk/api-url";
 import {
   assertTeePubkeysMatch,
   decodeMarketConfig,
@@ -114,9 +115,7 @@ async function instruments(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<WireInstrument[]> {
-  const gateway = new URL(gatewayUrl);
-  if (!gateway.pathname.endsWith("/")) gateway.pathname += "/";
-  const response = await fetchImpl(new URL("instruments", gateway), {
+  const response = await fetchImpl(apiUrl(gatewayUrl, "instruments"), {
     signal,
   });
   if (!response.ok) throw new Error(`/instruments failed (${response.status})`);

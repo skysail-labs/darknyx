@@ -279,6 +279,7 @@ describe("same-origin live proxy", () => {
       `reportData=${nonce}&extra=1`,
       "reportData=ab",
       "reportData=not-hex",
+      `reportData=${"AB".repeat(32)}`,
     ]) {
       const rejected = await fetch(
         `${base}/api/darknyx/venue/attestation?${query}`,
