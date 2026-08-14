@@ -11,7 +11,11 @@ use std::time::Duration;
 use super::cache::FreshnessPolicy;
 
 pub const ROUTER_MAX_AGE_MS: u64 = 5_000;
-pub const SOLANA_PUSH_MAX_AGE_MS: u64 = 90_000;
+// Sponsored devnet PriceUpdateV2 accounts were measured updating every 314 s.
+// Seven minutes covers that cadence plus finalized/RPC jitter while still
+// failing closed before a second expected update can be missed. This mode is
+// development-only; the launch router keeps its independent 5 s budget.
+pub const SOLANA_PUSH_MAX_AGE_MS: u64 = 420_000;
 pub const MAX_ORACLE_FUTURE_SKEW_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -109,6 +113,6 @@ mod tests {
         );
         assert!("solana-push".parse::<OracleMode>().is_err());
         assert_eq!(OracleMode::PythRouterQuorumV1.freshness().max_age_ms, 5_000);
-        assert_eq!(OracleMode::PythSolanaPushV1.freshness().max_age_ms, 90_000);
+        assert_eq!(OracleMode::PythSolanaPushV1.freshness().max_age_ms, 420_000);
     }
 }

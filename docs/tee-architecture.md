@@ -262,8 +262,10 @@ cache for a CVM boot:
   `PriceUpdateV2` accounts through the configured private Solana RPC at
   finalized commitment, derives every feed PDA, and checks receiver ownership,
   write authority, feed identity, full verification, and finalized posted slot.
-  Pyth's roughly one-minute heartbeat is covered by a 90-second signed-age
-  budget. It is not the launch configuration for the two-second product.
+  The sponsored devnet accounts were measured at a 314-second heartbeat, so a
+  seven-minute signed-age budget covers that cadence plus finalized/RPC jitter
+  while still pausing before a second expected update can be missed. It is not
+  the launch configuration for the two-second product.
 
 The cache preserves the signed Pyth publish time and source sequence. It rejects
 stale, future-dated, replay-conflicting, or non-monotonic batches atomically;

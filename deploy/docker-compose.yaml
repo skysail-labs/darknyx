@@ -98,7 +98,7 @@ services:
 
       # Real Pyth feed for the matcher's oracle. Exactly one versioned source
       # owns the cache per boot. Dev/CVM rehearsals read the upgraded sponsored
-      # push account at finalized commitment (90 s signed-age budget). Mainnet
+      # push account at finalized commitment (7 min signed-age budget). Mainnet
       # switches this to pyth-router-quorum-v1 (5 s) and supplies the upgraded
       # authenticated router endpoint/key through encrypted env.
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
