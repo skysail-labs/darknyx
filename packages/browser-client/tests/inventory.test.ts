@@ -274,6 +274,178 @@ describe("browser inventory plane", () => {
     ]);
   });
 
+  it("releases a stale venue reservation only after chain recovery leaves the note reusable", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-stale", "reservation-stale"),
+      now: () => 900,
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 49n, 4n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    const orderId = "aa".repeat(16);
+    await inventory.allocateOrderIndex();
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "open",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+
+    // A regular recovery preserves the durable reservation until the venue's
+    // authenticated open-order snapshot has also been consulted.
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.reconcileVenueOpenOrders([]);
+
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "2000",
+        reservedAtoms: "0",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "closed",
+      reason: expect.stringContaining("Closed while"),
+      updatedAtMs: 900,
+    });
+  });
+
+  it("preserves collateral for an order still present in the venue snapshot", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-live", "reservation-live"),
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 50n, 5n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    const orderId = "bb".repeat(16);
+    await inventory.allocateOrderIndex();
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "open",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.reconcileVenueOpenOrders([orderId]);
+
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "2000",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "open",
+    });
+  });
+
+  it("does not release collateral for an offline-closed order whose on-chain lock remains", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-locked", "reservation-locked"),
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 56n, 6n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    const orderId = "cc".repeat(16);
+    await inventory.allocateOrderIndex();
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "pending_settlement",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    });
+
+    await inventory.recover(
+      report([collateral]),
+      async () => false,
+      async () => true,
+    );
+    await inventory.reconcileVenueOpenOrders([]);
+
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "2000",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "closed",
+      reason: expect.stringContaining("keeps collateral unavailable"),
+    });
+  });
+
   it("reconciles a missed partial-fill continuation chain from finalized outputs", async () => {
     const inventory = await BrowserInventory.create({
       store: new InMemoryInventoryStore(),

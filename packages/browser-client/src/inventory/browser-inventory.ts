@@ -364,6 +364,7 @@ export class BrowserInventory implements InventoryIntentPort {
           "settlement_failed",
           "cancelled",
           "expired",
+          "closed",
           "ambiguous",
           "rejected",
         ].includes(order.kind)
@@ -632,6 +633,68 @@ export class BrowserInventory implements InventoryIntentPort {
           (left, right) => right.updatedAtMs - left.updatedAtMs,
         ),
       ),
+    );
+  }
+
+  /**
+   * Reconcile durable client reservations against the authenticated venue's
+   * complete open-order snapshot. Call this only after finalized-chain
+   * recovery has classified every owned note: an absent order may release its
+   * reservation only when that recovery left the note reusable.
+   */
+  async reconcileVenueOpenOrders(
+    openOrderIds: readonly string[],
+  ): Promise<void> {
+    const active = new Set<string>();
+    for (const orderId of openOrderIds) {
+      if (!/^[0-9a-f]{32}$/.test(orderId)) {
+        throw new Error("venue open-order id must be lowercase 16-byte hex");
+      }
+      if (active.has(orderId)) {
+        throw new Error("venue open-order snapshot contains a duplicate id");
+      }
+      active.add(orderId);
+    }
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        for (const order of this.#snapshot.orders) {
+          if (
+            ![
+              "submitting",
+              "open",
+              "pending_settlement",
+              "partially_filled",
+              "ambiguous",
+            ].includes(order.kind) ||
+            active.has(order.orderId)
+          ) {
+            continue;
+          }
+          const note = this.#snapshot.notes.find(
+            (candidate) => candidate.commitment === order.noteCommitment,
+          );
+          const reusable = Boolean(
+            note &&
+              (note.state === "reserved" ||
+                note.state === "pending_settlement") &&
+              note.reservationId === order.reservationId,
+          );
+          if (reusable && note) {
+            // `recover()` preserves a reservation only when finalized chain
+            // state says the note is neither consumed nor locked.
+            note.state = "spendable";
+            delete note.reservationId;
+          }
+          this.#snapshot.reservations = this.#snapshot.reservations.filter(
+            (candidate) => candidate.reservationId !== order.reservationId,
+          );
+          order.kind = "closed";
+          order.reason = reusable
+            ? "Closed while this client was offline; finalized chain state confirms collateral is unlocked"
+            : "Closed while this client was offline; finalized chain state keeps collateral unavailable";
+          order.updatedAtMs = this.#now();
+        }
+      }),
     );
   }
 
@@ -1064,6 +1127,7 @@ export class BrowserInventory implements InventoryIntentPort {
             order.kind === "settlement_failed" ||
             order.kind === "cancelled" ||
             order.kind === "expired" ||
+            order.kind === "closed" ||
             order.kind === "rejected"
           ) {
             continue;

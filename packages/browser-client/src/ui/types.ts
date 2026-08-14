@@ -79,6 +79,7 @@ export type OrderLifecycleKind =
   | "settlement_failed"
   | "cancelled"
   | "expired"
+  | "closed"
   | "ambiguous"
   | "rejected";
 

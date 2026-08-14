@@ -55,6 +55,7 @@ export type BrowserOrderKind =
   | "settlement_failed"
   | "cancelled"
   | "expired"
+  | "closed"
   | "ambiguous"
   | "rejected";
 

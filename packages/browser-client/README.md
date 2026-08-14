@@ -153,13 +153,15 @@ downloads ciphertext JSON only; restore is available only for an unprovisioned
 browser vault and is followed by finalized seed-plus-chain inventory recovery.
 
 Orders and fills use one in-band-authenticated `/v1/stream` connection with
-short-lived token refresh and cancel-on-disconnect. Stream updates are treated
-as notifications rather than durable authority: fills, unknown updates,
-sequence gaps, and lag closures trigger a deduplicated finalized-chain
-reconciliation. Recovery checks both `ConsumedNoteEntry` and `NoteLock` PDAs in
-the note-use-tag namespace. This keeps confirmed ancestors consumed and keeps
-partial-fill continuations or failed-settlement inputs unavailable until their
-on-chain locks are actually gone.
+short-lived token refresh. Browser sessions explicitly disable
+cancel-on-disconnect: a reload or brief network transition must not silently
+cancel a bounded GTC order. The authenticated `/account` snapshot restores
+still-open orders after reconnect, while orders that closed offline release
+collateral only after finalized-chain reconciliation confirms the note is
+neither consumed nor locked. Stream updates are notifications rather than
+durable authority: fills, unknown updates, sequence gaps, and lag closures
+trigger the same deduplicated reconciliation. The market-maker daemon retains
+its separate cancel-on-disconnect policy.
 
 The internal product-composition bundle also supplies all six client Groth16
 provers. It accepts only an Ed25519-signed artifact manifest matching the exact

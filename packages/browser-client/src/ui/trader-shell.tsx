@@ -36,6 +36,7 @@ const lifecycleCopy: Record<OrderLifecycleKind, string> = {
   settlement_failed: "Settlement failed",
   cancelled: "Cancelled",
   expired: "Expired",
+  closed: "Closed while offline",
   ambiguous: "Reconciling",
   rejected: "Rejected",
 };
@@ -52,7 +53,8 @@ function stateTone(kind: OrderLifecycleKind): string {
     kind === "settlement_failed" ||
     kind === "rejected" ||
     kind === "cancelled" ||
-    kind === "expired"
+    kind === "expired" ||
+    kind === "closed"
   )
     return "bad";
   if (kind === "open") return "neutral";

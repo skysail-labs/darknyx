@@ -23,6 +23,41 @@ import { BrowserOrderTransport } from "./order-transport.js";
 
 const hex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+const BROWSER_CANCEL_ON_DISCONNECT = false;
+
+function decodeOpenOrderIds(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    throw new Error("venue account snapshot must be an object");
+  }
+  const openOrders = (value as { open_orders?: unknown }).open_orders;
+  if (!Array.isArray(openOrders)) {
+    throw new Error("venue account snapshot is missing open_orders");
+  }
+  return openOrders.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("venue open order must be an object");
+    }
+    const orderId = (entry as { order_id?: unknown }).order_id;
+    if (typeof orderId !== "string" || !/^[0-9a-f]{32}$/.test(orderId)) {
+      throw new Error("venue open order has an invalid order id");
+    }
+    return orderId;
+  });
+}
+
+async function readVenueOpenOrderIds(
+  gatewayUrl: string,
+  tokenProvider: () => Promise<string>,
+  fetchImpl: typeof fetch,
+): Promise<string[]> {
+  const response = await fetchImpl(new URL("account", gatewayUrl), {
+    headers: { authorization: `Bearer ${await tokenProvider()}` },
+  });
+  if (!response.ok) {
+    throw new Error(`venue account reconciliation failed (${response.status})`);
+  }
+  return decodeOpenOrderIds(await response.json());
+}
 
 function websocketOrigin(gatewayUrl: string): string {
   const url = new URL(gatewayUrl);
@@ -110,9 +145,14 @@ export async function createBrowserPrivateRuntime(
         { length: options.venue.numTrees },
         (_unused, treeId) => treeId,
       );
-      const [rings, recovery] = await Promise.all([
+      const [rings, recovery, openOrderIds] = await Promise.all([
         rootSource.read(treeIds),
         options.recover(),
+        readVenueOpenOrderIds(
+          options.release.gatewayUrl,
+          tokenProvider,
+          options.fetchImpl ?? globalThis.fetch.bind(globalThis),
+        ),
       ]);
       await inventory.synchronizeFinalizedRoots(rings);
       await inventory.recover(
@@ -120,6 +160,7 @@ export async function createBrowserPrivateRuntime(
         (tag, treeId) => rootSource.isConsumed(tag, treeId),
         (tag, treeId) => rootSource.isLocked(tag, treeId),
       );
+      await inventory.reconcileVenueOpenOrders(openOrderIds);
       options.onChange?.();
       // Proving is deliberately background work. A submit action only consumes
       // a ready cache entry and never blocks the UI on witness generation.
@@ -173,7 +214,11 @@ export async function createBrowserPrivateRuntime(
     gatewayWsUrl: websocketOrigin(options.release.gatewayUrl),
     token: initialToken,
     tokenProvider,
-    cancelOnDisconnect: true,
+    // A browser reload or brief network transition must not silently behave
+    // like "cancel all". Browser GTC orders are already bounded by their
+    // signed expiry and are restored from /account after reconnect. Market-
+    // maker daemons retain their separate fail-safe disconnect cancellation.
+    cancelOnDisconnect: BROWSER_CANCEL_ON_DISCONNECT,
     webSocketFactory: options.webSocketFactory,
     onError: options.onError,
     onSequenceGap: (expected, received) =>
@@ -216,3 +261,8 @@ export async function createBrowserPrivateRuntime(
     },
   };
 }
+
+export const runtimeInternals = {
+  decodeOpenOrderIds,
+  cancelOnDisconnect: BROWSER_CANCEL_ON_DISCONNECT,
+};
