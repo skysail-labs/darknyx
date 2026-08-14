@@ -12,7 +12,8 @@
  * This module is that scan. It returns the SAME `BackfillResult` shape as
  * `backfillHistory`, so it's a drop-in alternative (`startFillsSync` picks one).
  *
- * COST TRADEOFF: this walks `getSignaturesForAddress` + `getTransaction` over the
+ * COST TRADEOFF: this walks `getSignaturesForAddress` + batched
+ * `getTransactions` over the
  * program's history (O(all settles)), whereas the indexer serves a pre-built
  * by-order_id index (O(my order ids)). Fine for a light/stateless client over
  * shallow history; at deep mainnet volume, stand up the indexer instead. Bound
@@ -236,26 +237,42 @@ export function makeConnectionScan(
         "finalized",
       );
       if (sigs.length === 0) break;
+      const relevant: typeof sigs = [];
+      let reachedFloor = false;
       for (const s of sigs) {
-        if (s.err) continue; // reverted tx — no settle applied.
         // Signatures are newest→oldest, so the first one below the floor means
         // every remaining one is too — stop the whole scan.
-        if (sinceSlot !== undefined && s.slot < sinceSlot) return out;
-        const tx = await conn.getTransaction(s.signature, {
-          commitment: "finalized",
-          maxSupportedTransactionVersion: 0,
-        });
-        if (!tx) continue;
-        const ixDatas = extractVaultIxDatas(tx, programId);
-        if (ixDatas.length > 0) {
-          out.push({
-            signature: s.signature,
-            slot: tx.slot,
-            ixDatas,
-            logMessages: tx.meta?.logMessages ?? [],
-          });
+        if (sinceSlot !== undefined && s.slot < sinceSlot) {
+          reachedFloor = true;
+          break;
+        }
+        if (!s.err) relevant.push(s); // reverted tx — no settle applied.
+      }
+      // The standalone trader host accepts at most 50 allowlisted JSON-RPC
+      // requests in one authenticated batch. Fetching one transaction per
+      // round trip made a fresh browser vault scan thousands of historical
+      // program signatures serially and guaranteed a startup timeout.
+      for (let offset = 0; offset < relevant.length; offset += 50) {
+        const batch = relevant.slice(offset, offset + 50);
+        const transactions = await conn.getTransactions(
+          batch.map((signature) => signature.signature),
+          { commitment: "finalized", maxSupportedTransactionVersion: 0 },
+        );
+        for (let index = 0; index < batch.length; index++) {
+          const tx = transactions[index];
+          if (!tx) continue;
+          const ixDatas = extractVaultIxDatas(tx, programId);
+          if (ixDatas.length > 0) {
+            out.push({
+              signature: batch[index].signature,
+              slot: tx.slot,
+              ixDatas,
+              logMessages: tx.meta?.logMessages ?? [],
+            });
+          }
         }
       }
+      if (reachedFloor) return out;
       before = sigs[sigs.length - 1].signature;
       if (sigs.length < 1000) break; // last page.
     }

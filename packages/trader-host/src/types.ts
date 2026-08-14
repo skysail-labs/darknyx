@@ -9,6 +9,7 @@ export interface PublicRelease {
   vault_program_id: string;
   expected_compose_hash: string;
   expected_oracle_mode: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
+  recovery_start_slot: number;
   expected_mrtd?: string;
   artifact_manifest_url: string;
   artifact_set_id: string;

@@ -13,6 +13,8 @@ export interface VenueReleaseConfig {
   expectedComposeHash: string;
   /** Oracle source this client release accepts for the venue. */
   expectedOracleMode: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
+  /** First finalized slot in the current, recovery-compatible protocol epoch. */
+  recoveryStartSlot: number;
   expectedMrtd?: string;
   /** Relative, same-origin endpoint. Defaults to `/api/darknyx/session`. */
   sessionEndpoint?: string;

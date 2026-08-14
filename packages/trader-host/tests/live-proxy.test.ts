@@ -17,6 +17,7 @@ const release: PublicRelease = {
   vault_program_id: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   expected_compose_hash: "ab".repeat(32),
   expected_oracle_mode: "pyth-solana-push-v1",
+  recovery_start_slot: 123_456,
   artifact_manifest_url: `${origin}/artifacts/manifest.json`,
   artifact_set_id: "client-artifacts-v1",
   artifact_protocol_version: 1,

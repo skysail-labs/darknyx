@@ -25,6 +25,7 @@ const allowed = new Set([
   "vault-program-id",
   "expected-compose-hash",
   "expected-oracle-mode",
+  "recovery-start-slot",
   "expected-mrtd",
   "artifact-key-id",
   "circuit-version",
@@ -64,6 +65,17 @@ const oracleMode = () => {
     throw new Error("--expected-oracle-mode is not a supported versioned source");
   }
   return value;
+};
+const nonNegativeInteger = (name) => {
+  const value = required(name);
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(`--${name} must be a non-negative integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`--${name} exceeds the safe integer range`);
+  }
+  return parsed;
 };
 const origin = new URL(required("origin"));
 const local = origin.protocol === "http:" && origin.hostname === "localhost";
@@ -174,6 +186,7 @@ try {
     vault_program_id: required("vault-program-id"),
     expected_compose_hash: hex64("expected-compose-hash"),
     expected_oracle_mode: oracleMode(),
+    recovery_start_slot: nonNegativeInteger("recovery-start-slot"),
     ...(args.has("expected-mrtd")
       ? { expected_mrtd: hex64("expected-mrtd") }
       : {}),

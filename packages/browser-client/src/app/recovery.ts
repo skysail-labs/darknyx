@@ -24,7 +24,7 @@ export function createVenueRecovery(
   const connection = new Connection(release.rpcUrl, "finalized");
   const programId = new PublicKey(release.vaultProgramId);
   const scan = makeConnectionScan(connection, programId);
-  let sinceSlot: number | undefined;
+  let sinceSlot = release.recoveryStartSlot;
   let queued = Promise.resolve();
 
   return (vault, venue) => {
@@ -47,7 +47,7 @@ export function createVenueRecovery(
               baseMint: new PublicKey(market.baseMint).toBytes(),
               quoteMint: new PublicKey(market.quoteMint).toBytes(),
               scan: cachedScan,
-              ...(floor === undefined ? {} : { sinceSlot: floor }),
+              sinceSlot: floor,
             }),
           ),
         );
@@ -61,9 +61,9 @@ export function createVenueRecovery(
             ? Math.max(...transactions.map((transaction) => transaction.slot)) +
               1
             : (await connection.getSlot("finalized")) + 1;
-        sinceSlot = Math.max(sinceSlot ?? 0, nextFloor);
+        sinceSlot = Math.max(sinceSlot, nextFloor);
         resolve({
-          fullScan: floor === undefined,
+          fullScan: floor === release.recoveryStartSlot,
           notes: [...notes.values()],
           recovered: {
             deposits: reports.reduce(
