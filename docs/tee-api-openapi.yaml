@@ -399,8 +399,8 @@ components:
           properties:
             type:
               type: string
-              enum: [pyth_pull_v2]
-              description: Stable Pyth adapter-family discriminator; inspect source for the active transport/trust boundary.
+              enum: [pyth_pull_v2, pyth_push_v2]
+              description: Pyth adapter-family discriminator paired with source (router quorum uses pull_v2; finalized Solana accounts use push_v2).
             pubkey: { type: string, description: Pyth feed identifier (32-byte hex). }
             source:
               type: string

@@ -443,6 +443,7 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$HELIUS")              # cold-boot floor (so the sync rebuilds the CURRENT tree)
 cat > /tmp/darknyx.env <<EOF
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_DEPLOYMENT_TIER=development
 DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
@@ -465,7 +466,8 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | Var | Used by | Notes |
 |---|---|---|
 | `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
-| `DARKNYX_TEE_ORACLE_MODE` | oracle source + freshness | Exactly one versioned mode: `pyth-solana-push-v1` (development default, finalized Solana push account, 90 s) or `pyth-router-quorum-v1` (mainnet low-latency, upgraded router 3-of-5, 5 s). |
+| `DARKNYX_TEE_DEPLOYMENT_TIER` | boot policy | Set `development` explicitly for CVM/devnet push rehearsals. Mainnet composes default to `mainnet`, which rejects push mode or a missing router credential. |
+| `DARKNYX_TEE_ORACLE_MODE` | oracle source + freshness | Exactly one versioned mode: `pyth-solana-push-v1` (development, finalized Solana push account, 7 min) or `pyth-router-quorum-v1` (mainnet low-latency, upgraded router 3-of-5, 5 s). |
 | `DARKNYX_TEE_HERMES_ENDPOINT` | router-only transport | The router mode accepts the upgraded `https://pyth.dourolabs.app/hermes` endpoint (loopback is allowed only for tests). Ignored by push mode. |
 | `DARKNYX_TEE_PYTH_API_KEY` | router-only credential | Bearer credential supplied only through encrypted deploy env. Required in router mode; ignored by push mode. Never log or commit it. |
 | `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
@@ -642,6 +644,8 @@ Helius:
 umask 077
 cat > /tmp/darknyx-lg.env <<EOF
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_DEPLOYMENT_TIER=development
+DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$HELIUS")
 DARKNYX_TEE_FEE_RATE_BPS=30
 EOF

@@ -214,6 +214,14 @@ fn config_for_feed(cfg: &PushSyncConfig, feed_id: &str) -> PushSyncConfig {
     }
 }
 
+fn validate_account_count(requested: usize, returned: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        requested == returned,
+        "getMultipleAccounts returned {returned} entries for {requested} Pyth push targets"
+    );
+    Ok(())
+}
+
 /// Spawn the non-blocking finalized-account producer. A failed poll never
 /// deletes or overwrites the last verified cache value; market health is
 /// reconciled from signed age, so transient RPC errors do not interrupt a
@@ -266,6 +274,17 @@ pub fn spawn_push_oracle_sync(
                     continue;
                 }
             };
+            if let Err(error) = validate_account_count(targets.len(), response.accounts.len()) {
+                for binding in &cfg.market_bindings {
+                    binding.trading_gate.pause_for(TradingPauseReason::Oracle);
+                }
+                tracing::error!(
+                    source = OracleSourceKind::PythSolanaPushV1.as_str(),
+                    error = %error,
+                    "malformed Pyth push RPC response; markets PAUSED"
+                );
+                continue;
+            }
 
             let mut accepted = 0usize;
             let mut replayed = 0usize;
@@ -432,5 +451,12 @@ mod tests {
             decode_price_account(&target, &account(&target, TestVerificationLevel::Full), 899)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_misaligned_rpc_account_counts() {
+        validate_account_count(2, 2).unwrap();
+        assert!(validate_account_count(2, 1).is_err());
+        assert!(validate_account_count(2, 3).is_err());
     }
 }

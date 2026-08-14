@@ -77,6 +77,7 @@ function venueFetch(
     mismatchedTick?: boolean;
     marketEnabled?: boolean;
     oracleSource?: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
+    oracleType?: "pyth_pull_v2" | "pyth_push_v2";
   } = {},
 ): typeof fetch {
   const [vault] = vaultConfigPda(PROGRAM);
@@ -110,7 +111,11 @@ function venueFetch(
           min_order_size: "10000",
           trading_enabled: true,
           oracle: {
-            type: "pyth_pull_v2",
+            type:
+              options.oracleType ??
+              (options.oracleSource === "pyth-router-quorum-v1"
+                ? "pyth_pull_v2"
+                : "pyth_push_v2"),
             pubkey: "ab".repeat(32),
             source: options.oracleSource ?? "pyth-solana-push-v1",
           },
@@ -207,6 +212,16 @@ describe("strict browser venue bootstrap", () => {
         attestationVerifier: async () => attestation(),
       }),
     ).rejects.toThrow("oracle source does not match the client release pin");
+  });
+
+  it("fails closed when the oracle adapter contradicts its source", async () => {
+    await expect(
+      bootstrapTrustedVenue(RELEASE, {
+        fetchImpl: venueFetch({ oracleType: "pyth_pull_v2" }),
+        origin: "https://app.example",
+        attestationVerifier: async () => attestation(),
+      }),
+    ).rejects.toThrow("oracle adapter type contradicts its source");
   });
 
   it("fails closed on signer-set drift and a disabled governed market", async () => {

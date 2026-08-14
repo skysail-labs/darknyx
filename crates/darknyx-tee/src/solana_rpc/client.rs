@@ -559,10 +559,9 @@ impl SolanaRpcClient {
         addresses: &[Address],
     ) -> Result<RpcAccountsWithContext, RpcError> {
         if addresses.is_empty() {
-            return Ok(RpcAccountsWithContext {
-                context_slot: 0,
-                accounts: Vec::new(),
-            });
+            return Err(RpcError::Schema(
+                "getMultipleAccounts requires at least one address".to_string(),
+            ));
         }
         if addresses.len() > MAX_MULTIPLE_ACCOUNTS {
             return Err(RpcError::Schema(format!(
@@ -1364,6 +1363,16 @@ mod multiple_accounts_tests {
             .await
             .expect_err("finalized oracle evidence needs the serving context slot");
         assert!(format!("{error}").contains("context.slot"));
+    }
+
+    #[tokio::test]
+    async fn context_aware_batch_rejects_an_empty_request() {
+        let rpc = SolanaRpcClient::new("http://127.0.0.1:1".to_string()).unwrap();
+        let error = rpc
+            .get_multiple_accounts_with_context(&[])
+            .await
+            .expect_err("an empty request has no serving-bank context");
+        assert!(format!("{error}").contains("at least one address"));
     }
 
     /// Over the RPC's own cap, the client refuses rather than silently

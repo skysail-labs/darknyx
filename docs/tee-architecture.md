@@ -294,6 +294,17 @@ not VALID_MATCH_BATCH inputs. They are attested-matcher policy. The proof binds:
 - private amounts and `quote = floor(base × clearing_price / price_scale)`;
 - per-leg conservation/ranges and deterministic output commitments.
 
+Before enabling `pyth-router-quorum-v1` for launch, check every configured feed
+through live `GET /instruments` responses. Each row must report
+`oracle.source=pyth-router-quorum-v1`, a non-null publish time still within the
+five-second signed-age budget, and `trading_enabled=true`. A non-empty API key
+does not prove authorization for the required feed grant: an unauthorized key
+cannot refresh the cache, so the affected market must remain paused.
+
+| Threat | Limit and compensating control |
+|---|---|
+| A compromised enclave repeatedly selects a colluding market maker when several counterparties are eligible. | ZK settlement prevents theft and conservation failures but cannot prove fair counterparty selection. Publish per-MM execution-quality statistics—selection share, price improvement, rejection/failure rate, and settlement latency—so persistent preferential routing is externally detectable and governable. |
+
 No Pyth payload or plaintext clearing price is sent to L1. A malicious
 authorized enclave can choose an unfair but conserved price; it cannot use that
 freedom to inflate value or change output ownership.

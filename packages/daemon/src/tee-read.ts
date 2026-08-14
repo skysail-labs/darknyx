@@ -25,7 +25,7 @@ export interface TeeInstrument {
   /** Current market-local readiness for new place/modify/match operations. */
   trading_enabled: boolean;
   oracle: {
-    type: "pyth_pull_v2";
+    type: "pyth_pull_v2" | "pyth_push_v2";
     pubkey: string;
     source: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
     account?: string;
@@ -96,7 +96,9 @@ export class TeeReadClient {
   settlementStatus(batchId: string | number): Promise<unknown> {
     // Encoded like its `instrument` sibling. `control-api.ts` feeds this an
     // arbitrary caller-controlled path segment (SW-20).
-    return this.get(`/settlement/status/${encodeURIComponent(String(batchId))}`);
+    return this.get(
+      `/settlement/status/${encodeURIComponent(String(batchId))}`,
+    );
   }
   /** `GET /system/status` — node health. */
   systemStatus(): Promise<unknown> {

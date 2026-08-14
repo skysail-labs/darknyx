@@ -146,6 +146,7 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_DEPLOYMENT_TIER=development
 DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
@@ -172,10 +173,11 @@ disabled. Supplying only one mint is a startup error. With both real mints set,
 the CVM requires finalized, well-formed `VaultConfig` and `MarketConfig` accounts;
 it will not fall back to env market/fee values.
 
-> Keep the three credential variables exported in the shell that runs the CVM
-> tests/loadgen, and keep the Pyth bearer credential available for deployment.
-> The API/auth harness credentials fail fast when missing. Missing or invalid
-> Pyth auth leaves the affected market's independent oracle pause reason set:
+> Keep the three API/auth credential variables exported in the shell that runs
+> the CVM tests/loadgen. In router mode, keep the Pyth bearer credential
+> available for deployment. Push mode ignores the Pyth API key. The API/auth
+> harness credentials fail fast when missing. In router mode, missing, invalid,
+> or unauthorized Pyth auth leaves the affected market's independent oracle pause reason set:
 > place/modify and matching remain closed for markets bound to that feed while
 > healthy markets, cancel, and settlement reconciliation continue.
 > In real-market mode, the CVM and e2e harness must use the finalized on-chain
@@ -184,6 +186,32 @@ it will not fall back to env market/fee values.
 > the loadgen's fee rate. A mismatch changes fee-inclusive collateral and makes
 > every synthetic note fail `verify_commitment`. `DARKNYX_TEE_NUM_TREES` must
 > equal the on-chain `numTrees` in real-market mode.
+
+### 3.1 Mainnet oracle and governance preflight
+
+Mainnet deploy envs must set
+`DARKNYX_TEE_DEPLOYMENT_TIER=mainnet`,
+`DARKNYX_TEE_ORACLE_MODE=pyth-router-quorum-v1`, and a non-empty
+`DARKNYX_TEE_PYTH_API_KEY`. Both CPU and GPU images reject any other mainnet
+combination at boot. A syntactically present credential is not evidence of the
+required feed grant; after deploy, verify every configured row from
+`GET /instruments` reports `oracle.source=pyth-router-quorum-v1`, a non-null
+publish time within the five-second budget, and `trading_enabled=true`.
+
+Before launch, execute and record both Squads paths from
+[`governance.md` §§4–6](governance.md):
+
+1. Through the operations 3-of-5 vault, propose, approve, and execute a bounded
+   staging `MarketConfig` update or TEE-key rotation; independently read the
+   finalized account and confirm the intended change only.
+2. Through the cold root/upgrade 4-of-7 vault, rehearse the documented upgrade
+   authority plus `initialize`/root bootstrap sequence and independently verify
+   the resulting program authority, `VaultConfig.admin`, and root key.
+3. Before either vault approves a TEE-key rotation, every signer independently
+   verifies the fresh TDX quote, MRTD, compose hash, report-data signer set, and
+   finalized on-chain key proposal as specified in
+   [`tee-attestation-flow.md` §5](tee-attestation-flow.md). Record the Squads
+   proposal/execution signatures and each verifier's evidence.
 
 ---
 

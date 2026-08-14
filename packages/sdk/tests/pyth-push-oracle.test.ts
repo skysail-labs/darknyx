@@ -7,8 +7,7 @@ import {
   PYTH_CORE_RECEIVER_PROGRAM_ID,
 } from "../src/oracle/pyth-push.js";
 
-const FEED =
-  "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+const FEED = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 const DISCRIMINATOR = Buffer.from("22f123639d7ef4cd", "hex");
 
 const fixture = (account: PublicKey): Buffer => {
@@ -65,5 +64,16 @@ describe("Pyth upgraded Core push accounts", () => {
         contextSlot: 899,
       }),
     ).toThrow(/finalized RPC context/);
+
+    const impostor = new PublicKey(new Uint8Array(32).fill(8));
+    expect(() =>
+      decodePythCorePushAccount({
+        data: fixture(impostor),
+        owner: PYTH_CORE_RECEIVER_PROGRAM_ID,
+        account: impostor,
+        feedId: FEED,
+        contextSlot: 1_000,
+      }),
+    ).toThrow(/feed-derived PDA/);
   });
 });

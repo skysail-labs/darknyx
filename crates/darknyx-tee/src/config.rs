@@ -288,6 +288,30 @@ fn validate_feed_id(feed: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn normalize_feed_id(feed: &str, field: &str) -> Result<String> {
+    validate_feed_id(feed, field)?;
+    Ok(feed.strip_prefix("0x").unwrap_or(feed).to_ascii_lowercase())
+}
+
+fn validate_deployment_oracle_policy(
+    tier: &str,
+    mode: OracleMode,
+    has_pyth_api_key: bool,
+) -> Result<()> {
+    match tier {
+        "development" => Ok(()),
+        "mainnet" if mode != OracleMode::PythRouterQuorumV1 => bail!(
+            "mainnet requires DARKNYX_TEE_ORACLE_MODE={}",
+            OracleMode::ROUTER_NAME
+        ),
+        "mainnet" if !has_pyth_api_key => {
+            bail!("mainnet requires non-empty DARKNYX_TEE_PYTH_API_KEY")
+        }
+        "mainnet" => Ok(()),
+        other => bail!("DARKNYX_TEE_DEPLOYMENT_TIER must be development or mainnet, got {other:?}"),
+    }
+}
+
 fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     let rows: Vec<MarketSpecJson> =
         serde_json::from_str(raw).context("DARKNYX_TEE_MARKETS_JSON: invalid JSON")?;
@@ -301,7 +325,6 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     for (index, row) in rows.into_iter().enumerate() {
         let prefix = format!("DARKNYX_TEE_MARKETS_JSON[{index}]");
         validate_symbol(&row.symbol, &format!("{prefix}.symbol"))?;
-        validate_feed_id(&row.oracle_feed_id, &format!("{prefix}.oracle_feed_id"))?;
         let base_mint = parse_mint_value(&format!("{prefix}.base_mint"), &row.base_mint)?;
         let quote_mint = parse_mint_value(&format!("{prefix}.quote_mint"), &row.quote_mint)?;
         if base_mint == quote_mint {
@@ -317,11 +340,10 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
             symbol: row.symbol,
             base_mint,
             quote_mint,
-            oracle_feed_id: row
-                .oracle_feed_id
-                .strip_prefix("0x")
-                .unwrap_or(&row.oracle_feed_id)
-                .to_ascii_lowercase(),
+            oracle_feed_id: normalize_feed_id(
+                &row.oracle_feed_id,
+                &format!("{prefix}.oracle_feed_id"),
+            )?,
         });
     }
     Ok(markets)
@@ -498,6 +520,8 @@ impl Config {
             env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", UPGRADED_HERMES_ENDPOINT);
         validate_hermes_endpoint(&hermes_endpoint)?;
         let pyth_api_key = env_nonempty("DARKNYX_TEE_PYTH_API_KEY").map(SecretString);
+        let deployment_tier = env_string_or("DARKNYX_TEE_DEPLOYMENT_TIER", "development");
+        validate_deployment_oracle_policy(&deployment_tier, oracle_mode, pyth_api_key.is_some())?;
 
         let dstack_socket = std::env::var("DSTACK_SIMULATOR_ENDPOINT")
             .ok()
@@ -531,10 +555,11 @@ impl Config {
                          compatibility path; use DARKNYX_TEE_MARKETS_JSON for multiple markets"
                     );
                 }
-                let oracle_feed_id = legacy_feed_ids.first().cloned().unwrap_or_default();
-                if !oracle_feed_id.is_empty() {
-                    validate_feed_id(&oracle_feed_id, "DARKNYX_TEE_FEED_IDS[0]")?;
-                }
+                let oracle_feed_id = legacy_feed_ids
+                    .first()
+                    .map(|feed| normalize_feed_id(feed, "DARKNYX_TEE_FEED_IDS[0]"))
+                    .transpose()?
+                    .unwrap_or_default();
                 vec![MarketSpec {
                     symbol: market_symbol.clone(),
                     base_mint,
@@ -649,6 +674,31 @@ mod tests {
             parse_markets_json(&missing_feed).is_err(),
             "every strict multi-market row must name its own oracle feed"
         );
+    }
+
+    #[test]
+    fn legacy_feed_ids_are_canonical_lowercase() {
+        assert_eq!(
+            normalize_feed_id(&"AB".repeat(32), "legacy").unwrap(),
+            "ab".repeat(32)
+        );
+    }
+
+    #[test]
+    fn mainnet_requires_authenticated_router_mode() {
+        validate_deployment_oracle_policy("development", OracleMode::PythSolanaPushV1, false)
+            .unwrap();
+        assert!(
+            validate_deployment_oracle_policy("mainnet", OracleMode::PythSolanaPushV1, true,)
+                .is_err()
+        );
+        assert!(validate_deployment_oracle_policy(
+            "mainnet",
+            OracleMode::PythRouterQuorumV1,
+            false,
+        )
+        .is_err());
+        validate_deployment_oracle_policy("mainnet", OracleMode::PythRouterQuorumV1, true).unwrap();
     }
 
     #[test]

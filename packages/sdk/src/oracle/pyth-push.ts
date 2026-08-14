@@ -55,6 +55,10 @@ export function decodePythCorePushAccount(args: {
 }): PythCorePushPrice {
   const data = Buffer.from(args.data);
   const expectedFeed = normalizeFeedId(args.feedId);
+  const expectedAccount = derivePythCorePushAccount(args.feedId);
+  if (!args.account.equals(expectedAccount)) {
+    throw new Error("Pyth push account is not the feed-derived PDA");
+  }
   if (!args.owner.equals(PYTH_CORE_RECEIVER_PROGRAM_ID)) {
     throw new Error("Pyth push account has the wrong owner program");
   }
@@ -67,13 +71,18 @@ export function decodePythCorePushAccount(args: {
   if (data.subarray(POSTED_SLOT_OFFSET + 8).some((byte) => byte !== 0)) {
     throw new Error("Pyth push account has non-zero trailing bytes");
   }
-  if (!bytesEqual(data.subarray(8, 40), args.account.toBytes())) {
+  if (!bytesEqual(data.subarray(8, 40), expectedAccount.toBytes())) {
     throw new Error("Pyth push account write authority is not its derived PDA");
   }
   if (data[40] !== FULL_VERIFICATION_LEVEL) {
     throw new Error("Pyth push account is not fully verified");
   }
-  if (!bytesEqual(data.subarray(MESSAGE_OFFSET, MESSAGE_OFFSET + 32), expectedFeed)) {
+  if (
+    !bytesEqual(
+      data.subarray(MESSAGE_OFFSET, MESSAGE_OFFSET + 32),
+      expectedFeed,
+    )
+  ) {
     throw new Error("Pyth push account contains the wrong feed id");
   }
   const price = data.readBigInt64LE(MESSAGE_OFFSET + 32);
@@ -90,7 +99,7 @@ export function decodePythCorePushAccount(args: {
     throw new Error("Pyth push posted slot exceeds finalized RPC context");
   }
   return {
-    account: args.account,
+    account: expectedAccount,
     feedId: expectedFeed.toString("hex"),
     price,
     confidence,

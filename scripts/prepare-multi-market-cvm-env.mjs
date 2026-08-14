@@ -61,6 +61,7 @@ const lines = [
   envLine("DARKNYX_TEE_API_KEY", `darknyx-${randomBytes(16).toString("hex")}`),
   envLine("DARKNYX_TEE_API_SECRET", randomBytes(32).toString("hex")),
   envLine("DARKNYX_TEE_PASSPHRASE", randomBytes(32).toString("hex")),
+  envLine("DARKNYX_TEE_DEPLOYMENT_TIER", "development"),
   envLine("DARKNYX_TEE_ORACLE_MODE", "pyth-solana-push-v1"),
   envLine("DARKNYX_TEE_SOLANA_RPC_URL", RPC),
   envLine("DARKNYX_TEE_SYNC_FROM_SLOT", floor),

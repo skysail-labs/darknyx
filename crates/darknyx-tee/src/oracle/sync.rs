@@ -151,10 +151,11 @@ pub fn spawn_oracle_sync(
                     }
                     while let Some(joined) = refreshes.join_next().await {
                         let Ok((feed_id, feed_cfg, result)) = joined else {
-                            // A task panic/cancellation is an internal sync
-                            // failure rather than an attributable feed failure.
-                            // Fail closed across the venue; the next normal
-                            // cycle can recover each market independently.
+                            // A task panic/cancellation is not attributable to
+                            // one feed. Reconcile every market from its verified
+                            // cached snapshot: freshness still gates each market
+                            // independently, so a fresh market need not pause for
+                            // another feed's internal refresh failure.
                             reconcile_market_health(
                                 &cache,
                                 &cfg.market_bindings,
@@ -659,8 +660,6 @@ mod tests {
             btc_gate.is_open(),
             "fresh BTC feed resumes only the BTC market"
         );
-
-        assert!(btc_gate.is_open(), "a failed peer feed must not pause BTC");
 
         let sol_only = config_for_feed(&cfg, FEED);
         assert_eq!(sol_only.feed_ids, vec![FEED.to_string()]);

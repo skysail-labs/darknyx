@@ -173,6 +173,7 @@ jobs:
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
           {
             echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
             echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
@@ -330,6 +331,7 @@ jobs:
             FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
             {
               echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
               echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
               echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"

@@ -77,6 +77,11 @@ impl Instrument {
             .or_else(|| cached.as_ref().map(|price| price.source.as_str()))
             .unwrap_or("unconfigured")
             .to_string();
+        let kind = if source == OracleMode::SOLANA_PUSH_NAME {
+            "pyth_push_v2"
+        } else {
+            "pyth_pull_v2"
+        };
         let account = (mode == Some(OracleMode::PythSolanaPushV1))
             .then(|| {
                 hex::decode(&i.oracle_feed_id)
@@ -94,7 +99,7 @@ impl Instrument {
             min_order_size: i.min_order_size.to_string(),
             trading_enabled,
             oracle: OracleInfo {
-                kind: "pyth_pull_v2".to_string(),
+                kind: kind.to_string(),
                 pubkey: i.oracle_feed_id.clone(),
                 source,
                 account,

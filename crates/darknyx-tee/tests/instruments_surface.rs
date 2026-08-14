@@ -14,7 +14,7 @@ use axum::{
 use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::{build_router, ApiState};
 use darknyx_tee::matcher::TradingPauseReason;
-use darknyx_tee::oracle::OracleMode;
+use darknyx_tee::oracle::{derive_push_feed_address, OracleMode};
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use tower::ServiceExt;
@@ -72,10 +72,17 @@ async fn instruments_list_is_public() {
     assert!(arr[0]["base_mint"].as_str().is_some());
     assert_eq!(arr[0]["tick_size"], "1");
     assert_eq!(arr[0]["trading_enabled"], true);
-    assert_eq!(arr[0]["oracle"]["type"], "pyth_pull_v2");
+    assert_eq!(arr[0]["oracle"]["type"], "pyth_push_v2");
     assert_eq!(arr[0]["oracle"]["source"], "pyth-solana-push-v1");
     assert_eq!(arr[0]["oracle"]["max_age_ms"], 420_000);
-    assert!(arr[0]["oracle"]["account"].as_str().is_some());
+    let feed_id: [u8; 32] = hex::decode(arr[0]["oracle"]["pubkey"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        arr[0]["oracle"]["account"],
+        derive_push_feed_address(&feed_id).unwrap().to_string()
+    );
 }
 
 #[tokio::test]

@@ -84,6 +84,8 @@ services:
       DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      # Same mainnet preflight as the CPU compose.
+      DARKNYX_TEE_DEPLOYMENT_TIER: ${DARKNYX_TEE_DEPLOYMENT_TIER:-mainnet}
       DARKNYX_TEE_ORACLE_MODE: ${DARKNYX_TEE_ORACLE_MODE:-pyth-solana-push-v1}
       DARKNYX_TEE_HERMES_ENDPOINT: ${DARKNYX_TEE_HERMES_ENDPOINT:-https://pyth.dourolabs.app/hermes}
       DARKNYX_TEE_PYTH_API_KEY: ${DARKNYX_TEE_PYTH_API_KEY}

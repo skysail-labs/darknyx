@@ -188,7 +188,8 @@ export async function bootstrapTrustedVenue(
       typeof wire.tick_size !== "string" ||
       typeof wire.min_order_size !== "string" ||
       typeof wire.trading_enabled !== "boolean" ||
-      wire.oracle?.type !== "pyth_pull_v2" ||
+      (wire.oracle?.type !== "pyth_pull_v2" &&
+        wire.oracle?.type !== "pyth_push_v2") ||
       typeof wire.oracle.pubkey !== "string" ||
       !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey) ||
       (wire.oracle.source !== "pyth-router-quorum-v1" &&
@@ -197,7 +198,16 @@ export async function bootstrapTrustedVenue(
       throw new Error("venue returned a malformed instrument");
     }
     if (wire.oracle.source !== release.expectedOracleMode) {
-      throw new Error("venue oracle source does not match the client release pin");
+      throw new Error(
+        "venue oracle source does not match the client release pin",
+      );
+    }
+    const expectedOracleType =
+      wire.oracle.source === "pyth-solana-push-v1"
+        ? "pyth_push_v2"
+        : "pyth_pull_v2";
+    if (wire.oracle.type !== expectedOracleType) {
+      throw new Error("venue oracle adapter type contradicts its source");
     }
     if (seen.has(wire.symbol))
       throw new Error(`duplicate instrument ${wire.symbol}`);
@@ -268,7 +278,9 @@ export async function bootstrapTrustedVenue(
 
   const status = await fetchSystemStatus(release.gatewayUrl, { fetchImpl });
   if (status.oracle_mode !== release.expectedOracleMode) {
-    throw new Error("venue status oracle source does not match the client release pin");
+    throw new Error(
+      "venue status oracle source does not match the client release pin",
+    );
   }
   return Object.freeze({
     attestation,

@@ -80,6 +80,38 @@ mod tests {
     use tokio::sync::RwLock;
 
     #[tokio::test]
+    async fn oracle_status_fields_match_the_sdk_wire_contract() {
+        for (mode, expected_name, expected_age) in [
+            (
+                Some(crate::oracle::OracleMode::PythSolanaPushV1),
+                Some("pyth-solana-push-v1"),
+                Some(420_000),
+            ),
+            (
+                Some(crate::oracle::OracleMode::PythRouterQuorumV1),
+                Some("pyth-router-quorum-v1"),
+                Some(5_000),
+            ),
+            (None, None, None),
+        ] {
+            let state = match mode {
+                Some(mode) => ApiState::for_tests().with_oracle_mode(mode),
+                None => ApiState::for_tests(),
+            };
+            let Json(status) = get_status(State(Arc::new(state))).await;
+            let wire = serde_json::to_value(status).unwrap();
+            assert_eq!(
+                wire["oracle_mode"],
+                serde_json::to_value(expected_name).unwrap()
+            );
+            assert_eq!(
+                wire["oracle_max_age_ms"],
+                serde_json::to_value(expected_age).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn partial_market_pause_is_available_but_degraded() {
         let state = ApiState::for_tests()
             .with_instruments(vec![
