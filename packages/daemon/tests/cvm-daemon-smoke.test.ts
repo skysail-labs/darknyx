@@ -237,11 +237,12 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     })();
 
     // 3. place — real VALID_INPUT proof + /orders accept.
+    const expirySlot = BigInt((await conn.getSlot("confirmed")) + 4_000);
     const { orderId, arrivalSlot } = await daemon.placeOrder(
       {
         symbol: SYMBOL,
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: bidPrice }),
+        policy: limitPolicy({ priceLimit: bidPrice, expirySlot }),
         amount: BUY_QTY,
       },
       note!,

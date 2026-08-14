@@ -26,6 +26,9 @@ note cannot be locked forever. The current ceiling is 4,500 slots (roughly 30
 minutes at 400 ms slots). A resting order is swept when the chain passes its
 expiry.
 
+`expiry_slot` is always an absolute future slot. `0` is not an indefinite/GTC
+sentinel; use `/time` to resolve the current slot before signing.
+
 ## Available behaviors
 
 ### GTC: Good-til-Cancelled

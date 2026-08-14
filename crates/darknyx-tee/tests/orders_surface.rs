@@ -697,6 +697,24 @@ async fn place_rejects_expiry_beyond_lock_ttl_cap() {
     assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn place_rejects_expiry_inside_the_settlement_buffer() {
+    // Test current_slot is 1 and SETTLEMENT_BUFFER_SLOTS is 20. Zero used to
+    // return 202, enter the book, and disappear on the next tick, which made a
+    // browser GTC order look accepted even though it could never settle.
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut b = PlaceOrderBuilder::new();
+    b.expiry_slot = 0;
+    let resp = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = read_json(resp).await;
+    assert_eq!(json["code"], 1012);
+    let get_resp = get_order(&app, &bearer, &hex::encode(b.order_id)).await;
+    assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+}
+
 /// T-07 regression, stated as the property that was BROKEN rather than the
 /// check that was deleted.
 ///

@@ -11,6 +11,7 @@ export {
   type BuildOrderArgs,
   type PlaceOrderRequest,
 } from "./orders/build-order.js";
+export { MAX_ORDER_TTL_SLOTS, gtcExpirySlot } from "./orders/builders.js";
 export {
   buildCancel,
   DarknyxApiError,

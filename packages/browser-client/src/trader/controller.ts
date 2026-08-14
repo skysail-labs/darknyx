@@ -1,5 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 import type { SubmitIntentResult, VaultStatus } from "@darknyx/client-core";
+import { gtcExpirySlot } from "@darknyx/sdk/browser-orders";
+import { fetchServerTime } from "@darknyx/sdk/browser-attestation";
 
 import { BrowserVault } from "../custody/browser-vault.js";
 import type { RecoveryReport } from "../inventory/types.js";
@@ -78,6 +80,17 @@ export function decimalToPriceTicks(
     throw new Error("limit price is not on the governed tick size");
   }
   return ticks;
+}
+
+export async function defaultGtcExpirySlot(
+  gatewayUrl: string,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<bigint> {
+  const time = await fetchServerTime(gatewayUrl, { fetchImpl });
+  if (!Number.isSafeInteger(time.slot) || time.slot < 0) {
+    throw new Error("venue /time returned an invalid Solana slot");
+  }
+  return gtcExpirySlot(time.slot);
 }
 
 function formatUnits(value: bigint | string, decimals: number): string {
@@ -632,6 +645,10 @@ export class BrowserTraderController {
     if (draft.side === "bid" && price === 0n) {
       return { status: "rejected", code: "INVALID_INTENT", retryable: false };
     }
+    const expirySlot = await defaultGtcExpirySlot(
+      this.#options.release.gatewayUrl,
+      this.#options.bootstrapOptions?.fetchImpl,
+    );
     const result = await this.#runtime.trader.submitIntent({
       protocolVersion: 1,
       marketSymbol: market.symbol,
@@ -641,7 +658,7 @@ export class BrowserTraderController {
       attributes: {
         orderType: draft.orderType,
         minFillSize: "0",
-        expirySlot: "0",
+        expirySlot: expirySlot.toString(),
       },
     });
     await this.#update();

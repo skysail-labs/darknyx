@@ -82,7 +82,10 @@ const mapPlace: PlaceMapper = (raw) => {
     intent: {
       symbol: "SOL-USDC",
       side: OrderSide.Bid,
-      policy: limitPolicy({ priceLimit: BigInt(b.price_limit) }),
+      policy: limitPolicy({
+        priceLimit: BigInt(b.price_limit),
+        expirySlot: 10_000n,
+      }),
       amount: 500n,
     },
   };

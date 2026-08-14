@@ -131,7 +131,7 @@ describe("proveAndBuildOrder", () => {
       note: { commitment, innerHash, amount },
       symbol: "SOL-USDC",
       side: OrderSide.Ask,
-      policy: limitPolicy({ priceLimit: 100n }),
+      policy: limitPolicy({ priceLimit: 100n, expirySlot: 5_500n }),
       amount,
       orderId: new Uint8Array(16).fill(2),
       sessionId: new Uint8Array(32).fill(0x66),

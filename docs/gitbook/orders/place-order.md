@@ -183,6 +183,7 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | The trading-key signature verifies over the canonical body | `403` | 1102 |
 | The viewing key is contributory | `400` | 1008 |
 | `expiry_slot` fits within the maximum on-chain lock lifetime | `400` | 1007 |
+| `expiry_slot` is in the future beyond the settlement buffer | `400` | 1012 |
 | The proof root is still in the venue's recent-root window | `400` | 1010 |
 | The VALID_INPUT proof verifies against the declared commitment and collateral mint | `400` | 1011 |
 | The signed session matches this boot | `409` | 1205 |
