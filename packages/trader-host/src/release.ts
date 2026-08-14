@@ -56,6 +56,7 @@ export function parsePublicRelease(value: unknown): PublicRelease {
     "rpc_url",
     "vault_program_id",
     "expected_compose_hash",
+    "expected_oracle_mode",
     "expected_mrtd",
     "artifact_manifest_url",
     "artifact_set_id",
@@ -76,6 +77,8 @@ export function parsePublicRelease(value: unknown): PublicRelease {
     !BASE58.test(release.vault_program_id) ||
     typeof release.expected_compose_hash !== "string" ||
     !HEX64.test(release.expected_compose_hash) ||
+    (release.expected_oracle_mode !== "pyth-router-quorum-v1" &&
+      release.expected_oracle_mode !== "pyth-solana-push-v1") ||
     (release.expected_mrtd !== undefined &&
       (typeof release.expected_mrtd !== "string" ||
         !HEX64.test(release.expected_mrtd))) ||
