@@ -698,6 +698,7 @@ jobs:
             --venue-id=ci \
             --vault-program-id=C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx \
             --expected-compose-hash=abababababababababababababababababababababababababababababababab \
+            --expected-oracle-mode=pyth-solana-push-v1 \
             --artifact-key-id=ci-release-v1 \
             --circuit-version=note-use-v1 \
             --proving-key-version=phase2-v1
