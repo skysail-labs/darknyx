@@ -28,6 +28,7 @@ async function fixture(): Promise<{
       rpc_url: "https://app.example/api/darknyx/rpc",
       vault_program_id: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
       expected_compose_hash: "ab".repeat(32),
+      expected_oracle_mode: "pyth-solana-push-v1",
       artifact_manifest_url: "https://app.example/artifacts/manifest.json",
       artifact_set_id: "client-artifacts-v1",
       artifact_protocol_version: 1,

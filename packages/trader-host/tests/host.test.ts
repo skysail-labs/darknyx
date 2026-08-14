@@ -22,6 +22,7 @@ const release: PublicRelease = {
   rpc_url: "https://rpc.example/",
   vault_program_id: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   expected_compose_hash: "ab".repeat(32),
+  expected_oracle_mode: "pyth-solana-push-v1",
   artifact_manifest_url: "https://artifacts.example/client/manifest.json",
   artifact_set_id: "client-artifacts-v1",
   artifact_protocol_version: 1,
@@ -474,6 +475,9 @@ describe("release host", () => {
         rpc_url: "https://rpc.example/?api-key=must-not-be-public",
       }),
     ).toThrow(/credential-free HTTPS URL/);
+    expect(() =>
+      parsePublicRelease({ ...release, expected_oracle_mode: "untrusted" }),
+    ).toThrow(/invalid pin/);
   });
 
   it("contains unexpected handler failures behind a 500 boundary", async () => {
