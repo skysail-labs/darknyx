@@ -229,7 +229,11 @@ async function supported() {
     side: "bid",
     baseAmountAtoms: "100",
     limitPriceTicks: "1000000",
-    attributes: { orderType: "limit", expirySlot: "0", minFillSize: "0" },
+    attributes: {
+      orderType: "limit",
+      expirySlot: "5500",
+      minFillSize: "0",
+    },
   };
   const reservation = await reloaded.reserveReadyIntent(draft);
   if (reservation.status !== "ready")

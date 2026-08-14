@@ -197,7 +197,7 @@ describe("Daemon — placeOrder", () => {
       {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       note,
@@ -214,7 +214,7 @@ describe("Daemon — placeOrder", () => {
     const intent = {
       symbol: "SOL-USDC",
       side: OrderSide.Bid,
-      policy: limitPolicy({ priceLimit: 100n }),
+      policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
       amount: 500n,
     };
     const a = await daemon.placeOrder(intent, note);
@@ -233,7 +233,7 @@ describe("Daemon — placeOrder", () => {
     const intent = {
       symbol: "SOL-USDC",
       side: OrderSide.Bid,
-      policy: limitPolicy({ priceLimit: 100n }),
+      policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
       amount: 500n,
     };
     await expect(daemon.placeOrder(intent, note)).rejects.toThrow(
@@ -252,7 +252,7 @@ describe("Daemon — placeOrder", () => {
       {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       note,
@@ -272,7 +272,7 @@ describe("Daemon — cancelOrder", () => {
       {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       note,
@@ -288,7 +288,7 @@ describe("Daemon — cancelOrder", () => {
       {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       note,
@@ -357,7 +357,7 @@ describe("Daemon — collateral selection + pruning", () => {
   const intent = {
     symbol: "SOL-USDC",
     side: OrderSide.Bid,
-    policy: limitPolicy({ priceLimit: 100n }),
+    policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
     amount: 500n,
   };
 
@@ -537,7 +537,7 @@ describe("daemon wiring", () => {
         {
           symbol: "SOL-USDC",
           side: OrderSide.Bid,
-          policy: limitPolicy({ priceLimit: 100n }),
+          policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
           amount: 500n,
         },
         note,
@@ -612,7 +612,7 @@ describe("daemon wiring", () => {
         {
           symbol: "SOL-USDC",
           side: OrderSide.Bid,
-          policy: limitPolicy({ priceLimit: 100n }),
+          policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
           amount: 500n,
         },
         note,

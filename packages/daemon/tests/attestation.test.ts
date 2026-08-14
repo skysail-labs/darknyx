@@ -604,7 +604,7 @@ describe("Daemon — attestation gate", () => {
         {
           symbol: "SOL-USDC",
           side: OrderSide.Bid,
-          policy: limitPolicy({ priceLimit: 100n }),
+          policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
           amount: 10n,
         },
         collateral,

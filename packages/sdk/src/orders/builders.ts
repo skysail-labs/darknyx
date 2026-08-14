@@ -22,6 +22,9 @@
  *   - **GTT** — good-till-time: convert a wall-clock expiry to an
  *     `expiry_slot` via the server's `/time` (current slot + unix ms) so the
  *     client doesn't need its own RPC. See `gttExpirySlot`.
+ *   - **GTC** — still carries a finite expiry because the on-chain note lock
+ *     is bounded. Resolve it from `/time` with `gtcExpirySlot`; zero is not a
+ *     protocol sentinel and is already expired on any live cluster.
  *
  * The returned `ExecutionPolicy` is merged into a full `OrderCanonical` by
  * the caller (who supplies `symbol`, `orderId`, `noteCommitment`,
@@ -38,8 +41,27 @@ export interface ExecutionPolicy {
   expirySlot: bigint;
 }
 
-/** `0` slot = no time expiry (good-till-cancelled). */
-const NO_EXPIRY = 0n;
+/** Must stay in lockstep with `vault::state::MAX_LOCK_TTL_SLOTS`. */
+export const MAX_ORDER_TTL_SLOTS = 4_500n;
+
+function requireExpirySlot(expirySlot: bigint): bigint {
+  if (expirySlot <= 0n) {
+    throw new CanonicalError(
+      "expirySlot must be a future absolute Solana slot; zero is not GTC",
+    );
+  }
+  return expirySlot;
+}
+
+/**
+ * Resolve bounded good-til-cancelled at the protocol's maximum horizon.
+ * The matcher keeps a small settlement buffer before this absolute deadline.
+ */
+export function gtcExpirySlot(serverSlot: bigint | number): bigint {
+  const slot = BigInt(serverSlot);
+  if (slot < 0n) throw new CanonicalError("serverSlot must be non-negative");
+  return slot + MAX_ORDER_TTL_SLOTS;
+}
 
 /**
  * A resting limit order. `priceLimit` is the worst price the order accepts
@@ -49,7 +71,7 @@ const NO_EXPIRY = 0n;
 export function limitPolicy(opts: {
   priceLimit: bigint;
   minFillSize?: bigint;
-  expirySlot?: bigint;
+  expirySlot: bigint;
 }): ExecutionPolicy {
   if (opts.priceLimit <= 0n)
     throw new CanonicalError("limit order needs a positive priceLimit");
@@ -57,7 +79,7 @@ export function limitPolicy(opts: {
     orderType: OrderType.Limit,
     priceLimit: opts.priceLimit,
     minFillSize: opts.minFillSize ?? 0n,
-    expirySlot: opts.expirySlot ?? NO_EXPIRY,
+    expirySlot: requireExpirySlot(opts.expirySlot),
   };
 }
 
@@ -70,6 +92,7 @@ export function limitPolicy(opts: {
 export function marketPolicy(opts: {
   side: OrderSide;
   priceCap?: bigint;
+  expirySlot: bigint;
 }): ExecutionPolicy {
   if (opts.side === OrderSide.Bid) {
     if (opts.priceCap === undefined || opts.priceCap <= 0n) {
@@ -81,7 +104,7 @@ export function marketPolicy(opts: {
       orderType: OrderType.Ioc,
       priceLimit: opts.priceCap,
       minFillSize: 0n,
-      expirySlot: NO_EXPIRY,
+      expirySlot: requireExpirySlot(opts.expirySlot),
     };
   }
   // Market ask: sell into any clearing price.
@@ -89,7 +112,7 @@ export function marketPolicy(opts: {
     orderType: OrderType.Ioc,
     priceLimit: 0n,
     minFillSize: 0n,
-    expirySlot: NO_EXPIRY,
+    expirySlot: requireExpirySlot(opts.expirySlot),
   };
 }
 
@@ -100,7 +123,7 @@ export function marketPolicy(opts: {
 export function aonPolicy(opts: {
   amount: bigint;
   priceLimit: bigint;
-  expirySlot?: bigint;
+  expirySlot: bigint;
 }): ExecutionPolicy {
   if (opts.amount <= 0n)
     throw new CanonicalError("aon order needs a positive amount");
@@ -115,14 +138,17 @@ export function aonPolicy(opts: {
  * Fill-or-kill: immediate all-or-none. Fills fully in its arrival tick or is
  * dropped — it never rests.
  */
-export function fokPolicy(opts: { priceLimit: bigint }): ExecutionPolicy {
+export function fokPolicy(opts: {
+  priceLimit: bigint;
+  expirySlot: bigint;
+}): ExecutionPolicy {
   if (opts.priceLimit <= 0n)
     throw new CanonicalError("fok order needs a positive priceLimit");
   return {
     orderType: OrderType.Fok,
     priceLimit: opts.priceLimit,
     minFillSize: 0n,
-    expirySlot: NO_EXPIRY,
+    expirySlot: requireExpirySlot(opts.expirySlot),
   };
 }
 

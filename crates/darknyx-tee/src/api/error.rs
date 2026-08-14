@@ -15,7 +15,7 @@
 //!
 //! | Range | Class | Examples |
 //! |-------|-------|----------|
-//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 RETIRED (was fr_unsafe — see below), 1003 below_collateral, 1004 min_notional, 1009 off_tick, 1010 stale_merkle_root, 1011 invalid_input_proof |
+//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 RETIRED (was fr_unsafe — see below), 1003 below_collateral, 1004 min_notional, 1009 off_tick, 1010 stale_merkle_root, 1011 invalid_input_proof, 1012 expiry_too_soon |
 //! | 1100–1199 | auth (401/403) | 1101 unauthorized, 1102 sig_invalid, 1103 not_owner |
 //! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
@@ -118,6 +118,10 @@ impl ApiError {
     /// only rejected on-chain, after a match, killing the whole batch.
     pub fn invalid_input_proof(m: impl Into<String>) -> Self {
         Self::new(1011, StatusCode::BAD_REQUEST, m)
+    }
+    /// The order is already expired or leaves too little time to settle.
+    pub fn expiry_too_soon(m: impl Into<String>) -> Self {
+        Self::new(1012, StatusCode::BAD_REQUEST, m)
     }
 
     // 1100–1199 — auth (401/403)

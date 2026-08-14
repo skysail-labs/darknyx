@@ -467,8 +467,9 @@ async fn prepare_order(
     // F-05: the settler stamps the note lock with THIS order's `expiry_slot`,
     // and the vault caps the lock window at `MAX_LOCK_TTL_SLOTS`. An order valid
     // beyond that could never settle (the settle-time `lock_note` would revert),
-    // so reject it here for a clean placement error. (Already-expired orders are
-    // handled by the matcher's expiry sweep, not here.)
+    // so reject it here for a clean placement error. Expired or near-expiry
+    // orders are also rejected here: returning 202 only to sweep them on the
+    // next matcher tick gives clients a false accepted/open transition.
     if req.expiry_slot > arrival_slot.saturating_add(MAX_LOCK_TTL_SLOTS) {
         return Err(ApiError::expiry_too_far(format!(
             "expiry_slot {} exceeds current_slot {} + MAX_LOCK_TTL_SLOTS {} (~30 min)",
@@ -484,6 +485,15 @@ async fn prepare_order(
         return Err(ApiError::zero_price_bid(
             "price_limit must be > 0 for a bid",
         ));
+    }
+    let minimum_expiry = arrival_slot.saturating_add(darkpool_matcher::SETTLEMENT_BUFFER_SLOTS);
+    if req.expiry_slot <= minimum_expiry {
+        return Err(ApiError::expiry_too_soon(format!(
+            "expiry_slot {} must exceed current_slot {} + settlement buffer {}",
+            req.expiry_slot,
+            arrival_slot,
+            darkpool_matcher::SETTLEMENT_BUFFER_SLOTS
+        )));
     }
     // Collateral mints + the protocol fee rate, read together under one
     // lock. (Done before deriving note_amount so the fee can be folded

@@ -483,9 +483,10 @@ components:
           type: integer
           format: uint64
           description: |
-            Solana slot past which this order auto-expires. Bounded by the
-            protocol maximum (currently 4,500 slots) to prevent an unbounded
-            collateral-lock window.
+            Future Solana slot past which this order auto-expires. It must
+            leave the matcher settlement buffer and is bounded by the protocol
+            maximum (currently 4,500 slots) to prevent an unbounded
+            collateral-lock window. Zero is not a GTC sentinel.
         order_id:
           type: string
           description: 16-byte client-chosen id, hex. Must be unique + non-zero.
@@ -1628,8 +1629,8 @@ paths:
         '400':
           description: |
             Validation error, including malformed fields, off-tick price,
-            opening mismatch, stale proof root (1010), or invalid VALID_INPUT
-            proof (1011).
+            opening mismatch, stale proof root (1010), invalid VALID_INPUT
+            proof (1011), or an expired/settlement-unsafe expiry (1012).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

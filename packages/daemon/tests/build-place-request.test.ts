@@ -98,7 +98,7 @@ describe("buildPlaceRequest", () => {
       intent: {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       gatewayUrl: "https://gw.example",
@@ -137,7 +137,7 @@ describe("buildPlaceRequest", () => {
       intent: {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       gatewayUrl: "https://gw",
@@ -161,7 +161,7 @@ describe("buildPlaceRequest", () => {
       intent: {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
-        policy: limitPolicy({ priceLimit: 100n }),
+        policy: limitPolicy({ priceLimit: 100n, expirySlot: 10_000n }),
         amount: 500n,
       },
       gatewayUrl: "https://gw",

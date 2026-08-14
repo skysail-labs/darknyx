@@ -332,6 +332,11 @@ async function main(): Promise<void> {
         "provide note_commitment, or collateral_mint + collateral_min",
       );
     }
+    if (b.expiry_slot === undefined) {
+      throw new Error(
+        "expiry_slot is required; read /tee/time and provide a future absolute Solana slot",
+      );
+    }
     return {
       note,
       intent: {
@@ -341,8 +346,7 @@ async function main(): Promise<void> {
           priceLimit: BigInt(b.price_limit),
           minFillSize:
             b.min_fill_size !== undefined ? BigInt(b.min_fill_size) : undefined,
-          expirySlot:
-            b.expiry_slot !== undefined ? BigInt(b.expiry_slot) : undefined,
+          expirySlot: BigInt(b.expiry_slot),
         }),
         amount: BigInt(b.amount),
       },

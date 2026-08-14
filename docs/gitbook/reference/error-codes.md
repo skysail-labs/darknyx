@@ -56,6 +56,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1009` | 400 | A non-zero price limit is not an integer multiple of the market tick. |
 | `1010` | 400 | The `merkle_root` your collateral proof was built against is no longer in the venue's recent-root window. Re-prove against a current root and resubmit. |
 | `1011` | 400 | The collateral proof did not verify. |
+| `1012` | 400 | `expiry_slot` is already expired or does not leave the required settlement buffer. Read `/time` and submit a future absolute slot. |
 | `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. Also returned when an operator has invalidated the tokens an account was holding. |
 | `1102` | 403 | The trading-key signature did not verify. |
 | `1103` | 403 | The trading key does not own the targeted order. |
