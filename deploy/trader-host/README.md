@@ -20,8 +20,9 @@ The static mount is an assembled, reviewed release containing `index.html`,
 The runtime never builds or signs assets at startup.
 
 Build and assemble that directory offline before deployment. The assembly step
-requires the six circuit build outputs and an Ed25519 PKCS#8 signing key; the
-example leaves the deployment-specific pins explicit:
+requires six circuit artifact sets (18 files total: WASM, zkey, and verification
+key for each circuit) and an Ed25519 PKCS#8 signing key; the example leaves the
+deployment-specific pins explicit:
 
 ```sh
 npm -w @darknyx/browser-client run build:app
@@ -39,6 +40,12 @@ DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64="$OFFLINE_RELEASE_KEY" \
 
 The signer is an offline release key, not the wallet, vault upgrade authority,
 or CVM signer. Do not place it in the runtime environment or secrets mount.
+
+For mainnet, each proving key must come from the approved Phase-2 MPC ceremony.
+Record the reproducible verification output, final random beacon, artifact
+hashes, and auditor sign-off before assembly. Byte equality with the committed
+payload is necessary but does not establish ceremony provenance; deterministic
+development contributions are prohibited for production artifacts.
 
 Create the secret directory with mode `0700`; every file must be a regular,
 non-symlink file with mode `0600` and owned by the runtime UID (`1101` in the

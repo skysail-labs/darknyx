@@ -10,6 +10,11 @@ import { dirname, resolve } from "node:path";
 
 import { validateArtifactPayload } from "./artifact-payload-schema.mjs";
 import { signArtifactPayload } from "./artifact-signing.mjs";
+import {
+  artifactSource,
+  claimArtifactDestination,
+  validateVaultProgramId,
+} from "./release-assembly-guards.mjs";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const repoRoot = resolve(packageRoot, "../..");
@@ -85,23 +90,18 @@ const payload = validateArtifactPayload(
   JSON.parse(payloadBytes.toString("utf8")),
 );
 
-const sourceFor = (artifactPath, kind) => {
-  const [circuit, file, ...extra] = artifactPath.split("/");
-  if (!circuit || !file || extra.length) {
-    throw new Error(`artifact path has an unsupported layout: ${artifactPath}`);
-  }
-  const root = resolve(repoRoot, "circuits/build", circuit);
-  if (kind === "wasm") return resolve(root, "circuit_js/circuit.wasm");
-  if (kind === "zkey") return resolve(root, "circuit_final.zkey");
-  return resolve(root, "verification_key.json");
-};
-
 let files = 0;
 let totalBytes = 0;
-for (const circuit of Object.values(payload.circuits)) {
+const destinations = new Set();
+for (const [circuitName, circuit] of Object.entries(payload.circuits)) {
   for (const kind of ["wasm", "zkey", "verification_key"]) {
     const artifact = circuit[kind];
-    const source = sourceFor(artifact.path, kind);
+    const source = artifactSource(
+      repoRoot,
+      circuitName,
+      artifact.path,
+      kind,
+    );
     const bytes = await readFile(source);
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (bytes.length !== artifact.bytes || digest !== artifact.sha256) {
@@ -113,6 +113,7 @@ for (const circuit of Object.values(payload.circuits)) {
     if (!destination.startsWith(`${artifactsRoot}/`)) {
       throw new Error(`artifact escaped the release root: ${artifact.path}`);
     }
+    claimArtifactDestination(destinations, destination, artifact.path);
     await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
     await copyFile(source, destination);
     files += 1;
@@ -178,9 +179,7 @@ try {
     circuit_version: id("circuit-version"),
     proving_key_version: id("proving-key-version"),
   };
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(release.vault_program_id)) {
-    throw new Error("--vault-program-id is not base58");
-  }
+  validateVaultProgramId(release.vault_program_id);
   await writeFile(
     resolve(outputRoot, "release.json"),
     `${JSON.stringify(release)}\n`,

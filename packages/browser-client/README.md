@@ -65,14 +65,32 @@ Workers use content-addressed filenames; the build verifier rejects source maps,
 unhashed executable assets, inline scripts, and secret-shaped RPC URLs. Set
 `DARKNYX_TRADER_STATIC_ROOT` to choose a deployment staging directory.
 
-After that build, `npm -w @darknyx/browser-client run assemble:release --
---origin=…` constructs the deployable release. It verifies and copies all 18
+After that build, the following complete command constructs the deployable
+release:
+
+```sh
+DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64="$OFFLINE_RELEASE_KEY" \
+  npm -w @darknyx/browser-client run assemble:release -- \
+    --origin=https://trade.example \
+    --release-id=<reviewed-release-id> \
+    --venue-id=<opaque-venue-id> \
+    --vault-program-id=<deployed-vault-program> \
+    --expected-compose-hash=<64-lowercase-hex> \
+    --artifact-key-id=<reviewed-key-id> \
+    --circuit-version=<reviewed-circuit-version> \
+    --proving-key-version=<reviewed-proving-key-version>
+```
+
+It verifies and copies all 18
 WASM/zkey/verification-key files against the committed all-six payload, signs
 the exact payload with the offline Ed25519 release key, derives the public-key
 pin, and writes both `artifacts/manifest.json` and `release.json`. It refuses to
 overwrite an existing artifact directory, so a release always starts from a
 fresh content-addressed application build. The private key is accepted only as
-`DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64` and is zeroed after signing.
+`DARKNYX_CLIENT_ARTIFACT_SIGNING_KEY_PKCS8_B64`. After signing, the assembler
+zeroes only its decoded `keyBytes` buffer; the base64 environment value and the
+OpenSSL `KeyObject` cannot be explicitly erased by Node. Run assembly in a
+short-lived isolated process and unset the environment value immediately.
 
 The internal composition bundle now also contains the inventory plane. It
 reconstructs notes from finalized chain transactions inside the custody Worker,
