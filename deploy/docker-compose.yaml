@@ -31,7 +31,7 @@ services:
     # fetched via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:39a34d441f03049c0eba76ab14753b27b9622d41b3fa1e03816d11d7a1db59c4
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:fff91701219740553c658d93a407af2f06a86be90ba3927c0ac302855a7ce81e
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
