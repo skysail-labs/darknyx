@@ -280,8 +280,8 @@ phase table unless an already-open branch owns that exact work.
 | 2 | `remediation/transport-ratls-node-clients` | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | Open |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
-| 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | Open — decision-gated |
-| 5B | `remediation/browser-attested-channel` | Phase 0 B1 NO-GO + Phase 4 | Quote-bound browser application channel | Open — decision-gated |
+| 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
+| 5B | `remediation/browser-attested-channel` | Phase 4 | Quote-bound browser application channel | **Selected** — §6.3.1 |
 | 6 | `remediation/browser-transport-cutover` | Phase 5A **or** 5B | Plaintext proxy retired; live browser evidence; T-03B closure | Open |
 | 7 | `remediation/transport-closure-assurance` | Phases 3, 4, 6 | Cross-surface assurance, final docs, tracker and parent T-03 closure | Open |
 
@@ -398,7 +398,31 @@ The mitigating fact is §2 fact 10: the volume's disk key is released only to a
 compose_hash on the KMS allowlist. **So the remaining question is not "does the
 key persist" — it does — but "who governs the allowlist that gates it."**
 
-#### 6.3.1 The question that now decides B1
+#### 6.3.1 ANSWERED 2026-08-15 — we do NOT govern our allowlist
+
+**Result: `kms_type = phala`, `dstack_app_address = null`, `chain_id = null`** for
+both `nightly-test-cvm` and `darknyx-image-builder-73` (`phala cvms get --json`).
+There is no `DstackApp` contract for our app; **Phala Cloud decides which compose
+hashes may run**, per `phala-cloud/cvm/replicating-cvms.mdx:39`.
+
+**⇒ B1 is NO-GO on the current deployment.** Ingress key persistence would be
+gated by the same third-party allowlist whose opacity disqualified the gateway
+path (§2 fact 10's middle row collapses into its bottom row for us).
+
+**⇒ Default to Phase 5B** (quote-bound application channel), which depends on no
+external allowlist. B1 returns to the table only if the owner elects to migrate to
+Onchain KMS (`/phala-cloud/key-management/deploying-with-onchain-kms`) — a real
+migration that puts a chain dependency in the boot path and needs its own costing.
+**That is an owner decision, not a technical blocker; record it either way.**
+
+**⇒ T-03P is unaffected and reinforced:** RA-TLS with a boot-random key depends on
+KMS governance not at all.
+
+*Pre-existing, not introduced here:* our CVM's persistent state (journal, Merkle
+mirror) is already encrypted under a key Phala's KMS releases on Phala's
+allowlist. Recorded so no future "governed persistence" argument over-claims.
+
+<details><summary>Original question, retained for provenance</summary>
 
 **Does our Phala Cloud deployment use on-chain KMS governance, and do we control
 our own app's compose-hash allowlist?**
@@ -416,10 +440,15 @@ than our `phala-cloud` deployment.** Determine, for the CVM we actually run:
 - who holds the authority to add a compose hash; and
 - what happens to the disk key across a compose change under the same `app_id`.
 
-This is cheap, non-billable, and it gates the B1/B2 decision. **Answer it before
-the lifecycle matrix below** — if we do not govern the allowlist, B1 inherits the
-same "somebody else's governance" weakness as the gateway path and the matrix is
-largely moot.
+This is cheap, non-billable, and it gates the B1/B2 decision.
+
+</details>
+
+**The lifecycle matrix below is now moot for the current deployment** — it was
+scoped to prove B1's key binding, and 6.3.1 already answers NO. Run it only if the
+owner elects the Onchain-KMS migration, at which point it becomes decision-grade
+again. The ingress source-review requirement below likewise applies only under
+that branch.
 
 Obtain the exact source commit, build recipe, SBOM/provenance, and image digest
 corresponding to the recommended ingress image. A digest without reviewable
@@ -1187,10 +1216,11 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `fc88040` on 2026-08-15 |
 | Active phase | none — plan authored, implementation not started |
 | Active branch / PR | none |
-| Next phase | Phase 0 — external preflight and tracker correction |
-| Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — needs one CVM window |
-| Browser path decision | OPEN — gated on §6.3.1 (do we govern our own compose allowlist?), which is non-billable and should be answered first |
-| Ingress lifecycle | Persistence CONFIRMED; governance of the gating allowlist UNKNOWN — see §6.3.1 |
+| Next phase | Phase 0 — in progress on `remediation/transport-preflight` |
+| Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
+| Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
+| Ingress lifecycle | Persistence CONFIRMED; gating allowlist is **Phala's, not ours** (`kms_type = phala`, `dstack_app_address = null`) — §6.3.1 |
+| KMS governance | Phala-operated. No `DstackApp` contract for our app. Migration to Onchain KMS is available but uncosted — owner decision |
 | T-03P | Open |
 | T-03B | Open |
 | R-01 | Open |

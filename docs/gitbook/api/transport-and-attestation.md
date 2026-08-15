@@ -8,13 +8,18 @@ description: "How HTTPS reaches the confidential VM and how a client verifies th
 {% hint style="info" %}
 **TL;DR**
 
+**This page describes the programmatic path — the SDK and the daemon, which
+connect to the engine directly. It does not describe the browser trader.**
+See [What the browser client adds](#what-the-browser-client-adds) below.
+
 TLS terminates at the **dstack gateway**, which is itself an attested TDX
 confidential VM, and reaches the Darknyx engine over an encrypted, mutually
-attested tunnel. No ordinary server or cloud operator sees your order intent —
-but the trust path spans two enclaves, and today your client verifies the
-measurement of only one of them. There is no in-band session-encryption envelope
-to negotiate. Clients **verify** they are talking to the real engine by checking
-the attestation quote against an expected image measurement.
+attested tunnel. For a direct client, no ordinary server or cloud operator sees
+your order intent — but the trust path spans two enclaves, and today your client
+verifies the measurement of only one of them. There is no in-band
+session-encryption envelope to negotiate. Clients **verify** they are talking to
+the real engine by checking the attestation quote against an expected image
+measurement.
 {% endhint %}
 
 ## The trust boundary
@@ -28,8 +33,9 @@ terminates at the engine", and it is worth stating precisely.
 TLS terminates at the **dstack gateway**. The gateway is not a conventional load
 balancer: it runs inside its own Intel TDX confidential VM, generates its
 certificate key inside that VM, and establishes a WireGuard tunnel to the Darknyx
-CVM only after the two mutually verify each other's attestation. Plaintext order
-intent therefore exists only inside hardware-protected memory, on both hops:
+CVM only after the two mutually verify each other's attestation. **For a direct
+client**, plaintext order intent therefore exists only inside hardware-protected
+memory, on both hops:
 
 ```text
         TLS (key generated inside the gateway's TEE)
@@ -38,7 +44,7 @@ client ────────────────────────�
                      plaintext here ──► │  gateway    │  attested ───► │  CVM (engine) │
                                         │  (TDX CVM)  │                └───────────────┘
                                         └─────────────┘
-        no untrusted hop — but two measured boundaries, not one
+   direct clients only — no untrusted hop, but two measured boundaries, not one
 ```
 
 What this gives you:
@@ -67,6 +73,38 @@ attestation-bound certificate. That work is tracked and gated ahead of external
 users and real-value deposits; it has not shipped. Earlier revisions of this page
 described it as though it had. Until it does, treat the transport as protected
 from the operator but resting on a second enclave you are not yet pinning.
+{% endhint %}
+
+## What the browser client adds
+
+{% hint style="warning" %}
+**The browser trader does not have the property described above, and you should
+not assume it does.**
+
+The browser never connects to the engine. It talks only to its own origin, and a
+**trader host** — an ordinary server process, not a TEE — relays its requests to
+the gateway. That host terminates the browser's TLS, so it sees order intent,
+cancellations, and fill streams **in plaintext**:
+
+```text
+browser ──TLS──► trader host ──TLS──► dstack gateway ──WireGuard──► Darknyx CVM
+                (ordinary server)       (TDX CVM)                    (TDX CVM)
+                plaintext here
+```
+
+What the trader host **cannot** do: forge, alter, or replay an order (every order
+is signed on your device and verified in the enclave), fabricate durable state
+(settlement reconciles against the chain), or reach your keys (the seed never
+leaves a dedicated browser worker).
+
+What it **can** do: read your order flow as it happens, delay or withhold orders,
+and — because nothing binds the attestation quote to the connection — relay a
+genuine quote while routing your traffic elsewhere.
+
+Work to remove it from the plaintext path is tracked and gated ahead of external
+users and real-value deposits. Until it ships, treat browser order intent as
+visible to whoever operates the trader host. If you need the stronger property
+today, use the SDK or the daemon, which connect directly.
 {% endhint %}
 
 ## Verifying the engine
