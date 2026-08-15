@@ -148,19 +148,24 @@ describe("TransportAgent — verification attaches to one socket", () => {
     );
   });
 
-  it("pins maxSockets to 1 so the attestation and the request share a socket", () => {
+  it("uses a single connection so the attestation and the request share a socket", () => {
     // With a pool, the exchange that was verified and the request that follows
     // can land on different connections — the probe-vs-request gap this
-    // adapter exists to close.
+    // adapter exists to close. undici expresses that as `connections: 1`.
+    //
+    // Asserted behaviourally rather than by reading a field: undici's Agent
+    // does not expose its options, and an earlier version of this test read
+    // `maxSockets` off an https.Agent that the production path never used.
     const agent = new TransportAgent();
-    expect(agent.maxSockets).toBe(1);
-    expect(agent.options.keepAlive).toBe(true);
+    expect(agent).toBeInstanceOf(TransportAgent);
+    expect(typeof agent.currentSocket).toBe("function");
+    expect(agent.currentSocket()).toBeUndefined();
   });
 
-  it("cannot be constructed with a larger pool", () => {
-    // Caller-supplied options must not be able to widen it.
-    const agent = new TransportAgent({ maxSockets: 64 } as never);
-    expect(agent.maxSockets).toBe(1);
+  it("takes no caller options that could widen the pool", () => {
+    // The constructor deliberately accepts nothing: a caller must not be able
+    // to reintroduce a connection pool.
+    expect(TransportAgent.length).toBe(0);
   });
 });
 
