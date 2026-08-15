@@ -53,6 +53,7 @@ is the authority.
 | `audit_5` | Withdraw + intake boundary review | `S-`, `PF-01…PF-07`, `AU-` |
 | `audit_6` | TEE, infrastructure + daemon review | `T-`, `PF-08…PF-10` |
 | `audit_7` | Client attestation review + un-audited surface sweep | `CA-`, `SW-`, `PF-12…PF-27` |
+| `audit_8` | Browser trader + oracle source switch + note-use-tag lockstep | `R-`, `PF-28…` |
 
 **ID prefixes are never reused.** A new engagement picks a fresh letter prefix
 and continues the shared `PF-` numbering for performance items. Reusing a
