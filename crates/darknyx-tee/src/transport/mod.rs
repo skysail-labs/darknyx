@@ -9,8 +9,10 @@
 
 pub mod identity;
 pub mod manifest;
+pub mod server;
 
 pub use identity::{IdentityError, TransportIdentity};
 pub use manifest::{
     ManifestError, TransportManifest, TransportMode, CANONICAL_LEN, DOMAIN, PROTOCOL_VERSION,
 };
+pub use server::{build_server_config, ServerConfigError};
