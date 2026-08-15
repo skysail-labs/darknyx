@@ -60,6 +60,9 @@ function countingKeystore(): CountingKeystore {
 
 const config = (): DaemonConfig => ({
   gatewayUrl: "https://gw",
+  // Legacy path: predates T-03P and exercises the gateway-terminated
+  // transport. Stated rather than defaulted.
+  transportMode: "gateway-terminated" as const,
   gatewayWsUrl: "wss://gw",
   token: "tok",
   rpcUrl: "https://rpc",

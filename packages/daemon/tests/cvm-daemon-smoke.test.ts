@@ -135,6 +135,9 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
 
     const config: DaemonConfig = {
       gatewayUrl: GATEWAY,
+      // Legacy path: predates T-03P and exercises the gateway-terminated
+      // transport. Stated rather than defaulted.
+      transportMode: "gateway-terminated" as const,
       gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
       token,
       rpcUrl: RPC,

@@ -363,6 +363,9 @@ describe("Daemon — attestation gate", () => {
   }
   const config = (overrides: Partial<DaemonConfig> = {}): DaemonConfig => ({
     gatewayUrl: GW,
+    // Legacy path: predates T-03P and exercises the gateway-terminated
+    // transport. Stated rather than defaulted.
+    transportMode: "gateway-terminated" as const,
     gatewayWsUrl: "wss://gw",
     token: TOKEN,
     rpcUrl: "https://rpc",
