@@ -281,7 +281,9 @@ phase table unless an already-open branch owns that exact work.
 | 1b | `remediation/transport-ratls-identity` | 1a | Boot-random, never-persisted TLS identity; SPKI proven present in the served certificate | **Code complete** — PR #144 open, unmerged. Local gate green; SPKI guard mutation-tested |
 | 1c | `remediation/transport-ratls-listener` | 1b | `/transport-attestation` route, `ApiState` wiring, OpenAPI | **Code complete** — PR open, unmerged. Route + state + OpenAPI landed; **the rustls bind itself moved to 1d** (see below) |
 | 1d | `remediation/transport-ratls-bind` | 1c | rustls `ServerConfig`, `DARKNYX_TEE_TRANSPORT_MODE` config, `main.rs` listener, fail-closed startup | **Code complete** — PR open, unmerged. TLS 1.3-only listener behind `DARKNYX_TEE_TRANSPORT_MODE=ra-tls`; real-handshake tests prove the attested SPKI is what a client observes. **Phase 1 code is now complete; closure still needs the Phase 3 live run** |
-| 2 | `remediation/transport-ratls-node-clients` | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | Open |
+| 2 | split into 2a/2b below | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | **In progress** |
+| 2a | `remediation/transport-verify-core` | 1d | Environment-neutral transport verification core; every check has a failing test | **Code complete** — PR open, unmerged |
+| 2b | `remediation/transport-node-adapter` | 2a | Node actual-socket adapter (`checkServerIdentity`, pooling, WS reconnect) + daemon/loadgen/trader-host consumers | Open — not started |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
@@ -1230,7 +1232,7 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | **Phase 2** — shared actual-socket verifier for the Node clients (`remediation/transport-ratls-node-clients`). Phase 1 is code complete across 1a–1d |
+| Next action | Phase 2b — Node actual-socket adapter and consumers, stacked on 2a |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
 | Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
@@ -1241,7 +1243,7 @@ Only then move parent T-03 to `Closed`.
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-15 (Phase 1d submitted; Phase 1 code complete) |
+| Last updated | 2026-08-15 (Phase 2a submitted) |
 
 ### 15.3 Handoff block
 

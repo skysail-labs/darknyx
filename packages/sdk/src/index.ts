@@ -67,3 +67,4 @@ export * from "./tee/attestation.js";
 export * from "./tee/vault-config.js";
 export * from "./tee/market-config.js";
 export * from "./tee/transport-manifest.js";
+export * from "./tee/verify-transport.js";
