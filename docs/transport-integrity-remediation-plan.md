@@ -287,7 +287,7 @@ phase table unless an already-open branch owns that exact work.
 | 2c | `remediation/transport-consumers` | 2b | Verified WebSocket gate: sends queued until the upgrade socket is checked, discarded on failure | **Code complete** — PR open, unmerged |
 | 2d | `remediation/transport-consumer-wiring` | 2c | `createVerifiedTransport` — one call returning HTTP + WS transports bound to the same verified identity | **Code complete** — PR open, unmerged |
 | 2e | `remediation/transport-consumer-adoption` | 2d | Daemon transport selection + config, `@darknyx/sdk/transport-node` subpath, **and trader-host upstream adoption** | **Code complete** — PR open, unmerged. 2f was folded in here rather than split: the remaining work was finite and a further PR would have added review overhead, not review value |
-| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | **In progress.** The transport binding is PROVEN live on image-88 (§6.2): passthrough GO, wire SPKI == attested SPKI, Rust/TS encodings agree against real quote data, key + boot session rotate. **Still outstanding:** public plaintext route closed, client-side relay negative suite, daemon + trader-host live runs, old-boot rejection *by a client*, `cvm-settle-e2e` regression, latency/RSS measurements, signer set vs `vault_config` |
+| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | **In progress.** The transport binding is PROVEN live on image-88 (§6.2): passthrough GO, wire SPKI == attested SPKI, Rust/TS encodings agree against real quote data, key + boot session rotate. **Client-side negatives now CLOSED offline** (`transport-relay-attack.test.ts`): a relay serving a genuine attestation behind its own certificate is rejected with `spki_mismatch`, old-boot evidence with `boot_session_mismatch`, and a failed socket is destroyed rather than pooled — all against real TLS servers with real distinct certificates, driven through the production agent. **Still outstanding:** public plaintext route closed, daemon + trader-host live runs, `cvm-settle-e2e` regression, latency/RSS measurements, signer set vs `vault_config` |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
 | 5B | `remediation/browser-attested-channel` | Phase 4 | Quote-bound browser application channel | **Selected** — §6.3.1 |
@@ -1303,7 +1303,7 @@ Only then move parent T-03 to `Closed`.
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-16 (passthrough GO; enclave-side transport binding proven live on image-88) |
+| Last updated | 2026-08-16 (passthrough GO live; client-side relay + old-boot negatives closed offline) |
 
 ### 15.3 Handoff block
 
