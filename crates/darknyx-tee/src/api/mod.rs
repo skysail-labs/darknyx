@@ -29,6 +29,7 @@ pub mod state;
 pub mod stream;
 pub mod system;
 pub mod transparency;
+pub mod transport_attestation;
 pub mod tree;
 
 use std::sync::Arc;
@@ -54,6 +55,7 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/health`      | public        | PR 4d    |
 /// | GET    | `/info`        | public        | PR 4d    |
 /// | GET    | `/attestation` | public        | PR 4d    |
+/// | GET    | `/transport-attestation` | public | T-03P |
 /// | POST   | `/auth/token`  | public        | PR 4e.2  |
 /// | POST   | `/orders`      | bearer (4e.2) | PR 4e.3  |
 /// | DELETE | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
@@ -79,6 +81,13 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/health", get(health::handler))
         .route("/info", get(info::handler))
         .route("/attestation", get(attestation::handler))
+        // T-03P: binds the served TLS certificate to this enclave/boot/signer set.
+        // Unauthenticated by necessity — a client must verify the transport
+        // BEFORE it sends a credential. Rate-limited in the handler.
+        .route(
+            "/transport-attestation",
+            get(transport_attestation::handler),
+        )
         .route("/auth/token", post(auth::token_handler))
         // Merkle mirror root — public convenience read (clients can
         // always cross-check VaultConfig.current_root on Solana).

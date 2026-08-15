@@ -231,6 +231,85 @@ components:
           type: boolean
           description: The role the account was created with. Secret/passphrase are never echoed.
 
+    TransportAttestationManifest:
+      type: object
+      description: |
+        The values bound into the transport quote. These are CLAIMS until the
+        client rebuilds the canonical bytes and confirms the digest matches
+        report_data[32..64]. Canonical encoding (164 bytes, all fixed-width):
+          [  0..  2] protocol_version   u16 big-endian
+          [  2..  3] transport_mode     u8 (ra-tls=1, gateway-terminated=2)
+          [  3..  4] reserved           u8 = 0
+          [  4.. 36] sha256(app_id)
+          [ 36.. 68] sha256(instance_id)
+          [ 68..100] boot_session_id
+          [100..132] tls_spki_sha256
+          [132..164] signer_set_sha256
+        Reference mirror: packages/sdk/src/tee/transport-manifest.ts
+      required:
+        [protocol_version, transport_mode, app_id_sha256, instance_id_sha256,
+         boot_session_id, tls_spki_sha256, signer_set_sha256]
+      properties:
+        protocol_version:
+          type: integer
+          description: Wire version. Bumped together with the domain tag.
+        transport_mode:
+          type: string
+          enum: [ra-tls, gateway-terminated]
+        app_id_sha256:
+          type: string
+          description: Hex SHA-256 of the dstack app_id bytes.
+        instance_id_sha256:
+          type: string
+          description: Hex SHA-256 of the dstack instance_id bytes.
+        boot_session_id:
+          type: string
+          description: |
+            Hex, 32 bytes. Changes on every process restart, which is what makes
+            evidence from a previous boot rejectable.
+        tls_spki_sha256:
+          type: string
+          description: |
+            Hex SHA-256 over the DER SubjectPublicKeyInfo of the served
+            certificate. The client MUST compare this against the certificate on
+            the socket carrying its request — not a separate probe connection.
+        signer_set_sha256:
+          type: string
+          description: |
+            Hex SHA-256 over the concatenated raw pubkeys of the full ordered
+            K-shard signer set. Carried inside the manifest deliberately: a
+            client must not verify a transport quote and an /attestation quote
+            independently and infer they came from the same enclave.
+
+    TransportAttestation:
+      type: object
+      description: |
+        Transport attestation bundle (T-03P). Binds the served TLS certificate,
+        the current boot session, and the full signer set into one quote.
+      required: [manifest, quote, event_log, report_data, domain]
+      properties:
+        manifest:
+          $ref: '#/components/schemas/TransportAttestationManifest'
+        quote:
+          type: string
+          description: Hex-encoded TDX quote (DCAP format) over report_data.
+        event_log:
+          type: string
+          description: |
+            The dstack event log as a JSON STRING. Replay against the
+            DCAP-verified quote's RTMR3 to recover the measured compose hash.
+        report_data:
+          type: string
+          description: |
+            Hex of the 64-byte report_data in the quote:
+            nonce(32) || SHA-256(domain || canonical_manifest_bytes).
+        domain:
+          type: string
+          description: |
+            Domain separation tag the digest was computed under, e.g.
+            "darknyx/transport-attestation/v1". A client that does not implement
+            this exact version MUST fail rather than attempt verification.
+
     AttestationQuote:
       type: object
       description: |
@@ -1483,6 +1562,76 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AttestationQuote' }
+
+  /transport-attestation:
+    get:
+      tags: [attestation]
+      summary: Quote binding the served TLS certificate to this enclave (T-03P).
+      description: |
+        Unauthenticated, and necessarily so: a client must verify the transport
+        BEFORE it sends any credential or order intent.
+
+        `/attestation` proves an enclave with a given signer set is alive. It
+        does NOT prove the TLS connection carrying your orders terminates
+        there — a party able to terminate TLS can relay a genuine
+        `/attestation` response while routing traffic elsewhere. This endpoint
+        closes that by binding the served certificate's public key into the
+        attested value:
+
+            report_data[0..32]  = caller's nonce (EXACTLY 32 bytes)
+            report_data[32..64] = SHA-256(DOMAIN || canonical_manifest_bytes)
+
+        `/attestation` is unchanged and remains valid; the two coexist because
+        dstack `get_quote` accepts caller-selected report_data on every call.
+
+        Verification steps:
+          1. Verify the Intel TCB chain and quote locally, and replay the event
+             log to confirm RTMR3 and recover the measured compose hash. The
+             compose hash is deliberately NOT a manifest field — in the event
+             log it is verifiable, in the manifest it would be self-reported.
+          2. Rebuild canonical_manifest_bytes from the returned manifest and
+             confirm report_data[32..64] matches. The manifest fields are
+             claims until you recompute them.
+          3. Confirm report_data[0..32] is your nonce.
+          4. **Compare manifest.tls_spki_sha256 against the certificate on the
+             socket you are actually using.** A separate probe connection does
+             not establish anything — DNS, load balancing, or a relay can make
+             the probe and the request reach different peers.
+          5. Confirm manifest.signer_set_sha256 matches finalized on-chain
+             VaultConfig, and manifest.boot_session_id matches `/info`.
+
+        Step 4 is the entire point of the endpoint. A client that verifies the
+        quote but not the socket certificate has gained nothing over
+        `/attestation`.
+
+        Every manifest field is taken from server state. The nonce is the only
+        caller input, and it only ever lands in the left half of report_data.
+      parameters:
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+          description: |
+            Fresh 32-byte nonce in hex (64 characters). Required, and rejected
+            with 400 if absent, non-hex, or any length other than 32 bytes.
+            Unlike `/attestation`, a short nonce is NOT zero-padded: silently
+            padding would let a caller believe it has replay protection it does
+            not have.
+      responses:
+        '400':
+          description: Nonce missing, non-hex, or not exactly 32 bytes.
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
+        '503':
+          description: |
+            RA-TLS transport is not enabled on this instance (legacy
+            gateway-terminated deployment), or the dstack socket is
+            unreachable. The endpoint reports unavailability rather than
+            returning a manifest bound to no served certificate.
+        '200':
+          description: Transport attestation bundle.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransportAttestation' }
 
   /info:
     get:
