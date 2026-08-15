@@ -275,8 +275,11 @@ phase table unless an already-open branch owns that exact work.
 
 | Phase | Branch / PR topic | Depends on | Result | Status |
 |---|---|---|---|---|
-| 0 | `remediation/transport-preflight` | none | External assumptions resolved; trackers corrected; browser path selected or explicitly blocked | Open |
-| 1 | `remediation/transport-ratls-server` | Phase 0 passthrough GO | RA-TLS server + versioned transport evidence in TEE | Open |
+| 0 | `remediation/transport-preflight` | none | External assumptions resolved; trackers corrected; browser path selected or explicitly blocked | **Closed** — PR #142, merged `7be1772`. B1 NO-GO and B2 selected (§6.3.1); passthrough source-GO (§6.2). **Carry-forward:** the live passthrough probe is bundled into the Phase 3 CVM window by owner decision, not left implicit here |
+| 1 | split into 1a/1b/1c below — stack **#145** | Phase 0 passthrough GO (source; live carried) | RA-TLS server + versioned transport evidence in TEE | **In progress** |
+| 1a | `remediation/transport-manifest` | Phase 0 | `TransportAttestationManifestV1` wire contract, Rust + TS, one shared pinned vector | **Code complete** — PR #143 open, unmerged. Local gate green; mutation-tested both directions |
+| 1b | `remediation/transport-ratls-identity` | 1a | Boot-random, never-persisted TLS identity; SPKI proven present in the served certificate | **Code complete** — PR #144 open, unmerged. Local gate green; SPKI guard mutation-tested |
+| 1c | `remediation/transport-ratls-listener` | 1b | rustls listener + `/transport-attestation` route + OpenAPI | Open — not started |
 | 2 | `remediation/transport-ratls-node-clients` | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | Open |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
@@ -1193,9 +1196,19 @@ Only then move parent T-03 to `Closed`.
 4. Preserve unrelated dirty/untracked files. The `dstack/` and `phala-docs/`
    working copies are evidence trees unless the owner explicitly asks to commit
    them.
-5. Update the execution-state table below whenever a phase changes state.
+5. **Update the phase table (§5) and the execution-state table (§15.2) in the
+   same commit as the work itself** — not afterwards, not "when the phase
+   finishes". A status column that lags the branch is worse than no column,
+   because a later reader trusts it. Every PR in this workstream must show a
+   status change or say explicitly why none applies.
 6. Move a phase only as far as evidence supports. `Code complete` is not
-   `Closed` when CVM or browser evidence remains.
+   `Closed` when CVM or browser evidence remains. A merged PR with a green
+   local gate is still only `Code complete` for any phase whose closure
+   criteria name live evidence.
+6a. **Do not merge.** Work is delivered as stacked PRs (`gh stack submit
+   --auto`) and left open for the owner. Never run `gh stack merge` or
+   `gh pr merge` unless the owner asks for it in that exchange. Keep the stack
+   rebased with `gh stack sync` instead.
 7. Use the user's private Helius endpoint for devnet/CVM work. Do not fall back
    to `https://api.devnet.solana.com`.
 8. Do not start a billable CVM merely to avoid thinking through a local test.
@@ -1213,20 +1226,21 @@ Only then move parent T-03 to `Closed`.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `fc88040` on 2026-08-15 |
-| Active phase | none — plan authored, implementation not started |
-| Active branch / PR | none |
-| Next phase | Phase 0 — in progress on `remediation/transport-preflight` |
+| Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
+| Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
+| Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
+| Next action | Phase 1c: rustls listener + `/transport-attestation` route + OpenAPI, stacked on #144 |
+| Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
 | Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
 | Ingress lifecycle | Persistence CONFIRMED; gating allowlist is **Phala's, not ours** (`kms_type = phala`, `dstack_app_address = null`) — §6.3.1 |
 | KMS governance | Phala-operated. No `DstackApp` contract for our app. Migration to Onchain KMS is available but uncosted — owner decision |
-| T-03P | Open |
-| T-03B | Open |
-| R-01 | Open |
+| T-03P | **Open — in progress.** 1a/1b code complete and unmerged; 1c, Phase 2, and the Phase 3 live run all outstanding. Not `Closed` until the CVM evidence exists |
+| T-03B | Open — blocked on Phase 4 (R-01), not started |
+| R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
-| CVM/billing state | Must be discovered live; do not infer from this document |
-| Last updated | 2026-08-15 |
+| CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
+| Last updated | 2026-08-15 (Phase 1b submitted) |
 
 ### 15.3 Handoff block
 
