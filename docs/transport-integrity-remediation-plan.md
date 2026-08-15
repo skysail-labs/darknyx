@@ -281,13 +281,12 @@ phase table unless an already-open branch owns that exact work.
 | 1b | `remediation/transport-ratls-identity` | 1a | Boot-random, never-persisted TLS identity; SPKI proven present in the served certificate | **Code complete** — PR #144 open, unmerged. Local gate green; SPKI guard mutation-tested |
 | 1c | `remediation/transport-ratls-listener` | 1b | `/transport-attestation` route, `ApiState` wiring, OpenAPI | **Code complete** — PR open, unmerged. Route + state + OpenAPI landed; **the rustls bind itself moved to 1d** (see below) |
 | 1d | `remediation/transport-ratls-bind` | 1c | rustls `ServerConfig`, `DARKNYX_TEE_TRANSPORT_MODE` config, `main.rs` listener, fail-closed startup | **Code complete** — PR open, unmerged. TLS 1.3-only listener behind `DARKNYX_TEE_TRANSPORT_MODE=ra-tls`; real-handshake tests prove the attested SPKI is what a client observes. **Phase 1 code is now complete; closure still needs the Phase 3 live run** |
-| 2 | split into 2a/2b below | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | **In progress** |
+| 2 | split into 2a–2e below | Phase 1 | Shared actual-socket verifier used by SDK/daemon/trader-host (**not** loadgen — see the §8.3 correction) | **Code complete** — all five layers submitted and unmerged. Not `Closed`: §9.3 closure names live evidence |
 | 2a | `remediation/transport-verify-core` | 1d | Environment-neutral transport verification core; every check has a failing test | **Code complete** — PR open, unmerged |
 | 2b | `remediation/transport-node-adapter` | 2a | Node actual-socket adapter: per-socket SPKI capture, single-socket pool, verified-fetch gate | **Code complete** — PR open, unmerged |
 | 2c | `remediation/transport-consumers` | 2b | Verified WebSocket gate: sends queued until the upgrade socket is checked, discarded on failure | **Code complete** — PR open, unmerged |
 | 2d | `remediation/transport-consumer-wiring` | 2c | `createVerifiedTransport` — one call returning HTTP + WS transports bound to the same verified identity | **Code complete** — PR open, unmerged |
-| 2e | `remediation/transport-consumer-adoption` | 2d | Daemon transport selection + config, `@darknyx/sdk/transport-node` subpath | **Code complete** — PR open, unmerged. **trader-host adoption deferred to 2f** |
-| 2f | `remediation/transport-trader-host` | 2e | trader-host upstream adopts the verified transport | Open — not started |
+| 2e | `remediation/transport-consumer-adoption` | 2d | Daemon transport selection + config, `@darknyx/sdk/transport-node` subpath, **and trader-host upstream adoption** | **Code complete** — PR open, unmerged. 2f was folded in here rather than split: the remaining work was finite and a further PR would have added review overhead, not review value |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
@@ -1243,18 +1242,18 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | Phase 2f — trader-host upstream adoption, stacked on 2e. **Loadgen excluded — see the §8.3 correction** |
+| Next action | **Phase 3** — deployment cutover and the live CVM run, which also settles the carried-forward passthrough probe. Phases 1 and 2 are code complete |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
 | Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
 | Ingress lifecycle | Persistence CONFIRMED; gating allowlist is **Phala's, not ours** (`kms_type = phala`, `dstack_app_address = null`) — §6.3.1 |
 | KMS governance | Phala-operated. No `DstackApp` contract for our app. Migration to Onchain KMS is available but uncosted — owner decision |
-| T-03P | **Open — in progress.** 1a/1b code complete and unmerged; 1c, Phase 2, and the Phase 3 live run all outstanding. Not `Closed` until the CVM evidence exists |
+| T-03P | **Open — code complete.** Phases 1 and 2 are implemented across 9 unmerged PRs (stack #145). Outstanding: the Phase 3 deployment cutover and live CVM run. Not `Closed` until that evidence exists |
 | T-03B | Open — blocked on Phase 4 (R-01), not started |
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-16 (Phase 2e submitted) |
+| Last updated | 2026-08-16 (Phase 2 code complete) |
 
 ### 15.3 Handoff block
 

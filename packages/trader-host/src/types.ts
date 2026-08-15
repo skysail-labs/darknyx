@@ -70,6 +70,20 @@ export interface ReleaseHostOptions {
   onError?: (error: unknown) => void;
   /** Server-only upstreams. Set both to enable the same-origin live proxy. */
   gatewayUpstreamUrl?: string;
+  /**
+   * `fetch` used for **CVM-bound** requests only (T-03P).
+   *
+   * Supply the verified transport from `@darknyx/sdk/transport-node` to make
+   * every upstream enclave request check, on the socket carrying it, that it
+   * terminates at the attested enclave. Defaults to the global `fetch`, which
+   * is the legacy gateway-terminated path.
+   *
+   * Deliberately NOT used for the Solana RPC upstream: that goes to Helius,
+   * not the enclave, and routing it through an enclave-pinned transport would
+   * be nonsense — it would fail verification against a certificate Helius has
+   * no reason to present.
+   */
+  cvmFetch?: typeof fetch;
   rpcUpstreamUrl?: string;
   proxyTimeoutMs?: number;
   maxProxyRequestsPerMinute?: number;
