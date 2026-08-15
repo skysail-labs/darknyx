@@ -287,7 +287,7 @@ phase table unless an already-open branch owns that exact work.
 | 2c | `remediation/transport-consumers` | 2b | Verified WebSocket gate: sends queued until the upgrade socket is checked, discarded on failure | **Code complete** — PR open, unmerged |
 | 2d | `remediation/transport-consumer-wiring` | 2c | `createVerifiedTransport` — one call returning HTTP + WS transports bound to the same verified identity | **Code complete** — PR open, unmerged |
 | 2e | `remediation/transport-consumer-adoption` | 2d | Daemon transport selection + config, `@darknyx/sdk/transport-node` subpath, **and trader-host upstream adoption** | **Code complete** — PR open, unmerged. 2f was folded in here rather than split: the remaining work was finite and a further PR would have added review overhead, not review value |
-| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
+| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | **In progress.** The transport binding is PROVEN live on image-88 (§6.2): passthrough GO, wire SPKI == attested SPKI, Rust/TS encodings agree against real quote data, key + boot session rotate. **Still outstanding:** public plaintext route closed, client-side relay negative suite, daemon + trader-host live runs, old-boot rejection *by a client*, `cvm-settle-e2e` regression, latency/RSS measurements, signer set vs `vault_config` |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
 | 5B | `remediation/browser-attested-channel` | Phase 4 | Quote-bound browser application channel | **Selected** — §6.3.1 |
@@ -385,7 +385,43 @@ Do not send Darknyx credentials or orders during this probe. If the CVM must be
 started solely for this test, record billing start/end and stop the CPU CVM as
 soon as evidence is captured.
 
-**Probe attempt 2026-08-16 — INCONCLUSIVE. Do not repeat it this way.**
+**RESOLVED 2026-08-16 — passthrough is GO.** See the live evidence below; the
+inconclusive first attempt is retained beneath it because the *reason* it could
+not work is the reusable lesson.
+
+```
+TLS 1.3 handshake through <app-id>-8443s.dstack-pha-prod9.phala.network
+  subject = CN=darknyx-tee ra-tls (boot-scoped)   <- our enclave, not the gateway
+  Cipher  = TLS_AES_256_GCM_SHA384 / TLSv1.3
+  served SPKI  bcbd97c9...  (read off the wire)
+  enclave log  bcbd97c9...  (what it generated at boot)
+  manifest     bcbd97c9...  (what the quote binds)
+```
+
+The gateway passed the stream through untouched and the enclave terminated TLS
+itself. Image `tee-v3-hardening-88`
+(`sha256:47152b5f82a1e50099115a271e6866dc9b596995580bf3f61338f05c0f25f715`),
+source `e6f9cb5`, prod9, `DARKNYX_TEE_TRANSPORT_MODE=ra-tls`,
+`DARKNYX_TEE_TLS_BIND=0.0.0.0:8443`. Billing 19:42:38Z-19:47:42Z.
+
+**Also proven in the same window:**
+
+| Property | Evidence |
+|---|---|
+| The attested SPKI is what a peer observes | wire cert SPKI == `manifest.tls_spki_sha256` |
+| Rust and TypeScript agree on the canonical encoding **against real data** | the TS `manifestDigestFromHashed` output == the live quote's `report_data[32..64]`. The pinned vector only ever proved they agreed on a *fixture* |
+| Freshness | caller nonce round-trips into `report_data[0..32]` |
+| The key is boot-random | SPKI **and** `boot_session_id` both rotated across a restart |
+| TLS 1.3 only | negotiated TLSv1.3 |
+
+**A false positive worth remembering.** The first rotation check reported success
+on an "after" SPKI of `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+— which is SHA-256 of the **empty string**. `openssl` returned nothing while the
+CVM was still restarting and the pipeline hashed emptiness. Guard explicitly
+against that digest and wait for the service to answer before comparing; empty
+input flowing through a hash is a reliably deceptive failure.
+
+**First attempt 2026-08-16 — INCONCLUSIVE. Do not repeat it that way.**
 Against the *existing* plaintext image on a running prod9 CVM: the `s` suffix
 demonstrably changes gateway behaviour (`-8080.` presents the gateway wildcard
 certificate and completes; `-8080s.` presents **no certificate**). That is
@@ -1255,18 +1291,19 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | **Phase 3** — deployment cutover and the live CVM run, which also settles the carried-forward passthrough probe. Phases 1 and 2 are code complete |
+| Next action | Phase 3 continuation — the outstanding items in its row. The passthrough question is settled (GO); what remains is cutover and client-side evidence |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
-| Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
+| Passthrough decision | **GO — proven live 2026-08-16** on image-88/prod9. Handshake completes through the `s` route against the enclave's own boot-scoped certificate (§6.2) |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
+| Deployed image | `tee-v3-hardening-88` @ `sha256:47152b5f82a1e50099115a271e6866dc9b596995580bf3f61338f05c0f25f715`, source `e6f9cb5`. Compose pinned; `TRANSPORT_MODE` defaults to `gateway-terminated` and was set to `ra-tls` in the deploy env only |
 | Ingress lifecycle | Persistence CONFIRMED; gating allowlist is **Phala's, not ours** (`kms_type = phala`, `dstack_app_address = null`) — §6.3.1 |
 | KMS governance | Phala-operated. No `DstackApp` contract for our app. Migration to Onchain KMS is available but uncosted — owner decision |
-| T-03P | **Open — code complete.** Phases 1 and 2 are implemented across 9 unmerged PRs (stack #145). Outstanding: the Phase 3 deployment cutover and live CVM run. Not `Closed` until that evidence exists |
+| T-03P | **Open — core transport binding proven live.** Phases 1-2 implemented across 9 unmerged PRs (stack #145); the enclave-side binding is now evidenced on a real CVM (§6.2). Not `Closed`: the client half is unproven (no relay negative suite, no daemon/trader-host live run), the public plaintext route is still open, and no measurements were taken |
 | T-03B | Open — blocked on Phase 4 (R-01), not started |
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-16 (Phase 2 code complete) |
+| Last updated | 2026-08-16 (passthrough GO; enclave-side transport binding proven live on image-88) |
 
 ### 15.3 Handoff block
 

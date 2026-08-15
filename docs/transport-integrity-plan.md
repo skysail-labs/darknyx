@@ -409,8 +409,19 @@ In brief:
 
 ## 9. Open questions
 
-1. **[OPEN] Live passthrough confirmation** (§5.1). Source is unambiguous; the
-   live probe needs one CVM window. Fold it into an already-planned run.
+1. ~~Live passthrough confirmation~~ **ANSWERED 2026-08-16: GO. [MEASURED]**
+   A TLS 1.3 handshake through `<app-id>-8443s.dstack-pha-prod9.phala.network`
+   completes against the enclave's own boot-scoped certificate
+   (`CN=darknyx-tee ra-tls (boot-scoped)`), not the gateway wildcard. The
+   gateway passed the stream through untouched. Details, including what else the
+   same window proved and one false positive worth remembering, are in
+   `transport-integrity-remediation-plan.md` §6.2.
+
+   Note what it took: the question was **unanswerable** against the pre-existing
+   plaintext image, because "passthrough forwarded to a backend that cannot
+   speak TLS" and "the gateway refused the `s` route" produce identical
+   observations from outside. It needed a TLS-speaking backend — i.e. the
+   RA-TLS build itself.
 2. ~~Does our Phala Cloud deployment use on-chain KMS governance?~~
    **ANSWERED 2026-08-15: NO. [MEASURED]** `phala cvms get` reports, for **both**
    our CVMs (`nightly-test-cvm` and `darknyx-image-builder-73`):
