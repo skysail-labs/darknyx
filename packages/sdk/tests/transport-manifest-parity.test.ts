@@ -20,7 +20,9 @@ import {
   PROTOCOL_VERSION,
   TransportMode,
   canonicalBytes,
+  canonicalBytesFromHashed,
   manifestDigest,
+  manifestDigestFromHashed,
   transportReportData,
   type TransportManifestInput,
 } from "../src/tee/transport-manifest.js";
@@ -135,4 +137,37 @@ describe("transport manifest — report_data", () => {
       ).toThrow(/exactly 32 bytes/);
     },
   );
+});
+
+describe("transport manifest — pre-hashed path", () => {
+  it("agrees with the raw-identifier path", () => {
+    // The two entry points must produce identical bytes. A server builds from
+    // raw identifiers; a verifier only ever sees the hashed forms. If these
+    // diverged, every verification would fail for a reason nobody could see.
+    const raw = fixture();
+    const hashed = {
+      transportMode: raw.transportMode,
+      appIdSha256: sha256(raw.appId),
+      instanceIdSha256: sha256(raw.instanceId),
+      bootSessionId: raw.bootSessionId,
+      tlsSpkiSha256: raw.tlsSpkiSha256,
+      signerSetSha256: raw.signerSetSha256,
+    };
+    expect(hex(canonicalBytesFromHashed(hashed))).toBe(hex(canonicalBytes(raw)));
+    expect(hex(manifestDigestFromHashed(hashed))).toBe(FIXED_VECTOR_DIGEST);
+  });
+
+  it("rejects a short pre-hashed identifier rather than padding it", () => {
+    const raw = fixture();
+    expect(() =>
+      canonicalBytesFromHashed({
+        transportMode: raw.transportMode,
+        appIdSha256: new Uint8Array(31),
+        instanceIdSha256: sha256(raw.instanceId),
+        bootSessionId: raw.bootSessionId,
+        tlsSpkiSha256: raw.tlsSpkiSha256,
+        signerSetSha256: raw.signerSetSha256,
+      }),
+    ).toThrow(/exactly 32 bytes/);
+  });
 });

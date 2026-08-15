@@ -85,20 +85,73 @@ function fixed32(value: Uint8Array, field: string): Uint8Array {
   return value;
 }
 
-/** The fixed-width canonical encoding. See the layout above. */
-export function canonicalBytes(input: TransportManifestInput): Uint8Array {
+/**
+ * A manifest whose variable-length identifiers are **already hashed**.
+ *
+ * A verifier only ever receives the hashed forms — the raw `app_id` and
+ * `instance_id` never cross the wire — so it cannot use
+ * {@link TransportManifestInput}, which would hash them a second time and
+ * silently never match.
+ */
+export interface TransportManifestHashed {
+  transportMode: TransportMode;
+  appIdSha256: Uint8Array;
+  instanceIdSha256: Uint8Array;
+  bootSessionId: Uint8Array;
+  tlsSpkiSha256: Uint8Array;
+  signerSetSha256: Uint8Array;
+  protocolVersion?: number;
+}
+
+/**
+ * The fixed-width canonical encoding, from pre-hashed identifiers.
+ *
+ * **This is the only place the field offsets are written.** Both
+ * {@link canonicalBytes} (server side, raw identifiers) and the verifier
+ * (client side, hashed identifiers) route through here, so the layout cannot
+ * drift between the two — the failure mode this codebase keeps rediscovering.
+ */
+export function canonicalBytesFromHashed(
+  input: TransportManifestHashed,
+): Uint8Array {
   const out = new Uint8Array(CANONICAL_LEN);
   const version = input.protocolVersion ?? PROTOCOL_VERSION;
   out[0] = (version >>> 8) & 0xff;
   out[1] = version & 0xff;
   out[2] = input.transportMode;
   out[3] = 0; // reserved
-  out.set(sha256(input.appId), 4);
-  out.set(sha256(input.instanceId), 36);
+  out.set(fixed32(input.appIdSha256, "appIdSha256"), 4);
+  out.set(fixed32(input.instanceIdSha256, "instanceIdSha256"), 36);
   out.set(fixed32(input.bootSessionId, "bootSessionId"), 68);
   out.set(fixed32(input.tlsSpkiSha256, "tlsSpkiSha256"), 100);
   out.set(fixed32(input.signerSetSha256, "signerSetSha256"), 132);
   return out;
+}
+
+/** The fixed-width canonical encoding. See the layout above. */
+export function canonicalBytes(input: TransportManifestInput): Uint8Array {
+  return canonicalBytesFromHashed({
+    transportMode: input.transportMode,
+    appIdSha256: sha256(input.appId),
+    instanceIdSha256: sha256(input.instanceId),
+    bootSessionId: input.bootSessionId,
+    tlsSpkiSha256: input.tlsSpkiSha256,
+    signerSetSha256: input.signerSetSha256,
+    ...(input.protocolVersion !== undefined
+      ? { protocolVersion: input.protocolVersion }
+      : {}),
+  });
+}
+
+/** {@link manifestDigest}, from pre-hashed identifiers. */
+export function manifestDigestFromHashed(
+  input: TransportManifestHashed,
+): Uint8Array {
+  const canonical = canonicalBytesFromHashed(input);
+  const buf = new Uint8Array(DOMAIN.length + canonical.length);
+  buf.set(DOMAIN, 0);
+  buf.set(canonical, DOMAIN.length);
+  return sha256(buf);
 }
 
 /** `SHA-256(DOMAIN ‖ canonicalBytes())` — the right half of `report_data`. */
