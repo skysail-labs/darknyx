@@ -1,9 +1,10 @@
 # Darknyx residual audit and release backlog
 
-**As of:** 2026-08-02
+**As of:** 2026-08-15
 
-**Validated against:** `main` @ `d69248b` (PR #90 merged), plus the 2026-08-01
-client-attestation pass and the 2026-08-02 un-audited-surface sweep
+**Validated against:** `main` @ `fc88040` (PR #140 merged), plus the 2026-08-15
+`audit_8` review of the browser trader, the switchable Pyth producer, and the
+note-use-tag lockstep. Prior index was validated against `d69248b`.
 
 This is the canonical entry point for work that remains after the Darknyx
 security, protocol, TEE, infrastructure, daemon, and performance reviews. It
@@ -46,6 +47,9 @@ ledgers are:
   for `CA-` findings and for the repository-wide un-audited surface inventory;
 - [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md)
   for `SW-` findings and the post-sweep coverage/carry-forward map;
+- [`audit_8/audit_8_findings.md`](audit_8/audit_8_findings.md)
+  for `R-` / `PF-28…` findings (browser trader, oracle source switch,
+  note-use-tag lockstep);
 - this document for the formerly orphaned `A-3` and `D-01…D-09`
   dispositions and for the cross-tracker residual view.
 
@@ -70,6 +74,19 @@ security backlog.
 
 ## Executive answer
 
+**`audit_8` (2026-08-15) is the current high-priority queue.** Four new High
+findings sit on the browser trader and the default Pyth producer: `R-01`
+(unsigned `/release.json` is the venue TCB; `T-03`'s re-entry condition has
+fired), `R-02` (push-oracle mode trusts RPC account bytes as a Pyth price),
+`R-03` (vault worker returns the wallet-wide `spendingKey` to page JS), and
+`R-04` (backup restore resets the HD order index — SW-10 on a new client).
+The note-use-tag cutover (PR #113) was re-read and is **clean**: one consume
+namespace, tag bound to a membership-proven commitment, consumed input
+commitments off Tx D.
+
+The previous executive answer, retained below as history of the `audit_7`
+close-out:
+
 **Three unresolved high-priority code-remediation findings remain: `SW-07`
 (Critical), `CA-01` (Critical), and `SW-01` (High).**
 
@@ -85,7 +102,8 @@ security backlog.
 > endpoint that leaks it into `failed_reason`.
 >
 > **Class C1 (unscoped decoders — provenance, not parsing) is therefore fully
-> remediated**: all four decoders now establish the origin of what they read.
+> remediated on the four `audit_7` decoders.** `audit_8` added a fifth member
+> (`R-02`, the push-oracle RPC account decoder) — same class, new site.
 > `SW-01`'s code half also shipped (`remediation/rpc-credential-containment`),
 > closing all three of the executive answer's findings. `SW-02` and `SW-03`
 > followed on `remediation/rpc-amplification-and-settle-bound`, which breaks the
@@ -126,8 +144,8 @@ does not hold, and "compromised TEE" means *running modified code* rather than
 *breaking TDX*. It is ~1.5 days, needs no ceremony, CVM, or vault redeploy.
 
 Four mainnet/external-use gates remain: the independent circuit audit, public
-Phase-2 ceremony, split-governance rehearsal, and the T-03 session-bound
-transport decision/implementation.
+Phase-2 ceremony, split-governance rehearsal, and T-03. **T-03's re-entry
+condition fired on 2026-08-15** when the browser trader landed (`R-01`).
 
 **D-04** — pausing trading when the deployed vault program is upgraded underneath
 a running CVM — was scoped and then **deferred on 2026-08-02** by owner decision;
@@ -221,9 +239,9 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | **SW-07 (Critical)**, SW-24 (Low, 3 sites), **CA-01 (Critical)** |
-| **Root cause** | A decoder accepts input whose *origin* was never established. `"Program data: "` is `sol_log_data` output that any program can emit; a dstack event payload is only authoritative when its `event_type` says so. |
-| **Sites** | `merkle/events.rs:181-250`; `sdk/utxo/leaf-index.ts:54-80` and `:88-110`; `sdk/fills/chain-history.ts:77-80`; `sdk/tee/verify-core.ts:196-203`. |
+| **Members** | **SW-07 (Critical)**, SW-24 (Low, 3 sites), **CA-01 (Critical)**, **R-02 (High)** |
+| **Root cause** | A decoder accepts input whose *origin* was never established. `"Program data: "` is `sol_log_data` output that any program can emit; a dstack event payload is only authoritative when its `event_type` says so. Push-oracle mode (`R-02`) is the same class on a new decoder: owner / discriminator / `VerificationLevel::Full` are RPC-supplied fields, not a guardian-signed VAA. |
+| **Sites** | `merkle/events.rs:181-250`; `sdk/utxo/leaf-index.ts:54-80` and `:88-110`; `sdk/fills/chain-history.ts:77-80`; `sdk/tee/verify-core.ts:196-203`; **`oracle/push.rs:99-178` (`R-02`)**. |
 | **Counter-example in repo** | `sdk/fills/chain-history.ts:208-218` scopes **instruction** data correctly (`keys[ci.programIdIndex].equals(programId)`) — one function away from a decoder that does not. |
 | **Shared fix** | Track `Program <id> invoke`/`success` nesting and accept only vault-frame events; pass the program id into every decoder. For CA-01, check `event_type == DSTACK_RUNTIME_EVENT_TYPE` before trusting a payload-derived digest. |
 | **Why together** | One property, one test harness, four decoders. `audit_7/fuzzing-plan.md` Phase 1 is written against exactly this property and should ship with the fix as its acceptance criterion. Closing it in Rust while leaving TypeScript is how a pattern survives its own remediation. |
@@ -233,7 +251,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | SW-11 (Medium), **SW-31 (Medium)** |
+| **Members** | SW-11 (Medium), **SW-31 (Medium)**, **R-07 (Medium)** |
 | **Root cause** | Message loss is detected at one boundary and silently dropped at another. The 1011 resync contract covers a *slow client*; a slow **server-side router** drops upstream of the per-account channel, so no signal is ever generated. The daemon then discards even the signals that do arrive. |
 | **Sites** | `api/{fills_router.rs:29-31, order_router.rs:148-150}`; `daemon.ts:454-476` (no `onResync`). |
 | **Cheapest fix (found in Batch U)** | Move the sequence origin upstream. `sdk/orders/trading-ws-client.ts:203-218` **already** enforces continuity and fires `onSequenceGap`; it fails only because `stream.rs:267-273` stamps `seq` at socket-send time. Carrying a per-channel origin counter makes the existing client detector work with **no client change at all**. |
@@ -277,7 +295,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances** |
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven more after the v11 / browser landing) |
 | **Root cause** | Module docs describe intended, retired, or planned behaviour as current: a promised eviction never built, a "keys never leave here" getter used at five call sites, `interval.rs` naming a function the enclave does not call, `canonical_payload_hash` called "shared" when it has four implementations, a revocation denylist described as in-memory after persistence landed. |
 | **Shared fix** | One doc-accuracy pass over module headers, done *after* the code fixes land so the two are corrected together rather than twice. |
 | **Why together** | This is the single most reliable finding-generator in the sweep — several code findings were located *because* a comment claimed something the code did not do. Treat the docs as an audit surface. |
@@ -326,7 +344,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | SW-16 (Low), SW-22 (Low), SW-23 (Info) |
+| **Members** | SW-16 (Low), SW-22 (Low), SW-23 (Info), **R-03 (High)**, **R-04 (High)** |
 | **Root cause** | Three independent softenings of client-side custody: no file-mode check and no passphrase floor on the keystore, a backup KDF 8× weaker than the keystore protecting the same seed, and TypeScript silently reducing out-of-range field elements where Rust deliberately rejects them. |
 | **Counter-examples in repo** | `sdk/keys/master-seed-backup.ts:45-51` already enforces a 12-character passphrase floor on export *and* import — the exact guard the keystore lacks. `darkpool-crypto/src/field.rs:23-40` implements strict in-field semantics **explicitly for cross-env parity**. |
 | **Shared fix** | One client-custody slice: mode check + passphrase floor + narrowed seed getter, backup to N=2¹⁷ behind a `version: 3` envelope, and range-checks in `poseidonHashBytesBE`/`bytesToBigIntBE` with the suite's **first negative parity test**. |
@@ -364,7 +382,7 @@ CVM run to verify, not merely a green local gate.
 | F-04 / C-07    | ZK + independent auditor         | Independent review of the final circuit source and artifacts has no unresolved Critical/High finding. Freeze the source only after all code remediation is complete.                                                                                                                        | **External gate — Open**                                                                                                                                     | Published report, exact source/artifact hashes, findings dispositions, and auditor sign-off.                                                                                                                                                                      |
 | N-18           | ZK + governance                  | Run a public Phase-2 ceremony for every production Groth16 zkey with at least five independent contributors, transcript and artifact hashes, final random beacon, reproducible verification, auditor artifact sign-off, and a post-ceremony CVM settlement.                                 | **External gate — Open**                                                                                                                                     | Ceremony transcript, contributor evidence, beacon, `snarkjs zkey verify`, regenerated VKs, auditor sign-off, and live settle evidence.                                                                                                                            |
 | N-19           | Governance + operations          | Rehearse split Squads control: cold 4-of-7 owns upgrade/root authority; operations 3-of-5 is `VaultConfig.admin`; every TEE-key rotation is independently attestation-verified.                                                                                                             | **External gate — In progress**                                                                                                                              | Rehearsal transaction set, authority/account inspection, attestation records, recovery/rotation drill, and signer runbook.                                                                                                                                        |
-| T-03           | TEE + SDK + infrastructure       | Bind the verified enclave identity to the client transport session and govern every component that can terminate or forward the connection. The original “plaintext operator gateway” premise was disproved; the residual is unpinned gateway measurement plus no quote-to-session binding. | **Deferred mainnet/external-user gate.** Re-enter before issuing access outside the operating team, accepting real value, or committing to a browser client. | One of the two costed designs in the TEE tracker: in-enclave RA-TLS for programmatic clients, or attested ingress with governed DNS/certificate handling for browsers; latency/RSS measurements, client negative tests, image pin, attestation, and CVM ceremony. |
+| T-03           | TEE + SDK + infrastructure       | Bind the verified enclave identity to the client transport session and govern every component that can terminate or forward the connection. The original “plaintext operator gateway” premise was disproved; the residual is unpinned gateway measurement plus no quote-to-session binding. | **Re-entry fired 2026-08-15 (`audit_8` / `R-01`).** A browser client shipped (`packages/browser-client` + `packages/trader-host`). Pins that make “Attested” mean anything live in an unsigned `/release.json` served by the same unmeasured origin that terminates TLS. Pull T-03 in now; do not treat the browser “Attested” label as launch-qualified until one of the two costed designs lands. | One of the two costed designs in the TEE tracker: in-enclave RA-TLS for programmatic clients, or attested ingress with governed DNS/certificate handling for browsers; latency/RSS measurements, client negative tests, image pin, attestation, and CVM ceremony. Bake or sign `release.json` (`R-01` options A/B) in the same slice so the hashed app cannot be retargeted independently. |
 | Release bundle | Release engineering + governance | Build without `devnet-admin`; prove destructive instructions absent; independently verify deployed program hash and all authorities; attach recovery drill, transaction-size/CU headroom, dependency audit, and final CVM evidence.                                                         | **External gate — Open until the production candidate exists.**                                                                                              | Reproducible production build and hashes, deployed-program inspection, authority inventory, closed trackers, recovery evidence, and signed release checklist.                                                                                                     |
 
 Source: [`audit_3/tracker.md`](audit_3/tracker.md)
@@ -412,12 +430,35 @@ and
 | SW-18 | Info | TEE attestation / daemon | Either attest `boot_session_id` or document that it is not attested. `api/attestation.rs:105-107` builds `report_data = nonce ‖ SHA-256(signer set)`; the boot session is not in it. `attestation.ts:189,248` nonetheless reads it from `/info` and returns it inside `AttestationResult` — the object stamped `dcapVerified: true`, whose every other field is DCAP-derived or quote-bound — and `daemon.ts:429` signs it into every order and cancel as the S-07 session scope. Ceiling is low: the TEE validates the session at intake, so a gateway serving a wrong value causes rejections (a DoS it could achieve by not answering) and cannot produce acceptance of a stale session. The structural point is that S-07's scoping rests on a field attestation does not cover. | **Documented 2026-08-02** — the finding's second option, because the first is unavailable: `report_data` is `nonce ‖ SHA-256(signer_set)` and FULL at 64 bytes, which is the same constraint that left T-03 deferred, so binding the session would change what `report_data` commits to. The field is now marked NOT ATTESTED at all three places a reader meets it — both `AttestationResult` declarations and the daemon's capture site — each stating the ceiling explicitly so the note is not over-read: the TEE validates the session at intake, so a gateway serving a wrong value causes rejections (a DoS it could achieve by not answering) and cannot cause a stale session to be accepted. The structural point stands recorded: S-07's scoping rests on a field attestation does not cover. |
 | SW-06 | Info | TEE API | `Reserves.merkle_root` is shard 0's root while `leaf_count` is the all-shard sum (`api/transparency.rs:144-155`). Correct in the code comment, misleading as adjacent public fields. Rename or return a per-shard array. | **Code complete 2026-08-02.** `Reserves` now returns a per-shard `shards[]` array (the lossless form), plus explicitly-named `shard0_merkle_root` and `total_leaf_count`. The old pair was individually documented but read as matched adjacent fields, so folding the count against that root gave a root the tree never had. OpenAPI updated; the surface test's assertions moved with it. |
 | DEP-01 | ~~Medium~~ **Closed** | TEE + supply chain                | Remove `ruint 1.18.0`, affected by `RUSTSEC-2026-0220`, from the production TEE graph. It is pulled through `dstack-sdk → alloy-primitives`; Darknyx does not call it directly, but it is compiled into `darknyx-tee`, and the fixed `>=1.20.0` release is available. Do not suppress the advisory.                                                     | **Closed 2026-08-01 (PR #93).** Lockfile-only `cargo update -p ruint --precise 1.20.0`; no manifest edit needed since `alloy-primitives 1.6.0` already admits it. `cargo audit` clean, `scripts/check-dependency-audits.sh` PASSED, `cargo test --workspace` 742 passed / 0 failed, `REQUIRE_CIRCUIT_ARTIFACTS=1` TEE tests 565 passed, clippy zero warnings. The added `ark-*` 0.6.0 lockfile entries are feature-gated optionals nothing enables (`cargo tree --workspace -e normal | grep -c 'ark-ff v0.6.0'` = 0) — no second arkworks is compiled. Image `tee-v3-hardening-80` @ `sha256:4e7266ddc9d85ff168e83e4f14a0117ff037e7db065a0d04e01c1e515105cb1c` pinned in compose; CVM boot/attestation spot-check on `nightly-test-cvm` (CPU, `gpus=0`, prod9) passed — dstack handshake OK (`compose_hash=2aea40e45262bd46681f076486142eb631a167ebebc02d661e0664f7cc536118`, `mrtd=f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`), all four shard signers re-derived identically (no rotation needed), and `cvm-attestation-e2e` **5/5 passed** (real Intel-TCB DCAP via `@phala/dcap-qvl`, report_data K-shard binding, RTMR3 event-log replay, on-chain `tee_pubkeys` cross-check). CVM stopped; billing halted. Devnet tree untouched — the check is stateless. |
-| D-04   | Medium (Deferred)                                         | TEE + operations                  | At boot, record the finalized upgradeable-loader `ProgramData` identity and last-upgrade slot for the configured vault program. Monitor it alongside `VaultConfig`/`MarketConfig`; any change pauses new place/modify/matching while cancel, reconciliation, and safe recovery remain available. Resume only after a compatible, attested CVM redeploy. | **Deferred 2026-08-02 — owner decision, not a technical blocker.** Design was scoped and costed (~1.5–2 days; one field on `GovernanceSnapshot`, a `ProgramData` parser, reuse of the existing venue-wide `TradingPauseReason::Governance`; no circuit, on-chain, wire, SDK, or daemon change). Shelved because the effort is not currently justified against the three open high-priority findings above it. **Re-entry condition:** pull this in once `SW-07`, `CA-01`, and `SW-01` are closed, or immediately if a mainnet deployment is scheduled — an upgradeable program under a running enclave is a mainnet-grade gap, not a devnet one. Two design notes to preserve: (1) 'resume only after an attested redeploy' needs no latch, because comparing live state against the BOOT snapshot can only re-match after a process restart; (2) `ProgramData` is a Solana loader struct, so the A-3 layout fixture does NOT cover it — pin its offsets against a captured devnet fixture or the class A-3 just closed comes straight back.                                                                                                                    |
+| D-04   | Medium (Deferred)                                         | TEE + operations                  | At boot, record the finalized upgradeable-loader `ProgramData` identity and last-upgrade slot for the configured vault program. Monitor it alongside `VaultConfig`/`MarketConfig`; any change pauses new place/modify/matching while cancel, reconciliation, and safe recovery remain available. Resume only after a compatible, attested CVM redeploy. | **Re-entry condition met 2026-08-15** (`SW-07`, `CA-01`, `SW-01` are closed; a browser client is also on the tree). Still deferred only if the owner re-shelves it against `R-01…R-04`. Design was scoped and costed (~1.5–2 days; one field on `GovernanceSnapshot`, a `ProgramData` parser, reuse of the existing venue-wide `TradingPauseReason::Governance`; no circuit, on-chain, wire, SDK, or daemon change). Two design notes to preserve: (1) 'resume only after an attested redeploy' needs no latch, because comparing live state against the BOOT snapshot can only re-match after a process restart; (2) `ProgramData` is a Solana loader struct, so the A-3 layout fixture does NOT cover it — pin its offsets against a captured devnet fixture or the class A-3 just closed comes straight back.                                                                                                                    |
 | A-3    | ~~Low~~ **Closed**                                           | Vault + TEE + SDK build assurance | Generate one account-layout fixture from the actual vault structs, or compile a shared cross-crate layout assertion, so TEE/SDK offsets and account lengths cannot agree with their own literals while disagreeing with `VaultConfig`/`MerkleTree`. Keep strict length/discriminator rejection.                                                         | **Closed 2026-08-01 (PR #94).** `programs/vault/account-layout.json` is generated FROM the structs (`offset_of!` for the zero-copy accounts; probe-verified Borsh accumulation for `MarketConfig`/`BatchValidityMarker`, which are not `repr(C)`) and committed. All five hand-parsed accounts are covered — VaultConfig, MerkleTree, NoteLock, MarketConfig, BatchValidityMarker — across both consumers: the five TEE parsers (`solana_rpc/vault_config.rs`, `solana_rpc/market_config.rs`, `merkle/sync.rs`, `settle/marker_sweep.rs`, `settle/lock_sweep.rs`) and a new SDK parity test. **No existing drift** — every current literal already matched, so this locks correct values rather than fixing wrong ones, and no migration was needed. Mutation-tested: inserting a field into `VaultConfig` fails the vault fixture test, and after regenerating the fixture WITHOUT touching consumers (the realistic sloppy path) the TEE fails (1256 vs 1264) and the SDK fails (1258 vs 1266, 1264 vs 1272). Wired into the vault-zk CI job, whose target list is explicit. 748 workspace tests, 273 SDK tests, clippy zero warnings.                               |
 | D-02   | Medium                                         | TEE settlement + operations       | Export the remaining marker runway at first Tx D and at every retry/terminal outcome. Alert before the conservative local deadline. Do not raise the current local `+250`-slot margin or split pages until degraded-RPC data shows expiry pressure.                                                                                                     | **Measurement-gated.** Close after a sustained settlement run records runway p50/p95/p99/min, expiry-related failures, retry age, RPC 429/5xx, and ambiguous outcomes; tune only if the evidence breaches the settlement SLO.                                                                                                                    |
 | D-03   | Medium                                         | Vault + SDK + TEE capacity        | Measure roots produced per shard under representative deposit/settle traffic against the 64-root on-chain ring and representative browser/mobile proving latency. Choose among a larger ring/account migration, bounded auto-reprove, or documented admission limits only after calculating the measured expiry budget.                                 | **Measurement-gated.** Close when the slow-client proving SLO retains a documented safety margin at admitted per-shard load, with a stale-root recovery test. Any ring-size change requires account-layout migration, SBF/devnet/CVM evidence, and a clean rollout.                                                                              |
 
 | DOC-01 | ~~Info~~ **Closed** | Vault + governance docs | Record what the market kill switch promises. `tee_forced_settle_batched` reads no `MarketConfig`, so a market disabled through `update_market_config` continues settling its already-verified in-flight batches for the remainder of the marker window (~300 slots); `verify_match_batch` checks `market.enabled`, so no *new* batch is admitted. This is almost certainly the correct behaviour — cancelling in flight would strand collateral already locked on-chain — but it is currently an unwritten semantic, recorded only in a prior audit's carry-forward list. | **Closed 2026-08-01 (PR #95).** Documented as [`docs/governance.md`](../docs/governance.md) §7, "What the market kill switch actually promises", with a pointer from the §0 TL;DR and a cross-reference from the `verify_match_batch` handler notes in `CRYPTOGRAPHY.md`. Each claim was re-derived from code rather than transcribed: `tee_forced_settle_batched` reads no `MarketConfig`; `verify_match_batch.rs:111` enforces `require!(market.enabled, VaultError::MarketDisabled)`; the in-flight bound is `MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS = 300` slots; and the TEE adds a third layer the row did not mention — `permits_trading` compares the whole `MarketConfig`, so the governance monitor pauses trading within one `GOVERNANCE_REFRESH_INTERVAL` (60 s). The section states why the asymmetry is correct (an already-verified batch holds `NoteLock`s and a marker on-chain; aborting would strand that collateral until expiry rather than protect it) and names signer rotation as the only lever that actually stops a settle mid-flight. No code change. |
+| R-01 | **High** | Browser + trader-host + T-03 | Bake or sign `/release.json` so compose hash, vault program id, artifact key, oracle mode, and origin cannot be retargeted independently of the SRI-pinned JS. Close T-03 for browsers (attested ingress or RA-TLS binding the TLS SPKI) before any external user or real value. | **Open — `audit_8`.** Evidence: [`audit_8/audit_8_findings.md`](audit_8/audit_8_findings.md). Re-entry of T-03. |
+| R-02 | **High** | TEE oracle | Do not let `pyth-solana-push-v1` open a trading gate on a value-bearing boot. Force router when real mints / `governed_market` are set, or re-verify a VAA before `apply_verified_batch`. Owner/discriminator/`Full` are RPC-supplied and are not a signature. | **Open — `audit_8`.** Same provenance class as SW-07, new decoder. |
+| R-03 | **High** | Browser custody | Never `postMessage` `spendingKey` / `noteSecret` / `ownerCommitmentBlinding` to the page. Prove inside the vault worker or a worker it owns. | **Open — `audit_8`.** |
+| R-04 | **High** | Browser recovery | On restore / inventory wipe, HD-gap-scan historical `order_id`s (or persist the high-water in the vault ciphertext) and refuse implicit zero. `backfillHistoryFromChain` already exists and is unused. | **Open — `audit_8`.** SW-10 class, new client. |
+| R-05 | Medium | Trader-host | `fetchBounded` must `redirect: "error"` (or treat 3xx as failure). Counter-example already in `live-proxy.ts:533`. | **Open — `audit_8`.** |
+| R-06 | Medium | Daemon + compose | Default compose `ORACLE_MODE` to router. Daemon must `fetchSystemStatus` after attestation and refuse start unless `oracle_mode === expected`. Browser already pins. | **Open — `audit_8`.** |
+| R-07 | Medium | Browser recovery | Empty scan must not move `sinceSlot`. Re-check consume/lock on all local notes, not only the delta. | **Open — `audit_8`.** C2 / SW-11 class. |
+| R-08 | Medium | Trader-host | Bind CVM-account provision to WebAuthn or a wallet signature. Origin is not identity. TEE has no account deletion. | **Open — `audit_8`.** |
+| R-09 | Medium | Browser wallet | Put `solana:devnet` \| `solana:mainnet` in the hashed release pins and pass it to `ExternalWalletController`. Default is hardcoded `solana:devnet`. | **Open — `audit_8`.** |
+| R-10 | Low | Compose | Default pair `mainnet` + push is internally illegal; the escape is `development`, which is how R-02 becomes the easy deploy. Same change as R-06. | **Open — `audit_8`.** |
+| R-11 | Info | Docs | Comment-vs-code cluster on merge / leaf headers / lock_note / recover.ts / valid_input / intent-authorizer. Do the C6 pass after the code fixes. | **Open — `audit_8`.** |
+| R-12 | Low | Public docs | GitBook instruments + system-status omit `source` / `oracle_mode` and call every venue "authenticated". Copy `docs/tee-architecture.md` §6. | **Open — `audit_8`.** |
+| R-13 | Info | Loadgen helper | `read-pyth-push-price.mjs` freshness is 90 s; TEE push is 420 s. | **Open — `audit_8`.** |
+| R-14 | Low | SDK attestation | Browser `getJson` (`packages/sdk/src/tee/attestation.ts:111-129`) has no abort and no body cap. Copy the daemon's SW-17 fix. | **Open — `audit_8`.** |
+| PF-28 | Perf-Nit | Browser inventory | Full snapshot clone + AES-GCM rewrite on every `#mutate`. | **Open — `audit_8`.** Schedule with a daemon-style bounds slice if it binds. |
+| PF-29 | Perf-Nit | Browser recovery | `makeConnectionScan` walks the vault's entire signature history into the worker. Bound with R-07. | **Open — `audit_8`.** |
+| R-15 | Medium | Trader-host RPC | Start-cookie + 600 rpm + 50-wide `getMultipleAccounts` spends the operator Helius key. SW-02 class, new instance. Weighted costs + key caps. | **Open — `audit_8`.** |
+| R-16 | Medium | Trader-host + TEE | Proxied `/attestation` (cost 10.0) can exhaust the venue-wide public bucket. Cap per session. | **Open — `audit_8`.** |
+| R-17 | Medium | Trader-host | `normalizeCommitments` recurses unbounded on a 2 MiB JSON body. Depth-cap or only rewrite `params[configIndex]`. | **Open — `audit_8`.** |
+| R-18 | Medium | Trader-host image | Dockerfile sets `DARKNYX_TRADER_LISTEN_HOST=0.0.0.0`; library default is loopback. SW-19-class. | **Open — `audit_8`.** |
+| R-19 | Low | Trader-host | `Authorization` is forwarded to the RPC upstream. Forward only on venue URLs. | **Open — `audit_8`.** |
+| R-20 | Low | Trader-host | HTTP proxy `admit()` is cookie-only; session and WS already check Origin. Copy the neighbour. | **Open — `audit_8`.** |
+| PF-30 | Perf-Nit | Browser recovery | Sequential `getAccountInfo` per recovered note. Batch via the host's existing `getMultipleAccounts` allowlist. | **Open — `audit_8`.** |
 
 The code anchors are
 `crates/darknyx-tee/src/main.rs::spawn_governance_monitor`,
@@ -535,6 +576,18 @@ SW-11.
 
 ## Recommended execution order
 
+0. **`audit_8` first, before any external browser user or real value.**
+   Fix **R-01** (bake or sign `/release.json`) in the same slice as pulling
+   **T-03** off the deferred list. Fix **R-03** (stop `spendingKey` leaving
+   the worker) and **R-04** (restore must HD-gap-scan) before calling the
+   browser non-custodial. Fix **R-02** / **R-06** / **R-10** together: default
+   compose to router, pin `oracle_mode` in the daemon, and do not let push
+   open a trading gate on a value-bearing boot. **R-05** is an hour
+   (`redirect: "error"` in `fetchBounded`). **R-07** + **PF-29** are the
+   browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in
+   the same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
+   each about an hour). **R-11** / **R-12** / **R-13** last, after the
+   code moves.
 1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
    in-band recovery. Ship the fail-closed half (divergence stops tree reads and
    pauses trading) even if the scope fix lands separately.
@@ -603,8 +656,9 @@ SW-11.
     browser-proving evidence during the next representative capacity run.
 14. Clear the two bookkeeping items — **DOC-01** (kill-switch semantics) and
     **CA-04** (populate `EXPECTED_COMPOSE_HASH` with the release bundle).
-15. Make the **T-03** client/transport product decision before any external
-    account or real-value launch.
+15. **T-03 re-entry has fired** (`R-01`). Do not treat this as a future
+    product decision — a browser client is on the tree. Close it with R-01
+    before any external account or real-value launch.
 16. Complete the external circuit audit, freeze artifacts, run **N-18**, then
     rehearse **N-19** and the production release bundle.
 17. Pull GPU, transaction-v1, higher concurrency, and cross-CVM work only when
