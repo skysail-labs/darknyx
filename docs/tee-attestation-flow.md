@@ -3,6 +3,30 @@
 > End-to-end attestation deep-dive for the in-CVM matching/settlement
 > layer. Read after `docs/tee-architecture.md` (the in-TEE design).
 >
+> **⚠️ Note (2026-08-15) — the transport half of this document is a TARGET
+> DESIGN, not as-built.** Everything about `dstack-ingress`, a custom
+> `api.darknyx.example.com` domain, TLS terminating inside our CVM, and
+> `report_data[32..64] = SHA-256(served TLS cert pubkey)` describes a deployment
+> that **does not exist**. What actually runs:
+>
+> - TLS terminates at the **dstack gateway** (an attested TDX CVM, but not ours),
+>   reached at `<app-id>-<port>.dstack-pha-<node>.phala.network`. There is no
+>   dstack-ingress in our compose and no custom domain.
+> - `report_data` is `nonce ‖ SHA-256(signer set)`
+>   (`crates/darknyx-tee/src/api/attestation.rs:105-107`). **No certificate is
+>   bound into it**, so step A of §"verify TLS-cert binding" cannot be performed
+>   as written.
+> - The browser trader does not connect to the enclave at all; an ordinary
+>   `trader-host` process relays its traffic and sees order intent in plaintext.
+>
+> Closing that gap is tracked as **T-03P / T-03B** —
+> [`transport-integrity-remediation-plan.md`](transport-integrity-remediation-plan.md)
+> for the architecture and PR plan,
+> [`transport-integrity-plan.md`](transport-integrity-plan.md) for the evidence.
+> The attestation-chain material below (KMS, RTMR replay, signer-set binding,
+> `/transparency`) is accurate; treat only the transport/ingress sections as
+> aspirational until that work lands.
+>
 > **Note (post tree-sharding):** this doc predates K-shard tree-sharding and
 > says `vault_config.tee_pubkey` (singular) throughout. The on-chain field is
 > now `vault_config.tee_pubkeys: [Pubkey; 16]` (K = `num_trees` live entries,

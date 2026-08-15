@@ -411,11 +411,43 @@ In brief:
 
 1. **[OPEN] Live passthrough confirmation** (§5.1). Source is unambiguous; the
    live probe needs one CVM window. Fold it into an already-planned run.
-2. **[OPEN] Does our Phala Cloud deployment use on-chain KMS governance, and do
-   we control our app's compose allowlist?** §5.2's conclusion depends on it. The
-   `dstack-cloud/` docs describing on-chain registration may cover a different
-   product line (GCP/Nitro) than our `phala-cloud` deployment. **Cheap to answer
-   and it gates the B1/B2 decision.**
+2. ~~Does our Phala Cloud deployment use on-chain KMS governance?~~
+   **ANSWERED 2026-08-15: NO. [MEASURED]** `phala cvms get` reports, for **both**
+   our CVMs (`nightly-test-cvm` and `darknyx-image-builder-73`):
+
+   ```
+   kms_type                     = phala
+   kms_info.dstack_app_address  = null
+   kms_info.chain_id            = null
+   kms_info.dstack_kms_address  = ""
+   kms_info.rpc_endpoint        = https://kms.dstack-pha-prod7.phala.network
+   ```
+
+   There is **no `DstackApp` contract for our app**. The on-chain path exists in
+   dstack (`kms/auth-eth/contracts/DstackApp.sol:25,131,167-180` — `onlyOwner`
+   `addComposeHash`, enforced in `isAppAllowed`) but our deployment does not use
+   it. `phala-cloud/cvm/replicating-cvms.mdx:39` states the distinction plainly:
+   *"Onchain KMS adds gates because the DstackApp contract — **not Phala Cloud** —
+   decides which compose hashes and devices are allowed to run under the app's
+   identity."*
+
+   **Therefore §5.3's "governed key release" remedy is NOT available to us today**:
+   our compose allowlist is Phala's, so ingress key persistence would be gated by
+   the same third party whose opacity disqualified the gateway path. §5.3's
+   ranking table stands as a general result, but on the current deployment the
+   middle row collapses into the bottom one.
+
+   **Consequences.** B1 is NO-GO as deployed. Two ways forward: **B2**, which
+   depends on no one else's allowlist; or **migrate to Onchain KMS** (supported —
+   `/phala-cloud/key-management/deploying-with-onchain-kms`) and then reconsider
+   B1, at the cost of a real migration and a chain dependency in the boot path.
+   Note this also strengthens the T-03P choice: **RA-TLS with a boot-random key
+   depends on KMS governance not at all.**
+
+   *Pre-existing property worth recording, not introduced by this work:* our CVM's
+   persistent state (journal, Merkle mirror) is already encrypted under a key
+   released by Phala's KMS on Phala's allowlist. That bounds what any
+   "governed persistence" argument can claim for Darknyx today.
 3. **[OPEN] Exact dstack-ingress source.** Image digest without reviewable source
    is not sufficient for a mainnet TCB addition.
 4. **[OPEN] Full DCAP verification of the gateway quote** was not performed; only
