@@ -13,6 +13,16 @@ import {
 } from "./order-lifecycle.js";
 import type { ExpectedMeasurements } from "./attestation.js";
 
+/**
+ * Which transport the daemon requires (T-03P).
+ *
+ * `ra-tls` means the daemon verifies, on the socket carrying each request,
+ * that it is talking to the attested enclave. `gateway-terminated` is the
+ * legacy path where the dstack gateway terminates TLS and no such binding
+ * exists.
+ */
+export type DaemonTransportMode = "ra-tls" | "gateway-terminated";
+
 export interface DaemonConfig {
   /** CVM gateway origin, e.g. `https://<app>-8080.dstack-pha-prod5.phala.network`. */
   gatewayUrl: string;
@@ -20,6 +30,18 @@ export interface DaemonConfig {
   gatewayWsUrl: string;
   /** Bearer token from `POST /auth/token`. */
   token: string;
+  /**
+   * Transport the daemon requires (T-03P). Defaults to `gateway-terminated`
+   * so an upgrade cannot silently change how an existing deployment connects;
+   * turning on RA-TLS is a deliberate act.
+   */
+  transportMode: DaemonTransportMode;
+  /**
+   * SHA-256 over the on-chain `VaultConfig.tee_pubkeys` in shard order, hex.
+   * Required when `transportMode` is `ra-tls`: without it a verified transport
+   * proves the channel but not that the enclave holds the governed settle keys.
+   */
+  expectSignerSetSha256?: string;
   /** Solana RPC (Helius) for settlement reconciliation / leaf-index reads. */
   rpcUrl: string;
   /** Local sqlite path for note + managed-order persistence. */
@@ -89,7 +111,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   if (!rpcUrl) throw new Error("DARKNYX_DAEMON_RPC_URL is required");
 
   const keystorePath = env.DARKNYX_DAEMON_KEYSTORE ?? "./darknyx-keystore.json";
-  return {
+  const cfg: DaemonConfig = {
     gatewayUrl,
     gatewayWsUrl: env.DARKNYX_DAEMON_GATEWAY_WS_URL ?? httpToWs(gatewayUrl),
     token,
@@ -110,6 +132,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
         DEFAULT_THRESHOLDS.mergeThreshold,
       ),
     },
+    transportMode: parseTransportMode(env),
+    expectSignerSetSha256: env.DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256,
     attestation: parseExpected(env),
     attestationStrict: env.DARKNYX_DAEMON_ATTEST_STRICT !== "0",
     attestOnchainCheck: env.DARKNYX_DAEMON_ATTEST_ONCHAIN_CHECK !== "0",
@@ -117,6 +141,50 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     programId: env.DARKNYX_DAEMON_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
     payerKeypairPath: env.DARKNYX_DAEMON_PAYER_KEYPAIR,
   };
+  assertTransportConfigCoherent(cfg);
+  return cfg;
+}
+
+/**
+ * RA-TLS without its governance pins would verify a channel to *an* enclave
+ * and prove nothing about which one, so the daemon refuses to start rather
+ * than run in a state that reads as secure and is not.
+ */
+export function assertTransportConfigCoherent(cfg: DaemonConfig): void {
+  if (cfg.transportMode !== "ra-tls") return;
+  const missing: string[] = [];
+  if (!cfg.attestation?.composeHash) {
+    missing.push("DARKNYX_DAEMON_EXPECT_COMPOSE_HASH");
+  }
+  if (!cfg.expectSignerSetSha256) {
+    missing.push("DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `DARKNYX_DAEMON_TRANSPORT_MODE=ra-tls requires ${missing.join(" and ")}. ` +
+        "Without these a verified transport proves a channel to some enclave, " +
+        "not that it is the governed one. Refusing to start.",
+    );
+  }
+}
+
+/**
+ * Parse `DARKNYX_DAEMON_TRANSPORT_MODE`.
+ *
+ * Unset or empty is the legacy default. A set but unrecognised value is a hard
+ * error rather than a fallback — a typo like `ratls` must not leave an operator
+ * on the weaker transport believing they enabled the stronger one. Mirrors the
+ * same rule on the TEE side (`DARKNYX_TEE_TRANSPORT_MODE`).
+ */
+function parseTransportMode(env: NodeJS.ProcessEnv): DaemonTransportMode {
+  const raw = env.DARKNYX_DAEMON_TRANSPORT_MODE?.trim();
+  if (!raw) return "gateway-terminated";
+  if (raw === "ra-tls" || raw === "gateway-terminated") return raw;
+  throw new Error(
+    `DARKNYX_DAEMON_TRANSPORT_MODE=${JSON.stringify(raw)} is not recognised; ` +
+      'expected "ra-tls" or "gateway-terminated". Refusing to start rather ' +
+      "than silently falling back to the legacy transport.",
+  );
 }
 
 /** Pinned TEE measurements from the environment (undefined if none set). */
