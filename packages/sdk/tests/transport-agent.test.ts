@@ -263,3 +263,13 @@ describe("verifyTransportOnSocket — returns what it verified", () => {
     expect(Object.keys(mod)).not.toContain("lastVerifiedBootSession");
   });
 });
+
+describe("browser safety — the WebSocket gate", () => {
+  it("the verified WS factory is not reachable from the package index", async () => {
+    // Same rule as the HTTP adapter: it imports node:crypto and node:tls types
+    // and must not enter a browser bundle graph.
+    const index = await import("../src/index.js");
+    expect(Object.keys(index)).not.toContain("createVerifiedWebSocketFactory");
+    expect(Object.keys(index)).not.toContain("upgradeSocketSpki");
+  });
+});
