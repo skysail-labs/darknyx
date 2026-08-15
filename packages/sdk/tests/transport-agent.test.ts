@@ -252,3 +252,14 @@ describe("browser safety", () => {
     });
   });
 });
+
+describe("verifyTransportOnSocket — returns what it verified", () => {
+  it("exposes the verified manifest rather than publishing it elsewhere", async () => {
+    // A regression guard for a design smell caught in 2d: the boot session was
+    // briefly smuggled from the verifier to its caller through mutable module
+    // state. Two sources of truth for "what did we verify" is how they drift.
+    const mod = await import("../src/tee/transport-agent.node.js");
+    expect(Object.keys(mod)).not.toContain("_recordVerifiedBootSession");
+    expect(Object.keys(mod)).not.toContain("lastVerifiedBootSession");
+  });
+});

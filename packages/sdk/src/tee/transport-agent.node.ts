@@ -255,16 +255,30 @@ function fail(kind: TransportFailure, detail: string): never {
   );
 }
 
+/** What a successful verification established. */
+export interface VerifiedSocket {
+  socket: TLSSocket;
+  /**
+   * The manifest the quote committed to. Returned rather than published
+   * through module state so a caller can read the verified boot session
+   * without a second source of truth.
+   */
+  manifest: ObservedManifest;
+  /** SPKI of the certificate on `socket`, as attested. */
+  spkiSha256: Uint8Array;
+}
+
 /**
  * Verify the socket that will carry subsequent requests.
  *
- * Returns the verified socket. Throws {@link TransportVerificationError} and
- * destroys the connection on any failure, so a caller that catches and retries
- * cannot end up reusing a socket that failed a check.
+ * Returns the verified socket and what the quote committed to. Throws
+ * {@link TransportVerificationError} and destroys the connection on any
+ * failure, so a caller that catches and retries cannot end up reusing a socket
+ * that failed a check.
  */
 export async function verifyTransportOnSocket(
   opts: VerifiedTransportOptions,
-): Promise<TLSSocket> {
+): Promise<VerifiedSocket> {
   const { agent, deps } = opts;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const nonce = deps.randomNonce();
@@ -329,11 +343,12 @@ export async function verifyTransportOnSocket(
     fail("malformed", "event log exceeds the entry limit");
   }
 
+  const observed = parseObservedManifest(body);
   const failure = verifyTransportAttestation({
     report,
     eventLog,
     nonce,
-    manifest: parseObservedManifest(body),
+    manifest: observed,
     observedSpkiSha256,
     expectedComposeHash: opts.expectedComposeHash,
     expectedSignerSetSha256: opts.expectedSignerSetSha256,
@@ -352,7 +367,7 @@ export async function verifyTransportOnSocket(
   }
 
   agent.markVerified(socket);
-  return socket;
+  return { socket, manifest: observed, spkiSha256: observedSpkiSha256 };
 }
 
 /**
@@ -366,7 +381,7 @@ export function createVerifiedFetch(
   opts: VerifiedTransportOptions,
 ): typeof fetch {
   const { agent } = opts;
-  let inflight: Promise<TLSSocket> | undefined;
+  let inflight: Promise<VerifiedSocket> | undefined;
 
   const ensureVerified = async (): Promise<void> => {
     if (agent.isVerified(agent.currentSocket())) return;
