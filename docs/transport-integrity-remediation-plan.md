@@ -385,6 +385,19 @@ Do not send Darknyx credentials or orders during this probe. If the CVM must be
 started solely for this test, record billing start/end and stop the CPU CVM as
 soon as evidence is captured.
 
+**Probe attempt 2026-08-16 — INCONCLUSIVE. Do not repeat it this way.**
+Against the *existing* plaintext image on a running prod9 CVM: the `s` suffix
+demonstrably changes gateway behaviour (`-8080.` presents the gateway wildcard
+certificate and completes; `-8080s.` presents **no certificate**). That is
+necessary for passthrough but not sufficient — it is equally consistent with
+the node rejecting `s` routes. The control killed the inference: a live port
+(`8080s`) and a dead one (`9999s`) behaved *identically* (connect, 0 bytes,
+close at ~5.7 s), which is what a gateway that never reached a backend looks
+like. CVM logs show nothing, because a malformed ClientHello never becomes an
+HTTP request. **The question cannot be answered without a TLS-speaking backend,
+i.e. the RA-TLS image itself — so it must be the FIRST step of the Phase 3
+window, not a separate probe.** Billing 19:10:56Z–19:14:38Z.
+
 **Passthrough GO:** the actual public connection presents and proves possession
 of the backend's boot-random certificate and carries both HTTP and WebSocket.
 
