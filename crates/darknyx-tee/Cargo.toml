@@ -164,6 +164,13 @@ rand          = { workspace = true }
 # (see docs/transport-integrity-plan.md §4).
 rcgen         = { workspace = true }
 
+# TLS termination for the RA-TLS listener. rustls is configured TLS 1.3-only
+# with the `ring` provider; see src/transport/server.rs for why the cipher
+# configuration is narrowed rather than left at defaults.
+rustls        = { workspace = true }
+tokio-rustls  = { workspace = true }
+axum-server   = { workspace = true }
+
 # ─── ICICLE GPU/CPU Groth16 prover (the `icicle` feature) ───────────
 # Vendored under third_party/icicle-snark (next to the rapidsnark submodule;
 # includes its nested icicle/ C++ tree). Optional — only the `icicle` feature

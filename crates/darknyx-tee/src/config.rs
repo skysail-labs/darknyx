@@ -51,6 +51,57 @@ struct MarketSpecJson {
     oracle_feed_id: String,
 }
 
+/// Which transport `darknyx-tee` serves (T-03P).
+///
+/// Deliberately an explicit enum rather than a bool: a client reading `/info`
+/// must be able to tell the legacy gateway-terminated path apart *by name*,
+/// not infer it from a missing field. Production release assembly rejects
+/// `GatewayTerminated` once the RA-TLS cutover lands (Phase 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportModeConfig {
+    /// TLS terminated by the dstack gateway. The legacy path.
+    GatewayTerminated,
+    /// TLS terminated inside this enclave with a boot-random, quote-bound key.
+    RaTls,
+}
+
+impl TransportModeConfig {
+    /// Wire/env spelling. Matches the `transport_mode` value on
+    /// `/transport-attestation`, so one vocabulary covers config and API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GatewayTerminated => "gateway-terminated",
+            Self::RaTls => "ra-tls",
+        }
+    }
+
+    /// Parse `DARKNYX_TEE_TRANSPORT_MODE`.
+    ///
+    /// Unset or empty means the legacy default. A **set but unrecognised**
+    /// value is a hard error rather than a silent fallback: a typo like
+    /// `ratls` must not quietly leave the operator on the weaker transport
+    /// believing they enabled the stronger one.
+    pub fn from_env() -> anyhow::Result<Self> {
+        let raw = match std::env::var("DARKNYX_TEE_TRANSPORT_MODE") {
+            Err(_) => return Ok(Self::GatewayTerminated),
+            Ok(v) => v,
+        };
+        let v = raw.trim();
+        if v.is_empty() {
+            return Ok(Self::GatewayTerminated);
+        }
+        match v {
+            "gateway-terminated" => Ok(Self::GatewayTerminated),
+            "ra-tls" => Ok(Self::RaTls),
+            other => anyhow::bail!(
+                "DARKNYX_TEE_TRANSPORT_MODE={other:?} is not recognised; expected \
+                 \"ra-tls\" or \"gateway-terminated\". Refusing to start rather than \
+                 silently falling back to the legacy transport."
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Phase 1 stub: fields are read once the api/settle modules wire in.
 pub struct Config {
@@ -61,6 +112,23 @@ pub struct Config {
     /// HTTP listen address. Defaults to 0.0.0.0:8080 inside the
     /// CVM; dstack-ingress fronts this on :443.
     pub http_bind: String,
+    /// Which transport this instance serves (T-03P).
+    ///
+    /// `ra-tls` terminates TLS inside the enclave with a boot-random key whose
+    /// SPKI is quote-bound, reached through the dstack gateway's `s`-suffix
+    /// passthrough route. `gateway-terminated` is the legacy path where the
+    /// dstack gateway terminates TLS — retained for migration and local
+    /// development, and explicitly reported on `/info` so a client can tell
+    /// which one it is talking to rather than inferring it from absence.
+    ///
+    /// Defaults to `gateway-terminated`: turning RA-TLS on is a deployment
+    /// decision, and defaulting to the stronger mode would break every existing
+    /// devnet deployment on upgrade.
+    pub transport_mode: TransportModeConfig,
+    /// TLS listen address used when `transport_mode` is `ra-tls`. Separate from
+    /// `http_bind` so the plaintext listener can stay bound to the CVM-internal
+    /// interface during migration while TLS faces the gateway.
+    pub tls_bind: String,
 
     /// Solana RPC URL (Helius or equivalent). Passed in via an
     /// encrypted env var; the plaintext never touches a Phala
@@ -593,6 +661,8 @@ impl Config {
         Ok(Self {
             markets: markets.clone(),
             http_bind: env_string_or("DARKNYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
+            transport_mode: TransportModeConfig::from_env()?,
+            tls_bind: env_string_or("DARKNYX_TEE_TLS_BIND", "0.0.0.0:8443"),
             // Empty (compose `${VAR}` with no value) → the default, NOT a
             // literal empty URL that breaks every RPC call.
             solana_rpc_url: env_string_or(
@@ -795,5 +865,77 @@ mod tests {
         assert!(validate_hermes_endpoint("http://pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://key@pyth.example/hermes").is_err());
         assert!(validate_hermes_endpoint("https://pyth.example/hermes?key=secret").is_err());
+    }
+}
+
+#[cfg(test)]
+mod transport_mode_tests {
+    use super::TransportModeConfig;
+
+    /// `DARKNYX_TEE_TRANSPORT_MODE` is process-global, so these run under one
+    /// lock rather than as separate `#[test]`s that would race each other.
+    #[test]
+    fn transport_mode_parses_and_fails_closed_on_a_typo() {
+        const KEY: &str = "DARKNYX_TEE_TRANSPORT_MODE";
+        let restore = std::env::var(KEY).ok();
+
+        std::env::remove_var(KEY);
+        assert_eq!(
+            TransportModeConfig::from_env().unwrap(),
+            TransportModeConfig::GatewayTerminated,
+            "unset must mean the legacy default"
+        );
+
+        std::env::set_var(KEY, "");
+        assert_eq!(
+            TransportModeConfig::from_env().unwrap(),
+            TransportModeConfig::GatewayTerminated,
+            "empty must mean the legacy default"
+        );
+
+        std::env::set_var(KEY, "ra-tls");
+        assert_eq!(
+            TransportModeConfig::from_env().unwrap(),
+            TransportModeConfig::RaTls
+        );
+
+        std::env::set_var(KEY, "  ra-tls  ");
+        assert_eq!(
+            TransportModeConfig::from_env().unwrap(),
+            TransportModeConfig::RaTls,
+            "surrounding whitespace must not defeat the match"
+        );
+
+        std::env::set_var(KEY, "gateway-terminated");
+        assert_eq!(
+            TransportModeConfig::from_env().unwrap(),
+            TransportModeConfig::GatewayTerminated
+        );
+
+        // THE case. A typo must not silently leave the operator on the weaker
+        // transport believing they enabled the stronger one.
+        for typo in ["ratls", "RA-TLS", "ra_tls", "true", "1", "tls"] {
+            std::env::set_var(KEY, typo);
+            assert!(
+                TransportModeConfig::from_env().is_err(),
+                "{typo:?} was silently accepted instead of failing closed"
+            );
+        }
+
+        match restore {
+            Some(v) => std::env::set_var(KEY, v),
+            None => std::env::remove_var(KEY),
+        }
+    }
+
+    #[test]
+    fn wire_spellings_match_the_api_vocabulary() {
+        // These strings appear in /info and in /transport-attestation's
+        // manifest. One vocabulary across config and API.
+        assert_eq!(TransportModeConfig::RaTls.as_str(), "ra-tls");
+        assert_eq!(
+            TransportModeConfig::GatewayTerminated.as_str(),
+            "gateway-terminated"
+        );
     }
 }

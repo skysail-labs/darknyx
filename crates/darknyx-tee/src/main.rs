@@ -569,6 +569,45 @@ async fn main() -> Result<()> {
         .with_settle_state(settle_state)
         .with_settle_enabled(settle_enabled);
 
+    // ─── T-03P: the boot-scoped RA-TLS identity ──────────────────────
+    //
+    // Generated once, here, and shared between the TLS server config and
+    // `ApiState`. That sharing is the contract: `/transport-attestation`
+    // attests THIS SPKI and the listener serves THIS certificate, so
+    // generating them separately would attest a key nobody presents.
+    //
+    // Fail-closed: if RA-TLS is the selected mode and the identity cannot be
+    // produced, startup terminates. Falling back to plaintext would silently
+    // downgrade an operator who explicitly asked for the stronger transport —
+    // exactly the class of silent downgrade this whole workstream is closing.
+    let transport_identity = match cfg.transport_mode {
+        darknyx_tee::config::TransportModeConfig::RaTls => {
+            let identity = darknyx_tee::transport::TransportIdentity::generate().context(
+                "RA-TLS transport selected but the boot identity could not be generated; \
+                 refusing to start rather than falling back to plaintext",
+            )?;
+            // Public fingerprint only — never the key, never the DER.
+            tracing::info!(
+                spki_sha256 = %identity.fingerprint(),
+                "T-03P: RA-TLS boot identity generated (boot-scoped, never persisted)"
+            );
+            Some(Arc::new(identity))
+        }
+        darknyx_tee::config::TransportModeConfig::GatewayTerminated => {
+            tracing::warn!(
+                "T-03P: transport_mode=gateway-terminated — TLS terminates at the dstack \
+                 gateway and /transport-attestation is unavailable. This is the legacy \
+                 path; set DARKNYX_TEE_TRANSPORT_MODE=ra-tls to enable in-enclave TLS."
+            );
+            None
+        }
+    };
+
+    let api_state = match transport_identity.as_ref() {
+        Some(identity) => api_state.with_transport_identity(identity.clone()),
+        None => api_state,
+    };
+
     let api_state = Arc::new(api_state);
 
     // U-09: a real-settlement CVM re-reads both governance accounts at finalized
@@ -756,13 +795,37 @@ async fn main() -> Result<()> {
         .http_bind
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid DARKNYX_TEE_HTTP_BIND={:?}: {e}", cfg.http_bind))?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(
-        local_addr = %listener.local_addr().unwrap_or(addr),
-        "darknyx-tee HTTP listening — /health /info /attestation /auth/token /orders"
-    );
-
-    axum::serve(listener, app).await?;
+    match transport_identity {
+        // ── RA-TLS: terminate TLS in-enclave (T-03P) ──────────────────
+        Some(identity) => {
+            let tls_addr: SocketAddr = cfg.tls_bind.parse().map_err(|e| {
+                anyhow::anyhow!("invalid DARKNYX_TEE_TLS_BIND={:?}: {e}", cfg.tls_bind)
+            })?;
+            let server_config = darknyx_tee::transport::build_server_config(&identity).context(
+                "RA-TLS transport selected but the TLS server config could not be built; \
+                 refusing to start rather than falling back to plaintext",
+            )?;
+            tracing::info!(
+                tls_addr = %tls_addr,
+                spki_sha256 = %identity.fingerprint(),
+                "darknyx-tee RA-TLS listening (TLS 1.3 only) — verify the served \
+                 certificate against GET /transport-attestation"
+            );
+            let acceptor = axum_server::tls_rustls::RustlsConfig::from_config(server_config);
+            axum_server::bind_rustls(tls_addr, acceptor)
+                .serve(app.into_make_service())
+                .await?;
+        }
+        // ── Legacy: plaintext behind the gateway's TLS termination ────
+        None => {
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            tracing::info!(
+                local_addr = %listener.local_addr().unwrap_or(addr),
+                "darknyx-tee HTTP listening — /health /info /attestation /auth/token /orders"
+            );
+            axum::serve(listener, app).await?;
+        }
+    }
 
     tracing::info!("darknyx-tee exiting");
     Ok(())

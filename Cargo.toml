@@ -107,12 +107,21 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 tokio-tungstenite = "0.21"
-rustls = "0.23"
+# `default-features = false` is load-bearing: rustls 0.23's defaults pull
+# aws-lc-rs, which drags aws-lc-sys and a native C build into the TEE image for
+# no benefit — reqwest already resolves `ring`. Pinning to ring keeps one
+# crypto provider in the graph instead of two.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Self-signed X.509 for the in-enclave RA-TLS identity (T-03P). The certificate
 # is generated fresh from a CSPRNG at every process boot and never persisted, so
 # this is a boot-scoped identity, not a PKI. Same crate and major version dstack
 # itself uses for RA-TLS certificates (`dstack/ra-tls`).
 rcgen = { version = "0.13.2", default-features = false, features = ["pem", "crypto", "ring"] }
+# TLS listener for the in-enclave RA-TLS path (T-03P). `ring` rather than
+# aws-lc-rs because reqwest already resolves ring, so this adds a provider we
+# are building anyway rather than a second one.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
