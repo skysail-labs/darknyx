@@ -18,6 +18,9 @@
  */
 
 import { resolve } from "node:path";
+
+import type { NodeWebSocketLike } from "../../src/tee/transport-ws.node.js";
+import type { SendableWebSocketLike } from "../../src/orders/trading-ws-client.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -155,6 +158,13 @@ export const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
  * error rather than producing its own.
  */
 let verifiedFetch: Promise<typeof fetch> | undefined;
+/**
+ * SPKI established by the transport verification, needed to gate the
+ * WebSocket upgrade. Kept beside the fetch because both must describe the SAME
+ * boot session: a socket verified under a previous boot is exactly what
+ * `boot_session_mismatch` exists to reject.
+ */
+let verifiedSpki: Uint8Array | undefined;
 
 function ratlsRequested(): boolean {
   return process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
@@ -184,29 +194,92 @@ async function getTransport(): Promise<typeof fetch> {
     const { randomBytes } = await import("node:crypto");
     const dcap = createDcapQuoteVerifier({});
     const agent = new TransportAgent();
+    const { verifyTransportOnSocket } = await import(
+      "../../src/tee/transport-agent.node.js"
+    );
+    const verifyDeps = {
+      verifyQuote: (quoteHex: string) =>
+        dcap(
+          Uint8Array.from(
+            quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+          ),
+        ),
+      parseEventLog,
+      randomNonce: () => new Uint8Array(randomBytes(32)),
+    };
+    const expectedSignerSet = Uint8Array.from(
+      signers.match(/../g)!.map((b) => parseInt(b, 16)),
+    );
+    // Verify once up front so the SPKI is available to the WebSocket gate.
+    // Without this the stream would open unchecked while HTTP was verified —
+    // the partial mode that is worse than no protection, because the operator
+    // and the logs would both say "verified".
+    const established = await verifyTransportOnSocket({
+      baseUrl: gateway,
+      agent,
+      deps: verifyDeps,
+      expectedComposeHash: compose,
+      expectedSignerSetSha256: expectedSignerSet,
+    });
+    verifiedSpki = established.spkiSha256;
     return createVerifiedFetch({
       baseUrl: gateway,
       agent,
-      deps: {
-        verifyQuote: (quoteHex: string) =>
-          dcap(
-            Uint8Array.from(
-              quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
-            ),
-          ),
-        parseEventLog,
-        randomNonce: () => new Uint8Array(randomBytes(32)),
-      },
+      deps: verifyDeps,
       expectedComposeHash: compose,
-      expectedSignerSetSha256: Uint8Array.from(
-        signers.match(/../g)!.map((b) => parseInt(b, 16)),
-      ),
+      expectedSignerSetSha256: expectedSignerSet,
     });
   })().catch((e: unknown) => {
     verifiedFetch = undefined; // do not cache a failure
+    verifiedSpki = undefined;
     throw e;
   });
   return verifiedFetch;
+}
+
+/**
+ * Open a WebSocket to the CVM, gated the same way `gwFetch` is.
+ *
+ * Under `ra-tls` this checks the upgrade socket's certificate against the SPKI
+ * established during transport verification, and discards queued frames if it
+ * does not match — so no credential is ever written to an unverified stream.
+ * Under the legacy path it is a plain `ws` connection, unchanged.
+ *
+ * The returned object exposes the `ws` event API (`on`) that the cvm suites
+ * already use, so converting a test is a one-line substitution rather than a
+ * rewrite of its event handling.
+ */
+export async function gwWebSocket(url: string): Promise<SendableWebSocketLike> {
+  const { default: WS } = await import("ws");
+  if (!ratlsRequested()) return new WS(url) as unknown as SendableWebSocketLike;
+
+  // Ensure verification has run; this is what populates `verifiedSpki`.
+  await getTransport();
+  if (!verifiedSpki) {
+    throw new Error(
+      "ra-tls requested but no verified SPKI is available — refusing to open " +
+        "an ungated stream",
+    );
+  }
+  const { createVerifiedWebSocketFactory } = await import(
+    "../../src/tee/transport-ws.node.js"
+  );
+  return createVerifiedWebSocketFactory({
+    verifiedSpkiSha256: verifiedSpki,
+    // `rejectUnauthorized: false` is safe ONLY because the SPKI gate below is
+    // what actually authenticates the peer: Node's CA check cannot validate an
+    // enclave-generated boot-scoped certificate, and the quote-bound SPKI is a
+    // strictly stronger check than any CA chain would be. It is not a
+    // "make TLS pass" shortcut — with the gate removed, this line alone would
+    // accept any certificate from anyone.
+    createSocket: (u: string) =>
+      new WS(u, { rejectUnauthorized: false }) as unknown as NodeWebSocketLike,
+    onViolation: (e) => {
+      // Loud: a rejected upgrade under ra-tls is the exact event this whole
+      // remediation exists to make visible.
+      console.error(`[cvm-harness] WebSocket transport violation: ${e.kind}`);
+    },
+  })(url);
 }
 
 /** fetch with retries — the dstack gateway can transiently close the socket

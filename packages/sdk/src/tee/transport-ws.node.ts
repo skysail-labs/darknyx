@@ -121,9 +121,25 @@ export function createVerifiedWebSocketFactory(
     const errorCbs: Array<(ev: unknown) => void> = [];
 
     let openFired = false;
+    /**
+     * Whether the UNDERLYING socket has actually opened.
+     *
+     * `ws` emits `upgrade` before `open`, and at upgrade time the socket is
+     * still CONNECTING. Verification completing is therefore NOT sufficient to
+     * start writing: `inner.send()` throws "WebSocket is not open: readyState
+     * 0". Both conditions must hold before anything is delivered or flushed.
+     */
+    let innerOpened = false;
+    /** Retained so a listener attached after the fact still learns of it. */
+    let rejection: TransportVerificationError | undefined;
+    /** Deliver `open` and flush queued frames once BOTH conditions hold. */
     const surfaceOpen = () => {
-      if (openFired || state !== "verified") return;
+      if (openFired || state !== "verified" || !innerOpened) return;
       openFired = true;
+      // Flush here rather than at verification time — the socket may not have
+      // been writable then.
+      for (const frame of pending) inner.send(frame);
+      pending = [];
       for (const cb of openCbs) cb();
     };
 
@@ -137,6 +153,7 @@ export function createVerifiedWebSocketFactory(
         `websocket transport rejected: ${detail}`,
         "spki_mismatch",
       );
+      rejection = err;
       opts.onViolation?.(err);
       for (const cb of errorCbs) cb(err);
       try {
@@ -158,8 +175,6 @@ export function createVerifiedWebSocketFactory(
         return;
       }
       state = "verified";
-      for (const frame of pending) inner.send(frame);
-      pending = [];
       surfaceOpen();
     });
 
@@ -171,6 +186,7 @@ export function createVerifiedWebSocketFactory(
         reject("connection completed without a TLS upgrade to inspect");
         return;
       }
+      innerOpened = true;
       surfaceOpen();
     });
 
@@ -193,16 +209,40 @@ export function createVerifiedWebSocketFactory(
 
     return {
       addEventListener(type: string, cb: unknown): void {
-        if (type === "open") openCbs.push(cb as () => void);
-        else if (type === "message")
+        // Terminal states are REPLAYED to listeners that arrive late.
+        //
+        // Every consumer of this factory is async — it awaits transport
+        // verification, then builds the socket, then returns it — so the
+        // caller cannot attach handlers until at least a microtask after the
+        // connection was created. On a warm path the upgrade completes first,
+        // and a fire-and-forget implementation loses the event permanently:
+        // the caller then waits forever for an `open` that already happened,
+        // which is what produced a live "no pong within 15s" against a CVM
+        // whose transport was in fact perfectly healthy.
+        //
+        // Replaying `open` is safe precisely because `openFired` is only ever
+        // set by `surfaceOpen`, which refuses to run unless the certificate
+        // check has already passed. A rejected connection therefore replays
+        // its error and never its open.
+        if (type === "open") {
+          openCbs.push(cb as () => void);
+          if (openFired) (cb as () => void)();
+        } else if (type === "message")
           messageCbs.push(cb as (ev: { data: unknown }) => void);
         else if (type === "close")
           closeCbs.push(cb as (ev: { code: number; reason?: string }) => void);
-        else if (type === "error") errorCbs.push(cb as (ev: unknown) => void);
+        else if (type === "error") {
+          errorCbs.push(cb as (ev: unknown) => void);
+          if (rejection) (cb as (ev: unknown) => void)(rejection);
+        }
       },
       send(data: string): void {
         if (state === "rejected") return; // never send on a failed connection
-        if (state === "pending") {
+        // Queue until the check has passed AND the socket is writable. Writing
+        // at "verified but still CONNECTING" throws inside the caller's own
+        // open handler, which is how a healthy transport produced a hung
+        // login against a live CVM.
+        if (state === "pending" || !innerOpened) {
           pending.push(data);
           return;
         }
