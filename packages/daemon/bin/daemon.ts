@@ -32,6 +32,10 @@ import {
 } from "@darknyx/sdk";
 
 import { loadConfig } from "../src/config.js";
+import { buildDaemonTransport } from "../src/transport.js";
+import { parseEventLog } from "@darknyx/sdk";
+import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
+import WebSocket from "ws";
 import { DaemonStore } from "../src/store.js";
 import { loadKeystore } from "../src/keystore.js";
 import { DurableOrderSequence } from "../src/order-sequence.js";
@@ -270,6 +274,52 @@ async function main(): Promise<void> {
   // (local dstack-simulator, whose stub quotes can't be DCAP-verified by design).
   // Otherwise we wire the real Intel-TCB DCAP verifier so strict mode can enforce.
   const skipAttest = process.env.DARKNYX_DAEMON_SKIP_ATTEST === "1";
+
+  // ── T-03P: select the transport BEFORE constructing the daemon ────────
+  //
+  // Under `ra-tls` every CVM request and the /v1/stream session run over a
+  // connection whose certificate was verified against a quote-bound manifest.
+  // Under the legacy mode this is the ordinary global fetch and no WebSocket
+  // gate, exactly as before.
+  //
+  // buildDaemonTransport throws rather than degrading: a misconfigured ra-tls
+  // deployment must not start and trade over a channel its operator believes
+  // is verified. It also refuses to return a transport that verifies HTTP
+  // while leaving the stream ungated.
+  const transport = await buildDaemonTransport(config, {
+    verifierDeps: {
+      // The SDK's DCAP verifier takes quote BYTES; the transport contract
+      // carries the wire form, which is hex. Adapt explicitly rather than
+      // loosening either type — a silent mis-decode here would hand the
+      // verifier the wrong bytes and fail in a way that reads as a bad quote.
+      verifyQuote: (quoteHex: string) => {
+        const dcap = createDcapQuoteVerifier({ pccsUrl: config.pccsUrl });
+        const bytes = Uint8Array.from(
+          quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+        );
+        return dcap(bytes);
+      },
+      parseEventLog,
+      randomNonce: () => new Uint8Array(randomBytes(32)),
+    },
+    // `ws` is the daemon's WebSocket implementation; the gate wraps it so no
+    // frame is sent before the upgrade socket has been checked.
+    createWebSocket: (url: string) =>
+      new WebSocket(url) as unknown as NodeWebSocketLike,
+  });
+  if (transport.mode === "ra-tls") {
+    console.log(
+      "[daemon] transport: ra-tls — every CVM request and the stream are bound " +
+        "to a quote-verified certificate on their own socket",
+    );
+  } else {
+    console.warn(
+      "[daemon] transport: gateway-terminated (legacy). TLS terminates at the " +
+        "dstack gateway and nothing binds the quote to this connection. Set " +
+        "DARKNYX_DAEMON_TRANSPORT_MODE=ra-tls to enable in-enclave TLS.",
+    );
+  }
+
   const daemon = new Daemon({
     config,
     keystore,
@@ -284,6 +334,18 @@ async function main(): Promise<void> {
     quoteVerifier: skipAttest
       ? undefined
       : createDcapQuoteVerifier({ pccsUrl: config.pccsUrl }),
+    // Every CVM request the daemon makes now goes through the selected
+    // transport. Under ra-tls that means nothing is sent until the socket
+    // carrying it has been verified.
+    fetchImpl: transport.fetch,
+    ...(transport.webSocketFactory
+      ? {
+          sendableWebSocketFactory:
+            transport.webSocketFactory as ConstructorParameters<
+              typeof Daemon
+            >[0]["sendableWebSocketFactory"],
+        }
+      : {}),
   });
   await daemon.start();
   const att = daemon.getAttestation();
