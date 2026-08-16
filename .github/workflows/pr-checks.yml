@@ -230,6 +230,13 @@ jobs:
       - name: RA-TLS cutover guard (transport mode vs published ports)
         run: bash scripts/check-ratls-cutover.sh
 
+      # The cvm-* suites need a live CVM, so they self-skip in this workflow —
+      # and a SKIPPED suite reports green. That let two of them become
+      # structurally unrunnable for weeks without a red build. This reads their
+      # source instead, which needs no CVM and no secrets.
+      - name: cvm-* suites reach the CVM through the verified transport
+        run: bash scripts/check-cvm-suites-use-transport.sh
+
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
