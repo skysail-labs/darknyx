@@ -694,6 +694,15 @@ jobs:
       - name: npm ci (root, with workspaces)
         run: npm ci
 
+      - name: Build the SDK that trader-host verifies the enclave with
+        # T-03P: trader-host is the process that sees every browser order in
+        # plaintext, so it must be able to verify the enclave transport itself.
+        # That code lives in @darknyx/sdk, which makes this a real dependency
+        # rather than a build-order convenience.
+        run: |
+          npm -w @darknyx/client-core run build
+          npm -w @darknyx/sdk run build
+
       - name: Build and typecheck the production release host
         run: |
           npm -w @darknyx/trader-host run build
