@@ -116,6 +116,29 @@ export function canonicalBytesFromHashed(
 ): Uint8Array {
   const out = new Uint8Array(CANONICAL_LEN);
   const version = input.protocolVersion ?? PROTOCOL_VERSION;
+  // Range-check before packing. The masks below TRUNCATE silently, so without
+  // this two different inputs can produce identical canonical bytes —
+  // `protocolVersion: 65536` packs to [0,0] exactly like 0, and
+  // `transportMode: 257` packs to 1 exactly like RaTls. These bytes are the
+  // preimage of the digest carried in the quote's `report_data`, so a
+  // collision here is a collision in what the attestation commits to.
+  //
+  // The Rust producer cannot express these values (u16 + a two-variant enum);
+  // this mirror is the loose end, so it validates rather than assuming callers
+  // are well-behaved.
+  if (!Number.isInteger(version) || version < 0 || version > 0xffff) {
+    throw new RangeError(
+      `protocolVersion must be an integer in 0..=65535, got ${String(version)}`,
+    );
+  }
+  if (
+    input.transportMode !== TransportMode.RaTls &&
+    input.transportMode !== TransportMode.GatewayTerminated
+  ) {
+    throw new RangeError(
+      `transportMode must be a known TransportMode, got ${String(input.transportMode)}`,
+    );
+  }
   out[0] = (version >>> 8) & 0xff;
   out[1] = version & 0xff;
   out[2] = input.transportMode;

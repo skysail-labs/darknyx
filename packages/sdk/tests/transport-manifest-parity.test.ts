@@ -171,3 +171,63 @@ describe("transport manifest — pre-hashed path", () => {
     ).toThrow(/exactly 32 bytes/);
   });
 });
+
+describe("canonical encoding rejects values it would silently truncate", () => {
+  // The packing masks in `canonicalBytesFromHashed` are lossy, so without a
+  // range check two different inputs produce identical canonical bytes. These
+  // bytes are the preimage of the digest the quote's `report_data` commits to,
+  // which makes a collision here a collision in the attestation itself.
+  //
+  // The Rust producer cannot express these values — `protocol_version` is a
+  // u16 and the mode is a two-variant enum — so this TS mirror is the only
+  // place the values arrive unchecked.
+  const base: TransportManifestInput = {
+    transportMode: TransportMode.RaTls,
+    appId: new Uint8Array(32).fill(1),
+    instanceId: new Uint8Array(32).fill(2),
+    bootSessionId: new Uint8Array(32).fill(3),
+    tlsSpkiSha256: new Uint8Array(32).fill(4),
+    signerSetSha256: new Uint8Array(32).fill(5),
+  };
+
+  it("rejects a protocolVersion that does not fit in u16", () => {
+    // 65536 would pack to [0, 0] — byte-identical to version 0.
+    expect(() => canonicalBytes({ ...base, protocolVersion: 65536 })).toThrow(
+      /0\.\.=65535/,
+    );
+  });
+
+  it("rejects a negative or fractional protocolVersion", () => {
+    expect(() => canonicalBytes({ ...base, protocolVersion: -1 })).toThrow(
+      RangeError,
+    );
+    expect(() => canonicalBytes({ ...base, protocolVersion: 1.5 })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("rejects a transportMode outside the known enum", () => {
+    // 257 would pack to 1 — byte-identical to RaTls.
+    expect(() =>
+      canonicalBytes({ ...base, transportMode: 257 as TransportMode }),
+    ).toThrow(/known TransportMode/);
+  });
+
+  it("still accepts both real modes and the whole valid version range", () => {
+    // Control. A validation that rejected something legitimate would be a
+    // worse bug than the one it fixes.
+    expect(canonicalBytes(base)).toHaveLength(CANONICAL_LEN);
+    expect(
+      canonicalBytes({
+        ...base,
+        transportMode: TransportMode.GatewayTerminated,
+      }),
+    ).toHaveLength(CANONICAL_LEN);
+    expect(canonicalBytes({ ...base, protocolVersion: 0 })).toHaveLength(
+      CANONICAL_LEN,
+    );
+    expect(canonicalBytes({ ...base, protocolVersion: 65535 })).toHaveLength(
+      CANONICAL_LEN,
+    );
+  });
+});
