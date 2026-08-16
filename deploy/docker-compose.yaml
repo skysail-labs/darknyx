@@ -106,7 +106,7 @@ services:
       # quote-bound key and is reached through the gateway's `s`-suffix
       # passthrough route (`<app-id>-8443s.<base-domain>`). Clients verify the
       # served certificate against GET /transport-attestation.
-      DARKNYX_TEE_TRANSPORT_MODE: ${DARKNYX_TEE_TRANSPORT_MODE:-gateway-terminated}
+      DARKNYX_TEE_TRANSPORT_MODE: ${DARKNYX_TEE_TRANSPORT_MODE:-ra-tls}
       DARKNYX_TEE_TLS_BIND: "0.0.0.0:8443"
 
       # Real Pyth feed for the matcher's oracle. Exactly one versioned source
@@ -215,10 +215,17 @@ services:
       DARKNYX_TEE_NUM_TREES: ${DARKNYX_TEE_NUM_TREES:-1}
 
     ports:
-      # 8080: darknyx-tee's internal HTTP. Under `ra-tls` this is the legacy
-      # plaintext path and must not be publicly routable once the cutover
-      # completes (Phase 3 asserts the public plaintext route is closed).
-      - "8080:8080"
+      # 8080 is NOT published. The enclave still BINDS it (the listener runs
+      # under both modes, which is what makes a rollback possible), but it is
+      # no longer publicly routable: after the T-03P cutover the only way in is
+      # the RA-TLS route below, where the client can bind the served
+      # certificate to a TDX quote. Publishing it again alongside
+      # `ra-tls` re-opens an unauthenticated path that bypasses that check,
+      # and `scripts/check-ratls-cutover.sh` fails the build if you do.
+      #
+      # To ROLL BACK: restore this publication AND set the transport default
+      # back to `gateway-terminated`. The guard requires the pair to move
+      # together, in either direction.
       # 8443: the RA-TLS listener. Reached as `<app-id>-8443s.<base-domain>`
       # so the gateway passes the TLS stream through instead of terminating
       # it — the `s` suffix is what selects passthrough.

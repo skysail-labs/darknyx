@@ -80,10 +80,15 @@ const READY =
   existsSync(CONFIG_PATH);
 const maybe = READY ? describe : describe.skip;
 
-// Bootstrap creds are HARDCODED in docker-compose.yaml (runbook gotcha 3).
-const API_KEY = "darknyx-test-api-key";
-const API_SECRET = "darknyx-test-secret";
-const PASSPHRASE = "darknyx-test-passphrase";
+// Bootstrap creds default to the ones HARDCODED in docker-compose.yaml
+// (runbook gotcha 3), but a real deploy injects fresh ones through the
+// encrypted env — a production tier REFUSES the public test credentials. Take
+// them from the environment when present so this harness works against a
+// properly-provisioned CVM instead of only against compose defaults.
+const API_KEY = process.env.DARKNYX_TEE_API_KEY ?? "darknyx-test-api-key";
+const API_SECRET = process.env.DARKNYX_TEE_API_SECRET ?? "darknyx-test-secret";
+const PASSPHRASE =
+  process.env.DARKNYX_TEE_PASSPHRASE ?? "darknyx-test-passphrase";
 const FEE_RATE_BPS = 30n;
 const SYMBOL = "SOL-USDC";
 
@@ -110,6 +115,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
   let quoteMint: PublicKey;
   let token: string;
   let daemon: Daemon;
+  let transport: Awaited<ReturnType<typeof buildDaemonTransport>>;
 
   beforeAll(async () => {
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
@@ -118,8 +124,49 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     payer = loadKp(".devnet/keypairs/cvm-buyer-payer.json");
     quoteMint = new PublicKey(cfg.quoteMint.pubkey);
 
+    // T-03P: build the transport BEFORE the first request. Every CVM-bound
+    // call in this file must go through it — an `/auth/token` on plain fetch
+    // would hand a bearer credential to an unverified peer, which is the exact
+    // exchange the verified transport exists to protect.
+    const ratls = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+    transport = await buildDaemonTransport(
+      {
+        gatewayUrl: GATEWAY,
+        transportMode: ratls
+          ? ("ra-tls" as const)
+          : ("gateway-terminated" as const),
+        ...(ratls
+          ? {
+              expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+              attestation: {
+                composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+              },
+            }
+          : {}),
+      } as DaemonConfig,
+      {
+        verifierDeps: {
+          verifyQuote: (q: string) =>
+            createDcapQuoteVerifier({})(
+              Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+            ),
+          parseEventLog,
+          randomNonce: () => new Uint8Array(randomBytes(32)),
+        },
+        ...(ratls
+          ? {
+              createWebSocket: (u: string) =>
+                new WebSocket(u, {
+                  rejectUnauthorized: false,
+                }) as unknown as NodeWebSocketLike,
+            }
+          : {}),
+      },
+    );
+    console.log(`[smoke] transport: ${transport.mode}`);
+
     // auth → bearer
-    const r = await fetch(`${GATEWAY}/auth/token`, {
+    const r = await transport.fetch(`${GATEWAY}/auth/token`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -138,11 +185,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       deriveAccountIdentity(seed, payer.publicKey.toBytes()),
     );
 
-    // T-03P: the transport this run exercises. Defaults to the legacy path so
-    // the smoke keeps working unchanged; set DARKNYX_CVM_TRANSPORT=ra-tls (with
-    // the governance pins) to drive the verified transport instead, which is
-    // what the cutover window runs.
-    const ratls = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+    // `ratls` is established above, where the transport is built.
     const config: DaemonConfig = {
       gatewayUrl: GATEWAY,
       transportMode: ratls ? ("ra-tls" as const) : ("gateway-terminated" as const),
@@ -171,29 +214,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     };
     const programId = new PublicKey(cfg.vaultProgramId);
 
-    // Build the transport exactly as bin/daemon.ts does, so this harness
-    // exercises the SAME wiring production uses rather than a parallel one.
-    // Under the legacy mode this yields the ordinary fetch and no WS gate.
-    const transport = await buildDaemonTransport(config, {
-      verifierDeps: {
-        verifyQuote: (quoteHex: string) =>
-          createDcapQuoteVerifier({})(
-            Uint8Array.from(
-              quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
-            ),
-          ),
-        parseEventLog,
-        randomNonce: () => new Uint8Array(randomBytes(32)),
-      },
-      ...(ratls
-        ? {
-            createWebSocket: (url: string) =>
-              new WebSocket(url) as unknown as NodeWebSocketLike,
-          }
-        : {}),
-    });
-    console.log(`[smoke] transport: ${transport.mode}`);
-
+    // The transport was built above, before the first credentialed request.
     daemon = new Daemon({
       config,
       fetchImpl: transport.fetch,
@@ -277,7 +298,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
         const u = new URL("/tree/inclusion", GATEWAY);
         u.searchParams.set("commitment", dep.commitment);
         u.searchParams.set("tree_id", "0");
-        const r = await fetch(u.toString(), {
+        const r = await transport.fetch(u.toString(), {
           headers: { authorization: `Bearer ${token}` },
         });
         if (r.status === 200) break;
@@ -307,7 +328,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     );
 
     // confirm it's resting in the CVM book (200) rather than gone.
-    const got = await fetch(`${GATEWAY}/orders/${orderId}`, {
+    const got = await transport.fetch(`${GATEWAY}/orders/${orderId}`, {
       headers: { authorization: `Bearer ${token}` },
     });
     console.log(`  · GET /orders/${orderId.slice(0, 8)} -> ${got.status}`);
