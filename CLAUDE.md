@@ -347,26 +347,44 @@ them one binary at a time — measured 266 s → 156 s on 8 cores. It does **not
 run doctests. The workspace has none, and `scripts/check-no-doctests.sh` fails
 the gate if one is ever added, so the omission cannot become a silent gap.
 
-**CI runs nextest too, as of 2026-08-16** (`pr-checks.yml`, all four Rust jobs:
-`rust`, `vault-zk`, `vault-litesvm`, `tee`). An earlier revision of this file
-said CI deliberately stayed on `cargo test` because the advantage comes from
-spare cores; that reasoning applied to the whole workspace, but the dominant
-job is `tee` at ~460 s with ~290 tests, many of which load a proving key, and
-process-per-test parallelism helps there even on a small runner. Two things
-came with the switch and must stay:
+**CI runs nextest for THREE of the four Rust jobs, as of 2026-08-16** —
+`rust`, `vault-zk`, `vault-litesvm` — and deliberately **not** for `tee`.
+Measured like-for-like on one branch (this matters: an earlier attempt compared
+against a different branch's warmer cargo cache and reached the opposite,
+wrong conclusion):
 
-* `scripts/check-no-doctests.sh` is now wired into the `rust` job. Before the
-  switch it lived only in the local gate, so CI had **no** protection against a
-  silently-skipped doctest.
-* `--nocapture` was **dropped** from the `vault-zk` and `tee` jobs. nextest's
-  equivalent (`--no-capture`) forces `test-threads=1`, which would erase the
-  parallelism entirely. It loses nothing: nextest prints the captured output of
-  FAILING tests by default (verified, not assumed).
+| job | `cargo test` | `cargo nextest` | |
+|---|---|---|---|
+| rust | 198 s | **161 s** | nextest |
+| vault-zk | 171 s | **146 s** | nextest |
+| vault-litesvm | 149 s | **138 s** | nextest |
+| **tee** | **374 s** | 521 s (+39%) | **cargo test** |
+
+`tee` is ~290 tests in essentially one binary, many loading a Groth16 proving
+key. nextest runs every test in its OWN PROCESS, so that per-test fixed cost is
+paid ~290 times instead of being amortised across threads inside one process;
+cross-binary parallelism, nextest's whole advantage, has nothing to work with.
+**`tee` also sets the workflow's wall clock** — the other three run in parallel
+and finish well inside it — so speeding them up does not shorten a CI run,
+while slowing `tee` down lengthens it directly. If you want a shorter Rust CI,
+the lever is `tee`: a bigger runner, or splitting that binary.
+
+Two things came with the switch and must stay:
+
+* `scripts/check-no-doctests.sh` is now wired into the `rust` job. nextest does
+  not run doctests, and before this the script lived only in the local gate, so
+  CI had **no** protection against a silently-skipped doctest.
+* `--nocapture` was dropped from the nextest jobs. nextest's `--no-capture`
+  forces `test-threads=1`, which would erase the parallelism. It loses nothing:
+  nextest prints FAILING tests' captured output by default (verified with a
+  deliberately failing test, not taken from the docs).
 
 nextest is pinned by version **and SHA-256** in CI rather than installed from
 `https://get.nexte.st/latest`, which would be an unpinned supply-chain hop into
 a job holding the cargo cache — the same reasoning that has every action in that
-file pinned by commit.
+file pinned by commit. `.config/nextest.toml` carries a `ci` profile that drops
+the default profile's `threads-required = 4`; that reservation is a memory bound
+tuned for an 8-core laptop and exceeds a small runner's entire pool.
 
 Install locally with `cargo install cargo-nextest --locked`. `.config/nextest.toml`
 does **not** set `test-threads` (its default is already logical-CPU count, and

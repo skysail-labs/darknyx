@@ -285,7 +285,7 @@ jobs:
           cargo nextest --version
 
       - name: darkpool-crypto unit tests
-        run: cargo test -p darkpool-crypto --lib
+        run: cargo nextest run --profile ci -p darkpool-crypto --lib
 
       # REQUIRED companion to the nextest switch, not a nicety.
       #
@@ -304,7 +304,7 @@ jobs:
       - name: vault lib unit tests
         # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
         # byte-stability) and `test_id` (program-ID sanity).
-        run: cargo test -p vault --lib
+        run: cargo nextest run --profile ci -p vault --lib
 
       # SDK parity tests shell out to these helper binaries via spawnSync.
       # They cross-validate TS Poseidon / note-commitment / nullifier /
@@ -1087,13 +1087,12 @@ jobs:
           # parallelism this change exists to gain. nextest already prints the
           # captured output of FAILING tests, which is what --nocapture was
           # there for.
-          cargo test -p vault \
+          cargo nextest run --profile ci -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
             --test merkle_host \
             --test merkle_fuzz \
-            --test account_layout_fixture \
-            -- --nocapture
+            --test account_layout_fixture
           # NOTE: `merge_verify` is deliberately NOT here. It began as a pure
           # host round-trip target, but it now also drives litesvm (the merge
           # rejection paths), which needs `target/deploy/vault.so` — an
@@ -1185,7 +1184,7 @@ jobs:
         # both vault.so and the circuit artefacts, which is why it cannot live
         # in the proof-only job).
         run: |
-          cargo test -p vault \
+          cargo nextest run --profile ci -p vault \
             --test set_protocol_config \
             --test set_tee_pubkey \
             --test user_commitment_registration \
@@ -1322,9 +1321,19 @@ jobs:
         env:
           # A missing circuit artifact must FAIL here, never skip. See T-12.
           REQUIRE_CIRCUIT_ARTIFACTS: "1"
-        # `--nocapture` dropped for the same reason as the vault-zk job: it
-        # maps to nextest's serial `--no-capture`. This is the job the change
-        # is aimed at (462 s, ~290 tests, many loading a proving key).
+        # DELIBERATELY still `cargo test`, not nextest. Measured on this
+        # branch, like-for-like:  cargo test 374 s  vs  nextest 521 s (+39%).
+        #
+        # This job is ~290 tests in essentially one binary, many of which load
+        # a Groth16 proving key. nextest runs every test in its OWN PROCESS, so
+        # that per-test fixed cost is paid ~290 times instead of being
+        # amortised across threads inside one process. Cross-binary parallelism
+        # — nextest's whole advantage — has nothing to work with here.
+        #
+        # This is also the job that sets the workflow's WALL CLOCK: the other
+        # three Rust jobs run in parallel and all finish well inside it, so
+        # making them faster does not shorten the run, while making this one
+        # slower lengthens it directly.
         run: cargo test -p darknyx-tee --tests -- --nocapture
 
   # ------------------------------------------------------------------
