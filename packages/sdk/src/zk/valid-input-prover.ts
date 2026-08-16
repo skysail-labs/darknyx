@@ -70,7 +70,24 @@ export function onchainRootVerifier(deps: {
       throw new Error(`tree id must be a u8, got ${treeId}`);
     }
     const [pda] = merkleTreePda(deps.programId, treeId);
-    const acct = await deps.connection.getAccountInfo(pda, "finalized");
+    // Read at `confirmed`, NOT `finalized`.
+    //
+    // The vault's own `contains_root` runs against live account state, so
+    // `confirmed` is the level that reflects what the program will actually
+    // see when the proof lands — checking a stricter level does not make the
+    // proof more likely to be accepted, it only makes the client refuse
+    // roots that are already perfectly valid.
+    //
+    // Reading `finalized` broke every client that proved straight after its
+    // own deposit: on devnet `confirmed` runs ~30 slots (~12 s) ahead, so the
+    // just-created root was legitimately absent and the gate failed instantly
+    // on a condition that resolves itself. That is what broke the daemon
+    // smoke on BOTH transports, and it read as a transport fault during the
+    // RA-TLS cutover.
+    //
+    // The C-09 guarantee is untouched: a fabricated root is in the ring at NO
+    // commitment level, so this still refuses it.
+    const acct = await deps.connection.getAccountInfo(pda, "confirmed");
     if (!acct) {
       throw new Error(
         `merkle tree shard ${treeId} not found on-chain (${pda.toBase58()})`,

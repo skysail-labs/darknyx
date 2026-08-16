@@ -39,7 +39,7 @@ export interface MergeClientOptions {
   artifacts: MergeCircuitArtifacts;
   leavesFetcher: LeavesFetcher;
   treeId?: number;
-  /** Override the finalized on-chain root-ring gate; `false` is test-only. */
+  /** Override the on-chain root-ring gate; `false` is test-only. */
   verifyRoot?: RootVerifier | false;
 }
 
