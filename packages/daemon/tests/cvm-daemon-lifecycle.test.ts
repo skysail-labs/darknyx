@@ -324,12 +324,31 @@ maybe(
     }
 
     async function leafCount(): Promise<number> {
-      // The TEE mirror's leaf count, under reserves on /transparency.
+      // `total_leaf_count`, NOT `leaf_count`.
+      //
+      // SW-06 renamed this: the field used to be a bare `leaf_count` (the
+      // all-shard sum) sitting next to shard 0's `merkle_root`, which read as
+      // a matched pair and was not one. This test was never updated, and its
+      // `?? 0` turned the missing field into "the tree is empty" — so every
+      // run reported before=0, after=0 and failed with "settle did not land"
+      // whether or not the settle actually landed.
+      //
+      // No default here on purpose: a shape change must fail loudly rather
+      // than quietly reappear as an empty tree.
       const r = await tfetch(`${GATEWAY}/transparency`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const j = (await r.json()) as { reserves?: { leaf_count?: number } };
-      return j.reserves?.leaf_count ?? 0;
+      const j = (await r.json()) as {
+        reserves?: { total_leaf_count?: number };
+      };
+      const n = j.reserves?.total_leaf_count;
+      if (typeof n !== "number") {
+        throw new Error(
+          "/transparency did not return reserves.total_leaf_count " +
+            `(got ${JSON.stringify(j.reserves)}); the response shape changed`,
+        );
+      }
+      return n;
     }
 
     beforeAll(async () => {
