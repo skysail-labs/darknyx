@@ -98,9 +98,13 @@ services:
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
 
       # ── T-03P: in-enclave TLS termination ──────────────────────────
-      # Defaults to the legacy gateway-terminated path so an image bump alone
-      # never changes how a deployment is reached; enabling RA-TLS is a
-      # deliberate act, set explicitly in the deploy env.
+      # Defaults to `ra-tls` since the 2026-08-16 cutover. The plaintext
+      # listener still BINDS (both run, which is what makes rollback possible)
+      # but :8080 is no longer published, so the only route in is the RA-TLS
+      # one below. `scripts/check-ratls-cutover.sh` enforces that pairing.
+      #
+      # To roll back, set this to `gateway-terminated` AND restore the :8080
+      # publication — the guard requires both to move together.
       #
       # Under `ra-tls` the enclave terminates TLS itself with a boot-random,
       # quote-bound key and is reached through the gateway's `s`-suffix

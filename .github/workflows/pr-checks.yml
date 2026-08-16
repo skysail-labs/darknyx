@@ -149,6 +149,13 @@ jobs:
               - '.github/workflows/pr-checks.yml'
             trader_host:
               - 'packages/trader-host/**'
+              # T-03P made trader-host depend on the SDK (and transitively on
+              # client-core) for the verified transport, and its job now BUILDS
+              # both. Without these paths an SDK-only change skips the
+              # trader-host release build and integration suite entirely — the
+              # exact change most likely to break it.
+              - 'packages/sdk/**'
+              - 'packages/client-core/**'
               - 'deploy/trader-host/**'
               - '.dockerignore'
               - 'package.json'

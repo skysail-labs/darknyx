@@ -48,6 +48,7 @@ function opensslAvailable(): boolean {
 }
 
 const HAS_OPENSSL = opensslAvailable();
+let connectionCount = 0;
 
 describe("socketSpkiSha256 — against a real TLS handshake", () => {
   let dir: string;
@@ -80,6 +81,11 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
       { key: readFileSync(key), cert: readFileSync(cert) },
       (_req, res) => res.end("ok"),
     );
+    // Counted so the single-connection property can be asserted behaviourally;
+    // undici's Agent does not expose its options.
+    server.on("secureConnection", () => {
+      connectionCount += 1;
+    });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     port = (server.address() as { port: number }).port;
   });
@@ -112,6 +118,38 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
     // did not run and the load-bearing function is unverified here.
     expect(HAS_OPENSSL).toBe(true);
   });
+  it.skipIf(!HAS_OPENSSL)(
+    "uses a single connection so the attestation and the request share a socket",
+    async () => {
+      // With a pool, the exchange that was verified and the request that
+      // follows can land on different connections — the probe-vs-request gap
+      // this adapter exists to close. undici expresses that as
+      // `connections: 1`, and does not expose its options for inspection.
+      //
+      // So assert it where it is observable: at the SERVER. Four concurrent
+      // requests through one agent must produce exactly one TLS connection.
+      // The previous version of this test asserted only that the agent was an
+      // instance of its own class and that `currentSocket` was a function —
+      // neither of which constrains `connections` at all, so raising it to 8
+      // would have left this green.
+      const agent = new TransportAgent();
+      connectionCount = 0;
+      const { fetch: uf } = await import("undici");
+      await Promise.all(
+        Array.from({ length: 4 }, () =>
+          uf(`https://127.0.0.1:${port}/`, { dispatcher: agent } as never).then(
+            (r) => r.text(),
+          ),
+        ),
+      );
+      expect(
+        connectionCount,
+        "the agent opened more than one connection; attestation and request " +
+          "can no longer be assumed to share a socket",
+      ).toBe(1);
+      await agent.close();
+    },
+  );
 });
 
 describe("TransportAgent — verification attaches to one socket", () => {
@@ -149,19 +187,7 @@ describe("TransportAgent — verification attaches to one socket", () => {
     );
   });
 
-  it("uses a single connection so the attestation and the request share a socket", () => {
-    // With a pool, the exchange that was verified and the request that follows
-    // can land on different connections — the probe-vs-request gap this
-    // adapter exists to close. undici expresses that as `connections: 1`.
-    //
-    // Asserted behaviourally rather than by reading a field: undici's Agent
-    // does not expose its options, and an earlier version of this test read
-    // `maxSockets` off an https.Agent that the production path never used.
-    const agent = new TransportAgent();
-    expect(agent).toBeInstanceOf(TransportAgent);
-    expect(typeof agent.currentSocket).toBe("function");
-    expect(agent.currentSocket()).toBeUndefined();
-  });
+
 
   it("takes no caller options that could widen the pool", () => {
     // The constructor deliberately accepts nothing: a caller must not be able

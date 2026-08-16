@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 
 import type { NodeWebSocketLike } from "../../src/tee/transport-ws.node.js";
 import type { SendableWebSocketLike } from "../../src/orders/trading-ws-client.js";
+import { TransportVerificationError } from "../../src/tee/verify-transport.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -295,6 +296,12 @@ export async function gwFetch(
     try {
       return await f(url, init);
     } catch (e) {
+      // NEVER retry a security rejection. The loop exists for UND_ERR_SOCKET
+      // while a CVM restarts; a `spki_mismatch` or `signer_set_mismatch` is a
+      // verdict, not a transient. Retrying one burns six verification
+      // exchanges and — worse — reports the failure as a timeout after ~18s
+      // instead of naming the peer that failed its check.
+      if (e instanceof TransportVerificationError) throw e;
       last = e;
       await new Promise((r) => setTimeout(r, 3000));
     }

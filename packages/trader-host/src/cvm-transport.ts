@@ -19,7 +19,30 @@ import { randomBytes } from "node:crypto";
 export async function buildCvmFetch(
   env: NodeJS.ProcessEnv,
 ): Promise<typeof fetch | undefined> {
-  if (env.DARKNYX_TRADER_CVM_TRANSPORT?.trim() !== "ra-tls") return undefined;
+  const mode = env.DARKNYX_TRADER_CVM_TRANSPORT?.trim();
+  // Unset or empty means the legacy path, deliberately — existing deployments
+  // must keep booting. But a value that is SET and unrecognised is a typo, not
+  // a choice: `ratls`, `RA-TLS`, `ra_tls` would otherwise start trader-host on
+  // the gateway-terminated path, `bin.ts` would print the legacy notice, and
+  // every browser order would be proxied over an unverified upstream while the
+  // operator believed RA-TLS was on.
+  //
+  // This corrects an earlier decision here that treated near-misses as "legacy
+  // by choice". The daemon's own `TransportMode::from_env` fails closed on an
+  // unrecognised value; the process that relays browser order intent should
+  // not be laxer than the one that relays a market maker's.
+  if (mode === undefined || mode === "") return undefined;
+  // The legacy path, named explicitly. Accepted so an operator can state the
+  // intent rather than relying on absence to mean it.
+  if (mode === "gateway-terminated") return undefined;
+  if (mode !== "ra-tls") {
+    throw new Error(
+      `DARKNYX_TRADER_CVM_TRANSPORT=${JSON.stringify(mode)} is not recognised; ` +
+        'expected "ra-tls" or "gateway-terminated" (or unset for legacy). ' +
+        "Refusing to start rather than silently proxying browser orders over " +
+        "an unverified upstream.",
+    );
+  }
 
   const gateway = env.DARKNYX_TRADER_CVM_GATEWAY_UPSTREAM?.trim();
   const compose = env.DARKNYX_TRADER_EXPECT_COMPOSE_HASH?.trim();

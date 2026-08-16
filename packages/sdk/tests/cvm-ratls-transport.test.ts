@@ -39,6 +39,38 @@ import {
 } from "../src/tee/verify-core.js";
 
 const RUN = process.env.RUN_CVM_RATLS === "1";
+
+// Fail CLOSED on a half-configured run. With `RUN_CVM_RATLS=1` an empty
+// signer set made `hex()` throw a bare TypeError from inside a helper, and an
+// empty URL produced an invalid request — both of which read as "the enclave
+// is broken" rather than "you forgot an env var". An empty compose hash is
+// worse than noisy: it is silently accepted by strict verification as
+// `pin_required`, so the run looks like it tested something.
+if (RUN) {
+  const missing = (
+    [
+      ["DARKNYX_TEE_RATLS_URL", process.env.DARKNYX_TEE_RATLS_URL],
+      ["DARKNYX_EXPECT_COMPOSE_HASH", process.env.DARKNYX_EXPECT_COMPOSE_HASH],
+      ["DARKNYX_EXPECT_SIGNER_SET", process.env.DARKNYX_EXPECT_SIGNER_SET],
+    ] as const
+  )
+    .filter(([, v]) => !v?.trim())
+    .map(([k]) => k);
+  if (missing.length > 0) {
+    throw new Error(
+      `RUN_CVM_RATLS=1 requires ${missing.join(", ")}. Refusing to run a ` +
+        "transport suite that would pass without checking what it claims to.",
+    );
+  }
+  for (const [name, v] of [
+    ["DARKNYX_EXPECT_COMPOSE_HASH", process.env.DARKNYX_EXPECT_COMPOSE_HASH],
+    ["DARKNYX_EXPECT_SIGNER_SET", process.env.DARKNYX_EXPECT_SIGNER_SET],
+  ] as const) {
+    if (!/^[0-9a-fA-F]{64}$/.test((v ?? "").trim())) {
+      throw new Error(`${name} must be 32 bytes of hex`);
+    }
+  }
+}
 const URL_ = process.env.DARKNYX_TEE_RATLS_URL ?? "";
 const COMPOSE = process.env.DARKNYX_EXPECT_COMPOSE_HASH ?? "";
 const SIGNERS_HEX = process.env.DARKNYX_EXPECT_SIGNER_SET ?? "";
@@ -260,6 +292,17 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     // Reported, not asserted on a threshold — GC timing makes any fixed bound
     // flaky, and a number in CI output that a human reads beats a green test
     // that tolerates anything.
+    // `global.gc?.()` silently no-ops without `--expose-gc`, which would make
+    // this measure uncollected garbage rather than retention — failing on
+    // ordinary heap noise or passing while a socket leaks, depending on
+    // timing. Require the flag rather than pretend to measure.
+    if (typeof global.gc !== "function") {
+      throw new Error(
+        "RSS retention test requires --expose-gc " +
+          '(run with NODE_OPTIONS="--expose-gc"); without it the measurement ' +
+          "is meaningless rather than merely approximate",
+      );
+    }
     const rss = () => Math.round(process.memoryUsage().rss / 1024 / 1024);
 
     // Warm up so one-time module/TLS-context allocation is not counted as growth.

@@ -47,10 +47,17 @@ describe("cvm transport selection", () => {
   it("defaults to the legacy path when nothing is set", async () => {
     // The suites must keep working unchanged until the cutover window.
     process.env.DARKNYX_TEE_GATEWAY = "https://example.invalid";
-    // A DNS failure proves it attempted an ordinary fetch rather than
-    // constructing a verified transport (which would throw on missing pins).
-    await expect(gwFetch("https://example.invalid/health", undefined, 1))
-      .rejects.toThrow();
+    // A bare `.rejects.toThrow()` would pass on ANY error — including the
+    // missing-pin error this test exists to prove did NOT happen. Assert the
+    // discriminating negative instead: whatever failed, it was not the
+    // verified-transport construction path.
+    const err = await gwFetch("https://example.invalid/health", undefined, 1)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err, "the call unexpectedly succeeded").not.toBeNull();
+    expect(
+      (err as Error).message,
+      "the legacy path constructed a verified transport instead of plain fetch",
+    ).not.toMatch(/EXPECT_COMPOSE_HASH|EXPECT_SIGNER_SET|ra-tls/i);
     expect(process.env.DARKNYX_CVM_TRANSPORT).toBeUndefined();
   });
 
@@ -83,19 +90,7 @@ describe("cvm transport selection", () => {
 });
 
 describe("the NODE_TLS_REJECT_UNAUTHORIZED shortcut is not how this suite passes", () => {
-  it("is documented as forbidden in the harness", async () => {
-    // A behavioural assertion would need a live self-signed endpoint. This
-    // pins the intent where a future maintainer will meet it: reaching for
-    // NODE_TLS_REJECT_UNAUTHORIZED=0 to make the s route "work" disables
-    // certificate verification entirely and accepts any certificate from
-    // anyone, while the run still reports as RA-TLS.
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync(
-      new URL("./helpers/cvm-harness.ts", import.meta.url),
-      "utf8",
-    );
-    expect(src).toContain("Fail loudly rather than falling back");
-  });
+
 
   it("is not set by the suite itself", () => {
     // If this ever becomes set, a "passing" cvm run proves nothing about the

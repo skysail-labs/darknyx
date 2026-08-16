@@ -41,14 +41,16 @@ describe("legacy path stays the default", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not treat a near-miss value as ra-tls", async () => {
-    // `ratls`, `RA-TLS`, `ra_tls` are all plausible typos. Each must land on
-    // the legacy path loudly (via the entrypoint's warning) rather than being
-    // helpfully coerced into a security mode the operator did not spell.
+  it("REFUSES a near-miss value rather than falling back to legacy", async () => {
+    // Reversed from an earlier version of this test, which asserted these
+    // resolved to `undefined` (legacy). That was wrong: a set-but-unrecognised
+    // value is a typo, not a choice, and silently selecting the weaker
+    // transport for it is the fail-open this whole feature exists to remove.
+    // Unset still means legacy — that is tested above.
     for (const v of ["ratls", "ra_tls", "RA-TLS", "ra-tls-ish"]) {
       await expect(
         buildCvmFetch({ DARKNYX_TRADER_CVM_TRANSPORT: v }),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(/not recognised/);
     }
   });
 
