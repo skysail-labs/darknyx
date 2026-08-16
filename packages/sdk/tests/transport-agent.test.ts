@@ -29,6 +29,7 @@ import {
   LIMITS,
   TransportAgent,
   createVerifiedFetch,
+  verifyTransportOnSocket,
   parseObservedManifest,
   socketSpkiSha256,
 } from "../src/tee/transport-agent.node.js";
@@ -351,5 +352,72 @@ describe("createVerifiedFetch is pinned to the origin it verified", () => {
     const f = createVerifiedFetch({ ...opts(), agent });
     await expect(f("https://evil.example/")).rejects.toThrow();
     expect(agent.currentSocket()).toBeUndefined();
+  });
+});
+
+describe("verifyTransportOnSocket retries a lost socket, never a verdict", () => {
+  // `connections: 1` means a consumer that polls for a while can have its one
+  // pooled connection closed by an idle timeout or a peer close. That is
+  // ordinary churn, and it failed `cvm-self-trade` in CI after ~57 s of
+  // polling. The retry exists for exactly that, and must not extend to a
+  // refusal about the peer.
+  const baseOpts = {
+    baseUrl: "https://enclave.example",
+    expectedComposeHash: "aa".repeat(32),
+    expectedSignerSetSha256: new Uint8Array(32).fill(1),
+    // `randomNonce` is consumed before the fetch, so it must be real even
+    // though this suite never reaches quote verification.
+    deps: {
+      randomNonce: () => new Uint8Array(32).fill(9),
+      verifyQuote: async () => {
+        throw new Error("unreachable: the fetch fails first");
+      },
+      parseEventLog: () => [],
+    } as never,
+  };
+
+  /** A fetch that fails with a chosen TransportVerificationError kind. */
+  const failingFetch = (kind: string, count: { n: number }) =>
+    (async () => {
+      count.n += 1;
+      const e = new TransportVerificationError(`synthetic ${kind}`, kind as never);
+      throw e;
+    }) as unknown as typeof fetch;
+
+  it("does NOT retry a spki_mismatch — that is a relay, not churn", async () => {
+    const count = { n: 0 };
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl: failingFetch("spki_mismatch", count),
+      } as never),
+    ).rejects.toMatchObject({ kind: "spki_mismatch" });
+    expect(count.n, "a verdict was retried").toBe(1);
+  });
+
+  it("does NOT retry a compose_mismatch — that is the wrong enclave", async () => {
+    const count = { n: 0 };
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl: failingFetch("compose_mismatch", count),
+      } as never),
+    ).rejects.toMatchObject({ kind: "compose_mismatch" });
+    expect(count.n).toBe(1);
+  });
+
+  it("retries socket_lost, then gives up with that kind", async () => {
+    // Bounded: it must not spin forever on a peer that keeps dropping.
+    const count = { n: 0 };
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl: failingFetch("socket_lost", count),
+      } as never),
+    ).rejects.toMatchObject({ kind: "socket_lost" });
+    expect(count.n, "socket_lost should be retried a bounded number of times").toBe(3);
   });
 });

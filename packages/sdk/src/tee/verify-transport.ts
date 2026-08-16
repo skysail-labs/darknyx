@@ -65,7 +65,18 @@ export type TransportFailure =
   | "signer_set_mismatch"
   | "transport_mode_rejected"
   | "protocol_version_unsupported"
-  | "pin_required";
+  | "pin_required"
+  /**
+   * The connection vanished between the attestation exchange and binding it to
+   * a socket — an idle timeout or a peer close, not a rejection.
+   *
+   * Kept distinct from `malformed` on purpose: every other kind here is a
+   * VERDICT about the peer and must never be retried, whereas this one says
+   * only "there is no socket left to bind to" and is safe to retry on a fresh
+   * connection. Collapsing the two would force callers to choose between
+   * retrying real rejections and failing on ordinary socket churn.
+   */
+  | "socket_lost";
 
 export class TransportVerificationError extends Error {
   constructor(

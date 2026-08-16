@@ -287,7 +287,7 @@ export interface VerifiedSocket {
  * failure, so a caller that catches and retries cannot end up reusing a socket
  * that failed a check.
  */
-export async function verifyTransportOnSocket(
+async function verifyOnce(
   opts: VerifiedTransportOptions,
 ): Promise<VerifiedSocket> {
   const { agent, deps } = opts;
@@ -337,7 +337,21 @@ export async function verifyTransportOnSocket(
     // mechanism, not an optimisation. Raising `connections` above 1 would
     // silently invalidate this and must not be done.
     const live = agent.currentSocket();
-    if (!live) fail("malformed", "no live socket carried the attestation");
+    if (!live) {
+      // The socket went away between the exchange and this read.
+      //
+      // This is LIVENESS, not a verdict. Under `connections: 1` a consumer
+      // that polls for a while — `cvm-self-trade` polls an order for ~57 s —
+      // can have its single pooled connection closed by an idle timeout or by
+      // the peer, and `close` clears `current`. Nothing about the evidence was
+      // wrong; there is simply no socket left to bind it to.
+      //
+      // Signalled distinctly so a caller can tell it apart from a real
+      // rejection: `spki_mismatch` means a relay, this means "try again on a
+      // fresh connection". `verifyOnce` below retries it a bounded number of
+      // times; a genuine rejection is never retried.
+      fail("socket_lost", "no live socket carried the attestation");
+    }
     socket = live;
   } catch (e) {
     if (e instanceof TransportVerificationError) throw e;
@@ -445,4 +459,39 @@ export function createVerifiedFetch(
       dispatcher: agent,
     } as never);
   };
+}
+
+
+/**
+ * Verify the transport, retrying ONLY a lost socket.
+ *
+ * `connections: 1` means a consumer that polls for a while can have its single
+ * pooled connection closed underneath it by an idle timeout or a peer close.
+ * That is ordinary churn, and it surfaced as a hard failure in CI on the one
+ * suite that polls longest (`cvm-self-trade`, ~57 s).
+ *
+ * The retry is deliberately narrow. `socket_lost` is the only kind retried;
+ * every other kind is a VERDICT about the peer — `spki_mismatch` means a
+ * relay, `compose_mismatch` means the wrong enclave — and retrying one would
+ * turn a precise refusal into a timeout, or worse, into eventual acceptance.
+ */
+export async function verifyTransportOnSocket(
+  opts: VerifiedTransportOptions,
+): Promise<VerifiedSocket> {
+  const attempts = 3;
+  let last: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await verifyOnce(opts);
+    } catch (e) {
+      const kind = (e as { kind?: string }).kind;
+      if (kind !== "socket_lost") throw e;
+      last = e;
+      // Drop whatever the pool is holding so the next attempt opens a fresh
+      // connection rather than reusing a socket that just went away.
+      const stale = opts.agent.currentSocket();
+      if (stale) opts.agent.destroySocket(stale);
+    }
+  }
+  throw last;
 }
