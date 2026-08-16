@@ -327,8 +327,15 @@ export async function verifyTransportOnSocket(
     }
     body = JSON.parse(text) as TransportAttestationBody;
 
-    // The socket that served THIS response. Not a probe, not the pool's idea
-    // of a current connection at some later moment.
+    // The most recently CONNECTED socket — which is the serving socket here
+    // only because this agent is pinned to `connections: 1, pipelining: 1`,
+    // so at most one socket exists and requests do not overlap on it.
+    //
+    // Stated precisely because the previous comment claimed more than the
+    // code provides ("the socket that served THIS response"): undici exposes
+    // no per-response socket attribution, so the single-connection pin IS the
+    // mechanism, not an optimisation. Raising `connections` above 1 would
+    // silently invalidate this and must not be done.
     const live = agent.currentSocket();
     if (!live) fail("malformed", "no live socket carried the attestation");
     socket = live;
@@ -405,7 +412,31 @@ export function createVerifiedFetch(
     await inflight;
   };
 
+  const verifiedOrigin = new URL(opts.baseUrl).origin;
+
   return async (input, init) => {
+    // Refuse any origin other than the one that was verified.
+    //
+    // The returned function used to forward `input` unchanged, so a consumer
+    // could hand it an absolute URL for a different host — through a bug, a
+    // config value, or a server-supplied endpoint — and the request would
+    // leave over a transport whose attestation says nothing about that peer,
+    // while every log line still read "verified".
+    const target = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url,
+      opts.baseUrl,
+    );
+    if (target.origin !== verifiedOrigin) {
+      throw new TransportVerificationError(
+        `refusing to send to ${target.origin} on a transport verified for ${verifiedOrigin}`,
+        "malformed",
+      );
+    }
+
     await ensureVerified();
     const fetchImpl = opts.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
     return fetchImpl(input, {

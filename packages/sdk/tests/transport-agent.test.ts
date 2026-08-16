@@ -28,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   LIMITS,
   TransportAgent,
+  createVerifiedFetch,
   parseObservedManifest,
   socketSpkiSha256,
 } from "../src/tee/transport-agent.node.js";
@@ -276,5 +277,53 @@ describe("browser safety — the WebSocket gate", () => {
     const index = await import("../src/index.js");
     expect(Object.keys(index)).not.toContain("createVerifiedWebSocketFactory");
     expect(Object.keys(index)).not.toContain("upgradeSocketSpki");
+  });
+});
+
+describe("createVerifiedFetch is pinned to the origin it verified", () => {
+  // The transport's attestation says something about ONE peer. Forwarding an
+  // arbitrary absolute URL would send the request to a host the quote says
+  // nothing about, while the consumer's logs still read "verified".
+  const opts = () => ({
+    baseUrl: "https://cvm.example",
+    agent: new TransportAgent(),
+    deps: {} as never,
+    expectedComposeHash: "aa".repeat(32),
+    expectedSignerSetSha256: new Uint8Array(32).fill(1),
+    // Must never be reached for a cross-origin target.
+    fetchImpl: (() => {
+      throw new Error("fetch must not be called for a rejected origin");
+    }) as unknown as typeof fetch,
+  });
+
+  it("refuses an absolute URL for a different host", async () => {
+    const f = createVerifiedFetch(opts());
+    await expect(f("https://evil.example/orders")).rejects.toThrow(
+      /refusing to send to https:\/\/evil\.example/,
+    );
+  });
+
+  it("refuses a different port on the same host", async () => {
+    // Origin includes the port: :8080 is not the peer that :443 attested.
+    const f = createVerifiedFetch(opts());
+    await expect(f("https://cvm.example:8080/orders")).rejects.toThrow(
+      /refusing to send/,
+    );
+  });
+
+  it("refuses a downgrade to http", async () => {
+    const f = createVerifiedFetch(opts());
+    await expect(f("http://cvm.example/orders")).rejects.toThrow(
+      /refusing to send/,
+    );
+  });
+
+  it("rejects before attempting any verification or network call", async () => {
+    // The check must be cheap and first: a cross-origin call should never
+    // trigger a verification exchange against the legitimate peer.
+    const agent = new TransportAgent();
+    const f = createVerifiedFetch({ ...opts(), agent });
+    await expect(f("https://evil.example/")).rejects.toThrow();
+    expect(agent.currentSocket()).toBeUndefined();
   });
 });
