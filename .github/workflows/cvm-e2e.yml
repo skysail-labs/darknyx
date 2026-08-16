@@ -250,12 +250,17 @@ jobs:
           shred -u /tmp/darknyx.env || rm -f /tmp/darknyx.env
           # The dstack gateway node (prodN) is assigned PER CVM — do NOT hardcode
           # it (nightly-test-cvm is on prod9, darknyx-hardening-3c2 on prod5). Resolve
-          # the app's gateway base_domain and route the 8080 service through the
-          # <app_id>-8080.<base_domain> subdomain.
+          # the app's gateway base_domain and route through the
+          # <app_id>-8443s.<base_domain> subdomain.
+          #
+          # T-03P: the `s` suffix selects dstack TLS PASSTHROUGH, so the enclave
+          # terminates TLS itself. `:8080` is no longer published, so the old
+          # `-8080.` form returns HTTP 000 — this workflow was left pointing at
+          # it by the cutover and failed here every run.
           BASE=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
                  | jq -r '.. | objects | .base_domain // empty' 2>/dev/null | grep . | head -1)
           [ -n "$BASE" ] || { echo "::error::could not resolve gateway base_domain for $CVM"; exit 1; }
-          GW="https://${APP_ID}-8080.${BASE}"
+          GW="https://${APP_ID}-8443s.${BASE}"
           echo "gateway: $GW"
           echo "GATEWAY=$GW" >> "$GITHUB_ENV"
 
@@ -266,12 +271,49 @@ jobs:
           # First cold boot on a fresh CVM includes a full ~GB image pull, so give
           # it up to ~10 min. (Warm redeploys in the tree-loop are much faster.)
           for i in $(seq 1 60); do
-            if curl -fsS "$GATEWAY/info" > /tmp/info.json 2>/dev/null; then
+            # -k: the enclave serves its OWN boot-scoped certificate, so there
+            # is no CA chain to validate. This is a LIVENESS probe only — the
+            # security check is the SPKI-against-quote verification the test
+            # suites perform via DARKNYX_CVM_TRANSPORT=ra-tls below, which is
+            # what actually binds this peer to a TDX quote.
+            if curl -fsSk "$GATEWAY/info" > /tmp/info.json 2>/dev/null; then
               echo "CVM healthy after ~$((i*10))s"; jq -e -r '.tee_pubkey' /tmp/info.json > /dev/null; break
             fi
             sleep 10
             [ "$i" = 60 ] && { echo "::error::CVM did not become healthy at $GATEWAY"; exit 1; }
           done
+
+      # T-03P: every cvm-* suite runs over the VERIFIED transport, which needs
+      # the two governance pins. They are read from the live enclave rather than
+      # stored, because a compose edit of ANY kind moves compose_hash — a stored
+      # value would go stale silently and the suites would fail closed with a
+      # pin error that looks like an attack.
+      - name: Read the RA-TLS governance pins from the enclave
+        run: |
+          set -euo pipefail
+          NONCE=$(openssl rand -hex 32)
+          curl -fsSk --max-time 40 \
+            "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta.json
+          COMPOSE=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+                            | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta.json)
+          SIGNERS=$(jq -r '.manifest.signer_set_sha256' /tmp/ta.json)
+          MODE=$(jq -r '.manifest.transport_mode' /tmp/ta.json)
+          # Fail closed: an empty pin would disable the very check it configures.
+          printf '%s' "$COMPOSE" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "::error::bad compose hash from /transport-attestation: $COMPOSE"; exit 1; }
+          printf '%s' "$SIGNERS" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "::error::bad signer set from /transport-attestation: $SIGNERS"; exit 1; }
+          [ "$MODE" = "ra-tls" ] \
+            || { echo "::error::enclave reports transport_mode=$MODE, expected ra-tls"; exit 1; }
+          echo "transport_mode : $MODE"
+          echo "compose_hash   : $COMPOSE"
+          echo "signer_set     : $SIGNERS"
+          {
+            echo "DARKNYX_CVM_TRANSPORT=ra-tls"
+            echo "DARKNYX_EXPECT_COMPOSE_HASH=$COMPOSE"
+            echo "DARKNYX_EXPECT_SIGNER_SET=$SIGNERS"
+            echo "DARKNYX_TEE_RATLS_URL=$GATEWAY"
+          } >> "$GITHUB_ENV"
 
       # ── rotate `tee_pubkeys` to the K shard signers from the boot log + fund.
       #    Idempotent: a same-image redeploy yields the same signers (no-op
@@ -325,6 +367,18 @@ jobs:
       # run AFTER the rotate step so vault_config.tee_pubkeys == /info.tee_pubkeys.
       # With numTrees>=2 in the founded e2e-config this also exercises the
       # multi-key (K-shard) report_data binding end-to-end; at numTrees=1 it
+      # T-03P: the transport itself. This is the only suite that drives the
+      # production adapter against a real TDX quote and a real passthrough
+      # route, and it was NOT previously in the nightly — the transport had no
+      # scheduled coverage at all. NODE_OPTIONS=--expose-gc is required: the RSS
+      # retention test refuses to run without it rather than silently measuring
+      # uncollected garbage.
+      - name: RA-TLS transport against the live CVM
+        run: |
+          cd packages/sdk
+          RUN_CVM_RATLS=1 NODE_OPTIONS="--expose-gc" \
+            ../../node_modules/.bin/vitest run tests/cvm-ratls-transport.test.ts
+
       # validates the single-key case (the multi-key concat is unit-tested).
       - name: CVM attestation e2e (real DCAP)
         run: |
