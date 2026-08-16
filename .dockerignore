@@ -20,6 +20,15 @@
 packages/*
 !packages/trader-host
 packages/trader-host/dist
+# T-03P: trader-host verifies the enclave transport itself, and that code is in
+# @darknyx/sdk (which depends on client-core). Both must reach the build stage
+# or the COPY fails with "not found" rather than a missing-module error, so the
+# cause reads as a Docker problem instead of a dependency one.
+!packages/sdk
+packages/sdk/dist
+packages/sdk/tests
+!packages/client-core
+packages/client-core/dist
 
 # N=16 settle-prover artifacts, copied into the runtime image (the
 # prover reads /circuits/build/match_batch_n16/). Ladder-include ONLY
