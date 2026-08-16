@@ -143,3 +143,28 @@ describe("buildDaemonTransport — ra-tls refuses to half-protect", () => {
     ).rejects.toThrow(/valid hex/);
   });
 });
+
+describe("buildDaemonTransport — what the daemon actually receives", () => {
+  it("hands back a fetch the daemon can use as fetchImpl", async () => {
+    // The Daemon threads `deps.fetchImpl` into every CVM call site, so the
+    // wiring in bin/daemon.ts is only as good as this being a real fetch.
+    const t = await buildDaemonTransport(cfg(), { verifierDeps: {} as never });
+    expect(typeof t.fetch).toBe("function");
+  });
+
+  it("legacy mode supplies no WebSocket factory, so the daemon keeps its default", async () => {
+    // Under gateway-terminated there is nothing to gate. The daemon must fall
+    // back to its ordinary factory rather than receive a broken one.
+    const t = await buildDaemonTransport(cfg(), { verifierDeps: {} as never });
+    expect(t.webSocketFactory).toBeUndefined();
+    expect(t.mode).toBe("gateway-terminated");
+  });
+
+  it("reports the mode so the entrypoint can warn on the legacy path", async () => {
+    // bin/daemon.ts branches on this to print either the ra-tls confirmation
+    // or an explicit warning that nothing binds the quote to the connection.
+    // A mode that could not be read would make that warning impossible.
+    const t = await buildDaemonTransport(cfg(), { verifierDeps: {} as never });
+    expect(["ra-tls", "gateway-terminated"]).toContain(t.mode);
+  });
+});
