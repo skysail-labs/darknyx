@@ -285,7 +285,8 @@ phase table unless an already-open branch owns that exact work.
 | 2a | `remediation/transport-verify-core` | 1d | Environment-neutral transport verification core; every check has a failing test | **Code complete** — PR open, unmerged |
 | 2b | `remediation/transport-node-adapter` | 2a | Node actual-socket adapter: per-socket SPKI capture, single-socket pool, verified-fetch gate | **Code complete** — PR open, unmerged |
 | 2c | `remediation/transport-consumers` | 2b | Verified WebSocket gate: sends queued until the upgrade socket is checked, discarded on failure | **Code complete** — PR open, unmerged |
-| 2d | `remediation/transport-consumer-wiring` | 2c | daemon / loadgen / trader-host actually consume the verified fetch + WS factory | Open — not started |
+| 2d | `remediation/transport-consumer-wiring` | 2c | `createVerifiedTransport` — one call returning HTTP + WS transports bound to the same verified identity | **Code complete** — PR open, unmerged |
+| 2e | `remediation/transport-consumer-adoption` | 2d | daemon + trader-host adopt `createVerifiedTransport`; config plumbing | Open — not started |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
@@ -701,9 +702,16 @@ filesystem, and Node-only certificate types.
 - **Daemon:** startup, finalized attestation refresh, place/modify/cancel,
   recovery reads, and `/v1/stream` all use the verified transport. Mismatch
   pauses new trading while preserving cancellation/reconciliation policy.
-- **Loadgen:** uses the same adapter so load tests exercise the production
-  connection and reconnect path. It may expose an explicit insecure local-test
-  flag, but the report must label it and production endpoints must reject it.
+- **Loadgen:** ~~uses the same adapter~~ **CORRECTED 2026-08-16 — it cannot.**
+  `crates/darknyx-tee-loadgen` is a **Rust** binary; the shared adapter is
+  TypeScript, so there is nothing for it to consume. Closing this properly needs
+  a Rust-side transport verifier (peer-certificate SPKI capture plus the same
+  manifest/quote checks), which is its own slice and is **not** covered by
+  Phase 2. Until it lands the loadgen exercises intake over the legacy
+  gateway-terminated path only, and any load figures it produces do **not**
+  cover the RA-TLS connection or reconnect path. Recorded here rather than
+  silently dropped, because the original wording implied coverage that will not
+  exist.
 - **Trader-host upstream:** uses the adapter for any retained CVM request. This
   secures only the upstream hop; it is not T-03B closure.
 - **Direct Node SDK consumers:** receive a supported construction API rather
@@ -1234,7 +1242,7 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | Phase 2d — wire daemon / loadgen / trader-host onto the verified transport, stacked on 2c |
+| Next action | Phase 2e — daemon + trader-host adoption, stacked on 2d. **Loadgen is excluded — see §8.3 correction below** |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
 | Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
@@ -1245,7 +1253,7 @@ Only then move parent T-03 to `Closed`.
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-16 (Phase 2c submitted) |
+| Last updated | 2026-08-16 (Phase 2d submitted) |
 
 ### 15.3 Handoff block
 
