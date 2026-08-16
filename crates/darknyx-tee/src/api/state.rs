@@ -107,6 +107,19 @@ pub struct ApiState {
     /// boot or test mode). `/attestation` returns 503 in that
     /// case; `/health` + `/info` still work.
     pub dstack: Option<Arc<DstackClient>>,
+    /// The boot-scoped RA-TLS identity (T-03P), when this instance terminates
+    /// TLS itself. `None` on the legacy gateway-terminated path, where there is
+    /// no served certificate of ours to bind — `/transport-attestation` returns
+    /// 503 rather than inventing one. Set by `main.rs` via
+    /// `with_transport_identity`.
+    pub transport_identity: Option<Arc<crate::transport::TransportIdentity>>,
+    /// Global fixed-window counter for `/transport-attestation` (NOT a token
+    /// bucket — see its definition; the window hard-resets, so up to 2x the
+    /// ceiling can cross a boundary). That route is
+    /// necessarily pre-auth — a client must verify the transport before it
+    /// sends a credential — and each call costs a TDX quote, so it is the one
+    /// unauthenticated surface that needs its own ceiling.
+    pub transport_rate_limiter: super::transport_attestation::TransportAttestationRateLimiter,
     /// Stamped at construction. `/health` returns the elapsed
     /// milliseconds since this instant.
     pub start: Instant,
@@ -553,6 +566,10 @@ impl ApiState {
         rand::rngs::OsRng.fill_bytes(&mut boot_session_id);
         let trading_gate = TradingGate::default();
         Self {
+            // T-03P: off unless main.rs supplies an RA-TLS identity.
+            transport_identity: None,
+            transport_rate_limiter:
+                super::transport_attestation::TransportAttestationRateLimiter::new(),
             app_info,
             boot_session_id,
             signer_pubkey_base58: signer.pubkey_base58.clone(),
@@ -644,6 +661,22 @@ impl ApiState {
     /// `with_shard_pubkeys` (same source `signers`).
     pub fn with_signer_set_hash(mut self, hash: [u8; 32]) -> Self {
         self.signer_set_hash = hash;
+        self
+    }
+
+    /// Attach the boot-scoped RA-TLS identity (T-03P), enabling
+    /// `/transport-attestation`. Called by `main.rs` only when this instance
+    /// terminates TLS itself.
+    ///
+    /// The identity must be the SAME one handed to the TLS server config — the
+    /// whole contract is that the attested SPKI is the certificate the peer
+    /// actually sees, so two independently generated identities would produce a
+    /// quote that verifies against nothing.
+    pub fn with_transport_identity(
+        mut self,
+        identity: Arc<crate::transport::TransportIdentity>,
+    ) -> Self {
+        self.transport_identity = Some(identity);
         self
     }
 
@@ -939,6 +972,10 @@ impl ApiState {
         let matcher = Arc::new(RwLock::new(MatcherState::new()));
         let trading_gate = TradingGate::default();
         Self {
+            // T-03P: off unless main.rs supplies an RA-TLS identity.
+            transport_identity: None,
+            transport_rate_limiter:
+                super::transport_attestation::TransportAttestationRateLimiter::new(),
             app_info: BootAppInfo::stub(),
             boot_session_id: [0x5A; 32],
             signer_pubkey_base58: "stub-pubkey".to_string(),

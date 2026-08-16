@@ -279,7 +279,8 @@ phase table unless an already-open branch owns that exact work.
 | 1 | split into 1a/1b/1c below — stack **#145** | Phase 0 passthrough GO (source; live carried) | RA-TLS server + versioned transport evidence in TEE | **In progress** |
 | 1a | `remediation/transport-manifest` | Phase 0 | `TransportAttestationManifestV1` wire contract, Rust + TS, one shared pinned vector | **Code complete** — PR #143 open, unmerged. Local gate green; mutation-tested both directions |
 | 1b | `remediation/transport-ratls-identity` | 1a | Boot-random, never-persisted TLS identity; SPKI proven present in the served certificate | **Code complete** — PR #144 open, unmerged. Local gate green; SPKI guard mutation-tested |
-| 1c | `remediation/transport-ratls-listener` | 1b | rustls listener + `/transport-attestation` route + OpenAPI | Open — not started |
+| 1c | `remediation/transport-ratls-listener` | 1b | `/transport-attestation` route, `ApiState` wiring, OpenAPI | **Code complete** — PR open, unmerged. Route + state + OpenAPI landed; **the rustls bind itself moved to 1d** (see below) |
+| 1d | `remediation/transport-ratls-bind` | 1c | rustls `ServerConfig`, `DARKNYX_TEE_TRANSPORT_MODE` config, `main.rs` listener, fail-closed startup | Open — not started |
 | 2 | `remediation/transport-ratls-node-clients` | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | Open |
 | 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
@@ -1229,7 +1230,7 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | Phase 1c: rustls listener + `/transport-attestation` route + OpenAPI, stacked on #144 |
+| Next action | Phase 1d: rustls `ServerConfig` + transport-mode config + `main.rs` bind, stacked on 1c |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
 | Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
@@ -1240,7 +1241,7 @@ Only then move parent T-03 to `Closed`.
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-15 (Phase 1b submitted) |
+| Last updated | 2026-08-15 (Phase 1c submitted) |
 
 ### 15.3 Handoff block
 

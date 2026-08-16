@@ -68,6 +68,10 @@ pub(crate) fn route_cost(method: &Method, path: &str) -> f64 {
 pub(crate) fn public_route_cost(method: &Method, path: &str) -> f64 {
     match (method, path) {
         (&Method::GET, "/attestation") => 10.0,
+        // Same price as `/attestation`: this route also performs a real TDX
+        // `get_quote`. Falling through to the 0.1 default let an unauthenticated
+        // caller buy 100x the quote work per unit of budget.
+        (&Method::GET, "/transport-attestation") => 10.0,
         (&Method::GET, "/transparency") => 2.0,
         (&Method::POST, "/auth/token") => 0.0,
         _ => 0.1,
@@ -148,6 +152,18 @@ mod tests {
         // `/attestation` generates a TDX quote per request and cannot be
         // cached — the caller's nonce is the point — so it carries the most.
         assert_eq!(public_route_cost(&Method::GET, "/attestation"), 10.0);
+        // Both quote-producing routes must price the same. `/transport-attestation`
+        // silently fell through to the 0.1 default, so an unauthenticated caller
+        // could buy 100x the TDX quote work per unit of budget.
+        assert_eq!(
+            public_route_cost(&Method::GET, "/transport-attestation"),
+            10.0,
+        );
+        assert_eq!(
+            public_route_cost(&Method::GET, "/transport-attestation"),
+            public_route_cost(&Method::GET, "/attestation"),
+            "both routes perform a real get_quote and must cost the same",
+        );
         // Exempt on purpose — see the doc comment. Bounding login here would
         // let junk credentials lock every real account out.
         assert_eq!(public_route_cost(&Method::POST, "/auth/token"), 0.0);
