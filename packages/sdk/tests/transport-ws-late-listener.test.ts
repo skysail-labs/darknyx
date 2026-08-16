@@ -339,3 +339,87 @@ describe("gated WebSocket — close and stall are terminal", () => {
     }
   });
 });
+
+describe("gated WebSocket — reconnect is verified independently", () => {
+  // The plan (§8.4) requires "reverify every WebSocket reconnect". The daemon
+  // reconnects on `auth_expired` and on any server close, so this is the
+  // common path, not an edge case — and a factory that only worked once would
+  // strand a long-lived stream exactly as observed against a live CVM.
+  it("gates a second connection from the same factory", async () => {
+    const sockets: EagerSocket[] = [];
+    const factory = createVerifiedWebSocketFactory({
+      verifiedSpkiSha256: await expectedSpki(SPKI),
+      createSocket: () => {
+        const s = new EagerSocket();
+        sockets.push(s);
+        return s;
+      },
+    });
+
+    const first = factory("wss://enclave.example/v1/stream");
+    await Promise.resolve();
+    await Promise.resolve();
+    const firstOpen = await new Promise<boolean>((r) => {
+      const t = setTimeout(() => r(false), 300);
+      first.addEventListener("open", () => {
+        clearTimeout(t);
+        r(true);
+      });
+    });
+    expect(firstOpen).toBe(true);
+
+    // Reconnect: a NEW wrapper over a NEW socket.
+    const second = factory("wss://enclave.example/v1/stream");
+    await Promise.resolve();
+    await Promise.resolve();
+    const secondOpen = await new Promise<boolean>((r) => {
+      const t = setTimeout(() => r(false), 300);
+      second.addEventListener("open", () => {
+        clearTimeout(t);
+        r(true);
+      });
+    });
+    expect(
+      secondOpen,
+      "the reconnect never surfaced open — a long-lived stream cannot recover",
+    ).toBe(true);
+
+    expect(sockets).toHaveLength(2);
+    second.send(JSON.stringify({ op: "login" }));
+    expect(sockets[1].sent).toHaveLength(1);
+    // Verification is per-socket, never inherited from the first.
+    expect(sockets[0].sent).toHaveLength(0);
+  });
+
+  it("rejects a reconnect that presents a different certificate", async () => {
+    // The property that makes per-connection gating worth having: a relay
+    // that appears only on the reconnect must still be caught.
+    let n = 0;
+    const violations: string[] = [];
+    const factory = createVerifiedWebSocketFactory({
+      verifiedSpkiSha256: await expectedSpki(SPKI),
+      createSocket: () => {
+        n += 1;
+        return n === 1 ? new EagerSocket() : new EagerSocket(new Uint8Array(32).fill(0xaa));
+      },
+      onViolation: (e) => violations.push(e.kind),
+    });
+
+    factory("wss://enclave.example/v1/stream");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const second = factory("wss://enclave.example/v1/stream");
+    await Promise.resolve();
+    await Promise.resolve();
+    const opened = await new Promise<boolean>((r) => {
+      const t = setTimeout(() => r(false), 300);
+      second.addEventListener("open", () => {
+        clearTimeout(t);
+        r(true);
+      });
+    });
+    expect(opened, "a substituted certificate passed on reconnect").toBe(false);
+    expect(violations).toContain("spki_mismatch");
+  });
+});

@@ -118,6 +118,19 @@ export async function buildDaemonTransport(
     expectedSignerSetSha256: signerSet,
     ...(cfg.attestation?.mrtd ? { expectedMrtd: cfg.attestation.mrtd } : {}),
     createWebSocket: deps.createWebSocket,
+    // Make a stream-transport refusal LOUD. Without this the daemon
+    // reconnects into the same refusal indefinitely while reporting only a
+    // generic "WebSocket transport error" — which is how a live failure
+    // became undiagnosable after the fact. A rejected peer on the order
+    // stream is the event this whole feature exists to detect, so it is
+    // logged at error level with its kind.
+    onTransportViolation: (err) => {
+      console.error(
+        `[daemon] STREAM TRANSPORT REJECTED (${err.kind}): ${err.message}. ` +
+          "The /v1/stream peer failed its quote-bound certificate check; " +
+          "orders are NOT being sent over this connection.",
+      );
+    },
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
 

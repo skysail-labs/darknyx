@@ -53,6 +53,14 @@ export interface CreateVerifiedTransportOptions {
   /** Opens the underlying `ws` socket. Supplied by the consumer so the SDK
    *  carries no dependency on a particular WebSocket implementation. */
   createWebSocket?: (url: string) => NodeWebSocketLike;
+  /**
+   * Called when a gated WebSocket refuses its peer.
+   *
+   * Strongly recommended for any long-lived consumer: without it the refusal
+   * is invisible and the stream client reconnects into it indefinitely,
+   * reporting only a generic transport error.
+   */
+  onTransportViolation?: (err: TransportVerificationError) => void;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -125,6 +133,18 @@ export async function createVerifiedTransport(
     ? createVerifiedWebSocketFactory({
         verifiedSpkiSha256,
         createSocket: opts.createWebSocket,
+        // Surface rejections. Without this a gated WebSocket that refuses its
+        // peer is COMPLETELY silent: the stream client sees only a generic
+        // "WebSocket transport error", indistinguishable from a network blip,
+        // and reconnects into the same refusal forever.
+        //
+        // That is not a logging nicety. A relay substituting a certificate on
+        // the stream is the single most security-relevant event this feature
+        // can produce, and it was unobservable — which is exactly why a live
+        // failure could not be diagnosed after the fact.
+        ...(opts.onTransportViolation
+          ? { onViolation: opts.onTransportViolation }
+          : {}),
       })
     : undefined;
 
