@@ -134,6 +134,81 @@ export const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
   return aligned;
 };
 
+/**
+ * The transport every `cvm-*` suite uses (T-03P).
+ *
+ * `DARKNYX_CVM_TRANSPORT=ra-tls` routes through the verified transport: the
+ * enclave's certificate is checked against a quote-bound manifest on the socket
+ * carrying each request. Anything else is the legacy gateway-terminated path.
+ *
+ * This is the single conversion point for all six suites — they all reach the
+ * CVM through `gwFetch` — which is why the cutover is one edit here rather than
+ * six.
+ *
+ * Built lazily and once: establishing the transport costs a TDX quote
+ * (~1.5 s), and a per-request rebuild would both slow the suite and defeat the
+ * point of pinning one verified connection.
+ *
+ * Cached only on SUCCESS. Caching a rejected promise would poison the transport
+ * for the rest of the process — a transient failure during CVM restart would
+ * become permanent, and in tests each case would inherit the first case's
+ * error rather than producing its own.
+ */
+let verifiedFetch: Promise<typeof fetch> | undefined;
+
+function ratlsRequested(): boolean {
+  return process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+}
+
+async function getTransport(): Promise<typeof fetch> {
+  verifiedFetch ??= (async () => {
+    const compose = process.env.DARKNYX_EXPECT_COMPOSE_HASH?.trim();
+    const signers = process.env.DARKNYX_EXPECT_SIGNER_SET?.trim();
+    const gateway = process.env.DARKNYX_TEE_GATEWAY?.trim();
+    // Fail loudly rather than falling back. A cvm suite that silently ran over
+    // the legacy path while the operator believed it was testing ra-tls would
+    // report a green cutover that never happened.
+    if (!gateway) throw new Error("DARKNYX_TEE_GATEWAY is required");
+    if (!compose || !signers) {
+      throw new Error(
+        "DARKNYX_CVM_TRANSPORT=ra-tls requires DARKNYX_EXPECT_COMPOSE_HASH and " +
+          "DARKNYX_EXPECT_SIGNER_SET; without them a verified transport proves " +
+          "a channel to some enclave, not the governed one",
+      );
+    }
+    const { TransportAgent, createVerifiedFetch } = await import(
+      "../../src/tee/transport-agent.node.js"
+    );
+    const { parseEventLog } = await import("../../src/tee/verify-core.js");
+    const { createDcapQuoteVerifier } = await import("../../src/tee/dcap.js");
+    const { randomBytes } = await import("node:crypto");
+    const dcap = createDcapQuoteVerifier({});
+    const agent = new TransportAgent();
+    return createVerifiedFetch({
+      baseUrl: gateway,
+      agent,
+      deps: {
+        verifyQuote: (quoteHex: string) =>
+          dcap(
+            Uint8Array.from(
+              quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+            ),
+          ),
+        parseEventLog,
+        randomNonce: () => new Uint8Array(randomBytes(32)),
+      },
+      expectedComposeHash: compose,
+      expectedSignerSetSha256: Uint8Array.from(
+        signers.match(/../g)!.map((b) => parseInt(b, 16)),
+      ),
+    });
+  })().catch((e: unknown) => {
+    verifiedFetch = undefined; // do not cache a failure
+    throw e;
+  });
+  return verifiedFetch;
+}
+
 /** fetch with retries — the dstack gateway can transiently close the socket
  *  (UND_ERR_SOCKET) for the first minute after a CVM restart. */
 export async function gwFetch(
@@ -141,10 +216,11 @@ export async function gwFetch(
   init?: RequestInit,
   tries = 6,
 ): Promise<Response> {
+  const f = ratlsRequested() ? await getTransport() : fetch;
   let last: unknown;
   for (let i = 0; i < tries; i++) {
     try {
-      return await fetch(url, init);
+      return await f(url, init);
     } catch (e) {
       last = e;
       await new Promise((r) => setTimeout(r, 3000));

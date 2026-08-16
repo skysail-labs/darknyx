@@ -247,6 +247,78 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     console.log("median:", samples[2], "max:", samples[4]);
     expect(samples.length).toBe(5);
   }, 180_000);
+
+  it("records client RSS across repeated verified transports", async () => {
+    // The counterpart to the latency sample. Each verified transport pins a
+    // dedicated dispatcher, a TLS socket, and a WeakMap entry keyed on that
+    // socket. A consumer that reconnects — the daemon does, on every stream
+    // drop — builds one per reconnect, so a retained socket here is an
+    // unbounded leak in the longest-lived process we ship.
+    //
+    // WeakMap keys do not hold the socket alive, so the property under test is
+    // that nothing ELSE does: the agent must be collectable once destroyed.
+    // Reported, not asserted on a threshold — GC timing makes any fixed bound
+    // flaky, and a number in CI output that a human reads beats a green test
+    // that tolerates anything.
+    const rss = () => Math.round(process.memoryUsage().rss / 1024 / 1024);
+
+    // Warm up so one-time module/TLS-context allocation is not counted as growth.
+    for (let i = 0; i < 3; i += 1) {
+      const a = new TransportAgent();
+      await uf(`${URL_}/health`, { dispatcher: a } as never).then((r) => r.text());
+      await a.close();
+    }
+    global.gc?.();
+    const before = rss();
+
+    const ROUNDS = 25;
+    for (let i = 0; i < ROUNDS; i += 1) {
+      const agent = new TransportAgent();
+      const sink: { rd?: string; log?: string } = {};
+      const capturing: typeof fetch = (async (a: never, b: never) => {
+        const r = await uf(a, { ...(b as object), dispatcher: agent } as never);
+        const t = await r.text();
+        try {
+          const parsed = JSON.parse(t) as {
+            report_data: string;
+            event_log: string;
+          };
+          sink.rd = parsed.report_data;
+          sink.log = parsed.event_log;
+        } catch {
+          /* not the attestation response */
+        }
+        return new Response(t, {
+          status: r.status,
+          headers: { "content-type": "application/json" },
+        });
+      }) as never;
+      await verifyTransportOnSocket({
+        baseUrl: URL_,
+        agent,
+        deps: deps(sink),
+        expectedComposeHash: COMPOSE,
+        expectedSignerSetSha256: hex(SIGNERS_HEX),
+        fetchImpl: capturing,
+      });
+      // The consumer contract: a transport that is finished with must be
+      // closed. If this is the line that makes the numbers acceptable, that
+      // is itself the finding to record.
+      await agent.close();
+    }
+    global.gc?.();
+    const after = rss();
+
+    console.log(
+      `client RSS MB: before=${before} after=${after} ` +
+        `delta=${after - before} over ${ROUNDS} verified transports ` +
+        `(${((after - before) / ROUNDS).toFixed(2)} MB/transport)`,
+    );
+    // Only a sanity bound: an order-of-magnitude regression (a retained socket
+    // is ~1 MB of buffers, so 25 rounds would show ~25 MB+) fails, ordinary
+    // heap noise does not.
+    expect(after - before).toBeLessThan(60);
+  }, 180_000);
 });
 
 describe.skipIf(RUN)("RA-TLS live suite", () => {

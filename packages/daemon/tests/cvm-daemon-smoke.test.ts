@@ -32,6 +32,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import WebSocket from "ws";
+import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
+import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
+import { buildDaemonTransport } from "../src/transport.js";
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -133,11 +138,22 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       deriveAccountIdentity(seed, payer.publicKey.toBytes()),
     );
 
+    // T-03P: the transport this run exercises. Defaults to the legacy path so
+    // the smoke keeps working unchanged; set DARKNYX_CVM_TRANSPORT=ra-tls (with
+    // the governance pins) to drive the verified transport instead, which is
+    // what the cutover window runs.
+    const ratls = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
     const config: DaemonConfig = {
       gatewayUrl: GATEWAY,
-      // Legacy path: predates T-03P and exercises the gateway-terminated
-      // transport. Stated rather than defaulted.
-      transportMode: "gateway-terminated" as const,
+      transportMode: ratls ? ("ra-tls" as const) : ("gateway-terminated" as const),
+      ...(ratls
+        ? {
+            expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+            attestation: {
+              composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+            },
+          }
+        : {}),
       gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
       token,
       rpcUrl: RPC,
@@ -154,8 +170,41 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       programId: cfg.vaultProgramId,
     };
     const programId = new PublicKey(cfg.vaultProgramId);
+
+    // Build the transport exactly as bin/daemon.ts does, so this harness
+    // exercises the SAME wiring production uses rather than a parallel one.
+    // Under the legacy mode this yields the ordinary fetch and no WS gate.
+    const transport = await buildDaemonTransport(config, {
+      verifierDeps: {
+        verifyQuote: (quoteHex: string) =>
+          createDcapQuoteVerifier({})(
+            Uint8Array.from(
+              quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+            ),
+          ),
+        parseEventLog,
+        randomNonce: () => new Uint8Array(randomBytes(32)),
+      },
+      ...(ratls
+        ? {
+            createWebSocket: (url: string) =>
+              new WebSocket(url) as unknown as NodeWebSocketLike,
+          }
+        : {}),
+    });
+    console.log(`[smoke] transport: ${transport.mode}`);
+
     daemon = new Daemon({
       config,
+      fetchImpl: transport.fetch,
+      ...(transport.webSocketFactory
+        ? {
+            sendableWebSocketFactory:
+              transport.webSocketFactory as ConstructorParameters<
+                typeof Daemon
+              >[0]["sendableWebSocketFactory"],
+          }
+        : {}),
       keystore,
       store: new DaemonStore(":memory:"),
       prover: nodeValidInputProver({
