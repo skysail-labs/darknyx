@@ -285,7 +285,7 @@ jobs:
           cargo nextest --version
 
       - name: darkpool-crypto unit tests
-        run: cargo nextest run --profile ci -p darkpool-crypto --lib
+        run: cargo test -p darkpool-crypto --lib
 
       # REQUIRED companion to the nextest switch, not a nicety.
       #
@@ -304,7 +304,7 @@ jobs:
       - name: vault lib unit tests
         # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
         # byte-stability) and `test_id` (program-ID sanity).
-        run: cargo nextest run --profile ci -p vault --lib
+        run: cargo test -p vault --lib
 
       # SDK parity tests shell out to these helper binaries via spawnSync.
       # They cross-validate TS Poseidon / note-commitment / nullifier /
@@ -1087,12 +1087,13 @@ jobs:
           # parallelism this change exists to gain. nextest already prints the
           # captured output of FAILING tests, which is what --nocapture was
           # there for.
-          cargo nextest run --profile ci -p vault \
+          cargo test -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
             --test merkle_host \
             --test merkle_fuzz \
-            --test account_layout_fixture
+            --test account_layout_fixture \
+            -- --nocapture
           # NOTE: `merge_verify` is deliberately NOT here. It began as a pure
           # host round-trip target, but it now also drives litesvm (the merge
           # rejection paths), which needs `target/deploy/vault.so` — an
@@ -1184,7 +1185,7 @@ jobs:
         # both vault.so and the circuit artefacts, which is why it cannot live
         # in the proof-only job).
         run: |
-          cargo nextest run --profile ci -p vault \
+          cargo test -p vault \
             --test set_protocol_config \
             --test set_tee_pubkey \
             --test user_commitment_registration \
@@ -1324,7 +1325,7 @@ jobs:
         # `--nocapture` dropped for the same reason as the vault-zk job: it
         # maps to nextest's serial `--no-capture`. This is the job the change
         # is aimed at (462 s, ~290 tests, many loading a proving key).
-        run: cargo nextest run --profile ci -p darknyx-tee --tests
+        run: cargo test -p darknyx-tee --tests -- --nocapture
 
   # ------------------------------------------------------------------
   # Aggregator. Branch protection should require ONLY this status check.
