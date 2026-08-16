@@ -7,8 +7,10 @@
 //! Design record: `docs/transport-integrity-remediation-plan.md` §7;
 //! evidence: `docs/transport-integrity-plan.md`.
 
+pub mod identity;
 pub mod manifest;
 
+pub use identity::{IdentityError, TransportIdentity};
 pub use manifest::{
     ManifestError, TransportManifest, TransportMode, CANONICAL_LEN, DOMAIN, PROTOCOL_VERSION,
 };
