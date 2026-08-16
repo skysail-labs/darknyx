@@ -111,6 +111,7 @@ jobs:
               - 'deploy/**'
               - 'Dockerfile*'
               - 'scripts/check-compose-image-digests.sh'
+              - 'scripts/check-ratls-cutover.sh'
               - 'scripts/check-icicle-cuda-arch-env.sh'
               # And the workflow itself, so an edit that weakens a guard's
               # invocation — or this very filter — runs the guards it affects.
@@ -215,6 +216,12 @@ jobs:
 
       - name: CVM compose image identities are immutable
         run: bash scripts/check-compose-image-digests.sh
+
+      # T-03P: the transport default and the published ports must agree. A
+      # compose that reports ra-tls while still publishing :8080 leaves an
+      # unauthenticated plaintext route open beside the verified one.
+      - name: RA-TLS cutover guard (transport mode vs published ports)
+        run: bash scripts/check-ratls-cutover.sh
 
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
