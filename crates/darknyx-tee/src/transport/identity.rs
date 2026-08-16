@@ -43,6 +43,7 @@
 
 use rcgen::{DistinguishedName, DnType, KeyPair, PKCS_ECDSA_P256_SHA256};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 /// Certificate lifetime in days. See the module note — this bounds nothing
 /// security-relevant; the boot session does.
@@ -68,7 +69,9 @@ pub enum IdentityError {
 /// through a stray `{:?}`.
 pub struct TransportIdentity {
     cert_der: Vec<u8>,
-    key_der: Vec<u8>,
+    /// Scrubbed on drop, including on the early-return paths below where the
+    /// struct is never constructed and so `Drop` would never run.
+    key_der: Zeroizing<Vec<u8>>,
     spki_der: Vec<u8>,
     spki_sha256: [u8; 32],
 }
@@ -113,7 +116,11 @@ impl TransportIdentity {
             .map_err(|e| IdentityError::Certificate(e.to_string()))?;
 
         let cert_der = cert.der().to_vec();
-        let key_der = key_pair.serialize_der();
+        // Wrapped IMMEDIATELY, not at struct construction: the SPKI check
+        // below can return early, and a plain `Vec` would be dropped there
+        // without scrubbing because `Drop for TransportIdentity` only runs on
+        // a value that was actually built.
+        let key_der = Zeroizing::new(key_pair.serialize_der());
 
         // The invariant the manifest depends on: the hash we attest must be of
         // the SPKI actually inside the certificate we serve. A DER SPKI is a
@@ -162,14 +169,12 @@ impl TransportIdentity {
     }
 }
 
-impl Drop for TransportIdentity {
-    fn drop(&mut self) {
-        // Best-effort scrub. `rcgen`/`ring` keep their own copies of the key
-        // material that we cannot reach, so this narrows the window rather than
-        // closing it — stated plainly rather than claimed as zeroization.
-        self.key_der.iter_mut().for_each(|b| *b = 0);
-    }
-}
+// NOTE: no manual `Drop`. `Zeroizing<Vec<u8>>` scrubs `key_der` on drop in a
+// way the compiler may not elide, which the previous hand-rolled
+// `iter_mut(|b| *b = 0)` could be. The caveat that made that scrub
+// "best-effort" still stands and is unchanged by this: `rcgen`/`ring` keep
+// their own copies of the key material that we cannot reach, so this narrows
+// the window rather than closing it.
 
 /// Whole days since the Unix epoch. rcgen wants a calendar date, and computing
 /// it this way keeps the identity path free of a date dependency.

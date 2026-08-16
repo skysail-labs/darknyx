@@ -163,6 +163,11 @@ rand          = { workspace = true }
 # a deterministic key would recreate the very persistence gap this closes
 # (see docs/transport-integrity-plan.md §4).
 rcgen         = { workspace = true }
+# Compiler-resistant scrub for the RA-TLS private key: `iter_mut()` writes can
+# be optimised away, `Zeroizing` cannot. Resolves to the 1.8.2 already in the
+# lock. This is NOT the solana-client/ark-ec zeroize conflict noted above —
+# that is about those two crates, neither of which this binary pulls in.
+zeroize       = "1.8"
 
 # ─── ICICLE GPU/CPU Groth16 prover (the `icicle` feature) ───────────
 # Vendored under third_party/icicle-snark (next to the rapidsnark submodule;

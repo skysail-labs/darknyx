@@ -2654,6 +2654,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "zeroize",
 ]
 
 [[package]]
