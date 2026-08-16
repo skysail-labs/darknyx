@@ -196,6 +196,24 @@ jobs:
           else
             IMAGE="$BUILT_IMAGE"
           fi
+          # Normalise `name:tag@sha256:…` -> `name@sha256:…`.
+          #
+          # tee-image emits the TAGGED digest form (`steps.immutable`:
+          # "${TAGGED_IMAGE}@${DIGEST}"), because the tag is useful provenance.
+          # The committed compose pins the UNTAGGED form, and the validation
+          # below only accepts that. Both are valid OCI references and the
+          # digest is what pins content either way, so the disagreement was
+          # purely a shape mismatch between two workflows — but it failed the
+          # nightly at this step every run, after the job had already built the
+          # image and reset the devnet tree.
+          #
+          # Strip only the tag: `%%@*` takes the repository part, `%:*` drops a
+          # trailing `:tag` (a no-op when absent, and ghcr.io carries no port).
+          if [ "${IMAGE#*@}" != "$IMAGE" ]; then
+            REPO="${IMAGE%%@*}"
+            IMAGE="${REPO%:*}@${IMAGE#*@}"
+          fi
+
           # Full-shape match, not a prefix glob: `@sha256:*` would accept a
           # truncated or trailing-garbage digest, and this value is substituted
           # straight into the compose that compose_hash measures.
