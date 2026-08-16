@@ -113,7 +113,9 @@ pub struct ApiState {
     /// 503 rather than inventing one. Set by `main.rs` via
     /// `with_transport_identity`.
     pub transport_identity: Option<Arc<crate::transport::TransportIdentity>>,
-    /// Global token bucket for `/transport-attestation`. That route is
+    /// Global fixed-window counter for `/transport-attestation` (NOT a token
+    /// bucket — see its definition; the window hard-resets, so up to 2x the
+    /// ceiling can cross a boundary). That route is
     /// necessarily pre-auth — a client must verify the transport before it
     /// sends a credential — and each call costs a TDX quote, so it is the one
     /// unauthenticated surface that needs its own ceiling.

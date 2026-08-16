@@ -62,10 +62,26 @@ use crate::transport::{TransportManifest, TransportMode};
 /// connection, so a low global ceiling is generous for real use and hostile to
 /// a flood. Deliberately not per-IP — behind the dstack gateway every request
 /// shares a source address, so per-IP buckets would be security theatre here.
+/// Bound on the unauthenticated `dstack.get_quote` call.
+///
+/// Generous relative to a healthy quote (~100 ms locally, ~1.5 s through the
+/// gateway) because the cost of being too tight is a spurious 503 on a route
+/// clients must succeed on before they can do anything else.
+const QUOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const RATE_LIMIT_PER_WINDOW: u32 = 20;
 
-/// Fixed-capacity token bucket over a 1-second window.
+/// Fixed-WINDOW counter over 1 second — deliberately not a token bucket.
+///
+/// The distinction is behavioural, not pedantic: the window hard-resets, so a
+/// client can spend the whole allowance at the end of one window and the whole
+/// allowance at the start of the next, admitting up to 2x the ceiling across a
+/// boundary. A token bucket would smooth that. This is acceptable here because
+/// the ceiling exists to bound TDX quote work, not to enforce a precise rate,
+/// and 2x a deliberately generous bound is still bounded — but the comment
+/// used to say "token bucket", which described burst behaviour the code does
+/// not have.
 #[derive(Debug)]
 pub struct TransportAttestationRateLimiter {
     inner: Mutex<RateWindow>,
@@ -168,18 +184,19 @@ pub async fn handler(
     State(state): State<Arc<ApiState>>,
     Query(params): Query<TransportAttestationParams>,
 ) -> Result<Json<TransportAttestationResponse>, super::error::ApiError> {
-    // 1. Rate limit first — before any parsing or quote work, so a flood costs
-    //    us a mutex rather than a TDX round-trip.
-    if !state.transport_rate_limiter.admit(Instant::now()) {
-        return Err(super::error::ApiError::from((
-            StatusCode::TOO_MANY_REQUESTS,
-            "transport attestation rate limit exceeded".to_string(),
-        )));
-    }
-
-    // 2. Validate the caller's input BEFORE inspecting service state.
+    // 1. Validate the caller's input BEFORE charging the limiter.
+    //
+    //    The limiter used to be charged first, on the reasoning that a flood
+    //    should cost a mutex rather than a TDX round-trip. That is right about
+    //    quote cost and wrong about availability: parsing 64 hex characters is
+    //    cheaper still, so charging before it let a flood of `?nonce=zz`
+    //    consume the entire global allowance and deny honest clients the ONE
+    //    pre-auth call they must make before they can do anything else. A
+    //    malformed request now costs the attacker a 400 and costs the budget
+    //    nothing.
     //
     //    Order matters, and getting it backwards was a real defect caught by
+    //    `nonce_hex_is_checked_before_the_identity_is_required` and
     //    `nonce_length_is_checked_before_the_identity_is_required`: a client
     //    that sends a malformed nonce should be told its request is wrong
     //    (400), not that the service is down (503). Validating first is also
@@ -205,6 +222,16 @@ pub async fn handler(
         return Err(super::error::ApiError::malformed(format!(
             "nonce must be exactly 32 bytes, got {}",
             nonce.len()
+        )));
+    }
+
+    // 2. Charge the limiter now that the request is known well-formed. From
+    //    here on the work is genuinely expensive (a TDX quote), which is what
+    //    the budget exists to protect.
+    if !state.transport_rate_limiter.admit(Instant::now()) {
+        return Err(super::error::ApiError::from((
+            StatusCode::TOO_MANY_REQUESTS,
+            "transport attestation rate limit exceeded".to_string(),
         )));
     }
 
@@ -244,13 +271,27 @@ pub async fn handler(
     })?;
 
     // 5. Mint the quote.
-    let quote = dstack.get_quote(report_data.to_vec()).await.map_err(|e| {
-        tracing::error!(error = %e, "transport attestation: dstack get_quote failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal error".to_string(),
-        )
-    })?;
+    // The dstack client has no default timeout, and this route is
+    // unauthenticated. Without a bound, a hung socket pins an admitted handler
+    // task indefinitely — the rate limiter caps admissions per second, not
+    // concurrency or lifetime, so a stalled backend converts a bounded request
+    // rate into unbounded retained tasks.
+    let quote = tokio::time::timeout(QUOTE_TIMEOUT, dstack.get_quote(report_data.to_vec()))
+        .await
+        .map_err(|_| {
+            tracing::error!("transport attestation: dstack get_quote timed out");
+            super::error::ApiError::from((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "attestation backend timed out".to_string(),
+            ))
+        })?
+        .map_err(|e| {
+            tracing::error!(error = %e, "transport attestation: dstack get_quote failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error".to_string(),
+            )
+        })?;
 
     Ok(Json(TransportAttestationResponse {
         manifest: TransportManifestWire {

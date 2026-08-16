@@ -1620,8 +1620,14 @@ paths:
       responses:
         '400':
           description: Nonce missing, non-hex, or not exactly 32 bytes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429': { $ref: '#/components/responses/PublicRateLimited' }
         '503':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
           description: |
             RA-TLS transport is not enabled on this instance (legacy
             gateway-terminated deployment), or the dstack socket is

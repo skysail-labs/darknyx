@@ -100,12 +100,27 @@ async fn an_over_long_nonce_is_rejected() {
 }
 
 #[tokio::test]
-async fn nonce_length_is_checked_before_the_identity_is_required() {
+async fn nonce_hex_is_checked_before_the_identity_is_required() {
     // Ordering matters for the error a client sees. A malformed nonce should
     // read as a client error (400), not as "service unavailable" (503), even
     // when RA-TLS happens to be off — otherwise a client debugging its own bug
     // is told the server is down.
+    //
+    // `zz` fails HEX DECODING, so this pins hex-before-identity only. The
+    // length check sits after it and needs its own case below; naming this one
+    // "length" made the handler cite a guard that did not exist.
     let resp = get("/transport-attestation?nonce=zz").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn nonce_length_is_checked_before_the_identity_is_required() {
+    // The case the previous test was mistakenly credited with. This nonce is
+    // VALID hex, so it passes the decode and reaches the length check — which
+    // is the branch that must still return 400 rather than 503 when RA-TLS is
+    // off. Without this, moving the identity lookup above the length check
+    // would go unnoticed.
+    let resp = get("/transport-attestation?nonce=abcd").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
