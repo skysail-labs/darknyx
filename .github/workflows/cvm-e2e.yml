@@ -171,7 +171,29 @@ jobs:
         run: |
           umask 077
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+
+          # Per-window CVM credentials.
+          #
+          # The compose carries public `darknyx-test-*` defaults, and the test
+          # harness deliberately REFUSES them for a live run
+          # (`cvm-harness.ts::cvmCredential` throws when RUN_CVM_E2E=1 and the
+          # variable is unset) — a live suite authenticating with credentials
+          # published in the repo would be testing an access path no real
+          # deployment has. So generate a fresh set, inject them through the
+          # ENCRYPTED deploy env, and hand the same values to the test steps.
+          #
+          # Masked before they are used anywhere, so a later step that echoes
+          # its environment cannot print them.
+          API_KEY="darknyx-ci-$(openssl rand -hex 16)"
+          API_SECRET="$(openssl rand -hex 32)"
+          PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+          echo "::add-mask::$API_KEY"
+          echo "::add-mask::$API_SECRET"
+          echo "::add-mask::$PASSPHRASE"
           {
+            echo "DARKNYX_TEE_API_KEY=$API_KEY"
+            echo "DARKNYX_TEE_API_SECRET=$API_SECRET"
+            echo "DARKNYX_TEE_PASSPHRASE=$PASSPHRASE"
             echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
             echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
@@ -183,6 +205,16 @@ jobs:
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
           } > /tmp/darknyx.env
+
+          # The test steps need the SAME credentials the CVM was given — the
+          # harness authenticates with them. This is the half that was missing:
+          # the CVM had credentials, the suites did not, so every live run died
+          # at "DARKNYX_TEE_API_KEY is required for live CVM tests".
+          {
+            echo "DARKNYX_TEE_API_KEY=$API_KEY"
+            echo "DARKNYX_TEE_API_SECRET=$API_SECRET"
+            echo "DARKNYX_TEE_PASSPHRASE=$PASSPHRASE"
+          } >> "$GITHUB_ENV"
 
       - name: Select the image to deploy (built-from-main, or the dispatch override)
         env:
