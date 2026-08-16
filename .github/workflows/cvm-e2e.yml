@@ -459,6 +459,17 @@ jobs:
             umask 077
             FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
             {
+              # The SAME per-window credentials the initial deploy used.
+              #
+              # Omitting them here did two things: the redeployed CVM fell back
+              # to the compose's public `darknyx-test-*` defaults while the test
+              # steps still carried the generated ones, and — because the set of
+              # env KEYS differs between the two deployments — the app-compose
+              # differed, which moves compose_hash and made every tree-consuming
+              # test fail `compose_mismatch`.
+              echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
+              echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
+              echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
               echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
               echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
               echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
@@ -496,6 +507,31 @@ jobs:
               sleep 6
             done
             [ "$READY" = 1 ] || { echo "::error::CVM did not come back after redeploy for $T"; exit 1; }
+
+            # RE-READ the governance pins after EVERY redeploy.
+            #
+            # The pins captured once before this loop describe the deployment
+            # that was live THEN. This helper redeploys the CVM before each
+            # test, so a pin read earlier can describe a different enclave —
+            # and the client correctly refuses with `compose_mismatch`, which
+            # is what failed all four tree-consuming tests.
+            #
+            # That refusal is the transport working, not a bug: it is exactly
+            # the check that stops a client talking to an enclave other than
+            # the one its governance pins name. The fix is to re-pin, never to
+            # relax the check.
+            NONCE=$(openssl rand -hex 32)
+            curl -fsSk --max-time 40 \
+              "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta.json
+            DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+                              | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta.json)
+            DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta.json)
+            export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
+            printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+              || { echo "::error::bad compose hash after redeploy for $T"; exit 1; }
+            printf '%s' "$DARKNYX_EXPECT_SIGNER_SET" | grep -qE '^[0-9a-f]{64}$' \
+              || { echo "::error::bad signer set after redeploy for $T"; exit 1; }
+            echo "re-pinned: compose=$DARKNYX_EXPECT_COMPOSE_HASH"
           }
           FAILED=""
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
