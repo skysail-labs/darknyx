@@ -285,6 +285,53 @@ in CLAUDE.md.
 
 ---
 
+### 8. RA-TLS client concurrency — `connections: 1` is a per-client ceiling 🟡
+
+**Gate: 🟡 real volume.** Not on the settle critical path today; deferred until
+a workload actually needs it.
+
+`packages/sdk/src/tee/transport-agent.node.ts` pins the verified transport to
+`connections: 1, pipelining: 1`:
+
+> One connection: with a pool, the attestation exchange and the request that
+> follows can land on different sockets, which is the gap this exists to close.
+
+Two measured consequences:
+
+* **Requests from one client serialise.** Observed live during the T-03P
+  cutover: `cvm-api-surface`'s 300 "concurrent" requests became a queue, which
+  is why that suite's rate-limit flood is now ra-tls aware.
+* **Connection establishment is ~1.4 s**, not ~50 ms, because it includes a real
+  TDX `get_quote`. Measured medians across three windows: **1349 / 1413 /
+  1517 ms**. Paid on every new connection, including reconnects.
+
+**Why it costs nothing today.** The settle path is dominated by proving:
+measured with RA-TLS active, `prove_ms=3395`, `settle_ms=5140`,
+`total_ms=10383` — in line with the pre-RA-TLS baseline, i.e. **the transport
+adds nothing measurable to settle**. And the daemon's hot path is the
+multiplexed `/v1/stream` WebSocket: one long-lived connection carrying fills,
+order updates and acks, so the 1.4 s is paid once per session and `connections:
+1` never binds. Streaming is the best case for this design, not the worst.
+
+**When it would bind:** many short-lived REST calls from one client, or a client
+wanting parallel in-flight requests. Also **many simultaneous browser clients**
+— each verified connection costs one TDX quote, which is why
+`/transport-attestation` is priced at 10.0 in the public rate limiter. That is
+a real argument for the B2 HPKE channel over per-connection RA-TLS in T-03B,
+since a quote-bound application channel can amortise one attestation across
+many sessions.
+
+**The fix, when the gate lifts.** `connections: 1` is an implementation choice,
+not inherent to RA-TLS. It exists because undici exposes no per-response socket
+attribution, so pinning to one socket is how "the socket that was verified is
+the socket carrying the request" is currently guaranteed. Verifying EACH socket
+in a pool at connect time restores parallelism at ~1.4 s per socket while
+keeping the property. Bounded work, not a redesign.
+
+**Do NOT reach for reverting to the gateway-terminated transport to solve this.**
+That trades the plaintext hop back (reopening T-03P) for throughput that this
+item buys without it. See `transport-integrity-plan.md` §5.5.
+
 ## Related, separate track (not settle-throughput, but the other proving gate)
 
 - **Client-side `VALID_INPUT` proving (~40 s, snarkjs in-browser).** The order-placement UX killer; an

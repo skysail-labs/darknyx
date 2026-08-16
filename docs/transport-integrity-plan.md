@@ -293,6 +293,111 @@ build.
 
 ---
 
+## 5.4 zt-https ("Zero-Trust HTTPS") — evaluated 2026-08-16, does not displace RA-TLS **[CODE]**
+
+Raised after the cutover, from Phala's Turbine post and the domain-attestation
+docs. Recording it because the name recurs and the conclusion is not obvious.
+
+**It is zero-TRUST, not zero-knowledge.** No ZK proofs are involved. The
+artifact prefix in the source is literally `zt-cert:`.
+
+**The primitive** (`dstack/gateway/src/distributed_certbot.rs:443`):
+
+```rust
+let report_data = QuoteContentType::Custom("zt-cert").to_report_data(public_key_der);
+// = sha512("zt-cert:" ‖ public_key_der), TDX-quoted
+```
+
+It proves the TLS certificate's private key was generated inside a TEE. Around
+it sit **CAA records** locking the domain to a TEE-held ACME account and **CT
+logs** making issuance auditable; `dstack/ct_monitor/` automates checking every
+observed certificate's key against a quote.
+
+**The distinction that decides everything is WHOSE TEE holds the key.**
+
+| Flavour | Key location | Effect on T-03 |
+|---|---|---|
+| Gateway domain (`*.dstack-pha-*`) | **Phala's gateway TEE** | Makes the untrusted hop *accountable*; does NOT remove it. The gateway still terminates TLS (`gateway/src/proxy/tls_terminate.rs`) and sees plaintext order intent |
+| Custom domain + `dstack-ingress` | **our CVM** | Would remove the hop — this is the "B1 attested ingress" path |
+
+**B1 remains NO-GO. Three independent blockers, two re-confirmed at v0.5.9:**
+
+1. **Governance** — `kms_type = phala`, `dstack_app_address = null`: the compose
+   allowlist gating key release is Phala's, not ours (§6.3.1). Unchanged.
+2. **DNS** — `dstack/certbot/src/dns01_client/` contains exactly ONE provider,
+   `cloudflare.rs`. Our DNS is GoDaddy. This is what originally disqualified
+   ingress and it is still true; now verified in source rather than recalled.
+3. **Freshness** — ingress evidence is a static file on a mounted volume
+   (`evidences:/evidences:ro`) written at issuance. No nonce, no live challenge.
+
+**Comparison with what shipped:**
+
+| | zt-https | our RA-TLS |
+|---|---|---|
+| Binding | `sha512("zt-cert:"‖pubkey)` | `nonce ‖ SHA-256(DOMAIN‖manifest)` — SPKI + signer set + boot session |
+| Freshness | none (static evidence) | per-request nonce |
+| Certificate | publicly trusted (Let's Encrypt) | self-signed, quote-verified |
+| Audit trail | CAA + CT logs | governance pins |
+
+Ours is stronger on binding and freshness. **zt-https is stronger on exactly one
+thing we lack: a publicly-trusted certificate**, which is why it matters for
+browsers and not for the daemon. A browser cannot accept our self-signed
+enclave certificate; a Node client verifies SPKI-against-quote instead of a CA
+chain and does not care.
+
+**This strengthens B2 rather than reopening B1** — the browser half still needs
+either a public certificate (blocked, above) or the quote-bound HPKE
+application channel already chosen.
+
+**Worth borrowing regardless, for Phase 4 / T-03B:** CAA pinning once the
+browser trader has a real domain (it is the control that stops someone with DNS
+access minting a valid certificate), and CT-log monitoring of any
+browser-facing domain, for which `ct_monitor` is a working reference.
+
+## 5.5 Reverting to the gateway-terminated path **[CODE]**
+
+Kept deliberately. The legacy mode is NOT dead code — it is the documented
+revert path, which is why its removal was deferred rather than bundled into the
+cutover.
+
+**What to change (both, together):**
+
+1. `deploy/docker-compose.yaml` — `DARKNYX_TEE_TRANSPORT_MODE` default back to
+   `gateway-terminated`, and restore the `"8080:8080"` publication.
+2. Nothing else. `scripts/check-ratls-cutover.sh` FAILS the build unless those
+   two move together, in either direction — that pairing is the whole point of
+   the guard.
+
+**What happens in the enclave** (`crates/darknyx-tee/src/main.rs:583`):
+`gateway-terminated` yields `transport_identity = None`, so ONLY the plaintext
+listener runs, `/transport-attestation` disappears, and the `-8443s.` route goes
+dark. It is a clean total switch, not a partial state.
+
+**What each consumer does, with no code change:**
+
+| Consumer | Mechanism | Result |
+|---|---|---|
+| daemon | `transportMode: "gateway-terminated"` | `buildDaemonTransport` returns global fetch, no WS gate |
+| trader-host | `DARKNYX_TRADER_CVM_TRANSPORT` unset or `gateway-terminated` | `buildCvmFetch` returns `undefined` → legacy |
+| `cvm-*` suites | `DARKNYX_CVM_TRANSPORT` unset | `gwFetch` selects plain fetch |
+| SDK entry points | callers pass `globalThis.fetch` explicitly | the designed legacy path after the required-`fetchImpl` change |
+
+`scripts/check-cvm-suites-use-transport.sh` still passes: it rejects a
+*hardcoded* `gateway-terminated` in a suite, not the env-selected one.
+
+**The honest caveat.** The revert is CODE-clean but not EVIDENCE-clean. After
+the cutover nothing exercises the legacy path in CI, so "it works" rests on the
+code paths existing rather than on a green run. An unexercised revert path
+degrades into a hope — `cvm-daemon-lifecycle` was structurally unrunnable for
+weeks in exactly that way. If the revert is to stay trustworthy, something must
+run it periodically.
+
+**And be clear about what reverting costs:** it reopens T-03P. Order intent
+becomes visible in plaintext to a Phala-operated gateway TEE. If the motivation
+is throughput rather than compatibility, see the `connections: 1` item in
+`throughput-roadmap.md` first — that is the cheaper lever and it does not give
+the property back.
+
 ## 6. Claims: what survived, what was disproved
 
 ### 6.1 Survived — gateway routing is attestation-bound **[CODE]**
