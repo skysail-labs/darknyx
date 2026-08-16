@@ -18,6 +18,7 @@ pub mod oracle;
 pub mod prover;
 pub mod settle;
 pub mod solana_rpc;
+pub mod transport;
 pub mod verify;
 
 /// A-3 — test-only reader for the vault's generated account-layout fixture.
