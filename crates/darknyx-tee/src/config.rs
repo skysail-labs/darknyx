@@ -83,7 +83,19 @@ impl TransportModeConfig {
     /// believing they enabled the stronger one.
     pub fn from_env() -> anyhow::Result<Self> {
         let raw = match std::env::var("DARKNYX_TEE_TRANSPORT_MODE") {
-            Err(_) => return Ok(Self::GatewayTerminated),
+            Err(std::env::VarError::NotPresent) => return Ok(Self::GatewayTerminated),
+            // NOT `Err(_)`. `VarError::NotUnicode` means the variable IS set —
+            // the operator asked for something — and lumping it in with "unset"
+            // silently selects the weaker transport for a value that was
+            // probably meant to be `ra-tls`. That is the exact fail-open this
+            // function's doc comment promises not to do for a typo, and a
+            // non-UTF-8 value deserves the same treatment as an unrecognised
+            // one.
+            Err(e @ std::env::VarError::NotUnicode(_)) => anyhow::bail!(
+                "DARKNYX_TEE_TRANSPORT_MODE is set but not valid UTF-8 ({e}); \
+                 expected \"ra-tls\" or \"gateway-terminated\". Refusing to start \
+                 rather than silently falling back to the legacy transport."
+            ),
             Ok(v) => v,
         };
         let v = raw.trim();

@@ -140,6 +140,18 @@ async fn a_client_sees_exactly_the_attested_spki_on_the_wire() {
     // attested SPKI inside the observed certificate is the equality under test.
     let observed_cert = chain[0].as_ref();
     let spki = identity.spki_der();
+
+    // Identity first, THEN the SPKI relationship. A substring check alone does
+    // not prove the received certificate uses this SPKI as its
+    // SubjectPublicKeyInfo — a substituted certificate could carry the expected
+    // DER bytes in an extension and still satisfy it. Comparing the whole
+    // certificate is what rules that out; the substring assertion below then
+    // means what it says.
+    assert_eq!(
+        observed_cert,
+        identity.certificate_der(),
+        "the client received a different certificate than the one we serve"
+    );
     assert!(
         observed_cert.windows(spki.len()).any(|w| w == spki),
         "the attested SPKI is not present in the certificate the client received"
