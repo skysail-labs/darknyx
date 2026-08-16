@@ -70,6 +70,35 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+/**
+ * Leak guard: under `ra-tls`, NOTHING may reach the CVM on global `fetch`.
+ *
+ * Every CVM-bound call is supposed to go through the verified transport, but
+ * "supposed to" is not a property — the SDK's client helpers each default to
+ * `globalThis.fetch` when no `fetchImpl` is supplied, so a single missing
+ * argument silently downgrades one call while the run still reports
+ * `transport: ra-tls`. That is precisely what happened to the order POST.
+ *
+ * Recording the URLs rather than throwing keeps the failure legible: the test
+ * asserts on the collected list at the end, so the message names the exact
+ * endpoint that bypassed the transport instead of surfacing as a TLS error
+ * from somewhere deep in a library.
+ */
+const transportLeaks: string[] = [];
+{
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: never, init: never) => {
+    const url = String((input as { url?: string })?.url ?? input);
+    if (
+      process.env.DARKNYX_CVM_TRANSPORT === "ra-tls" &&
+      url.startsWith(process.env.DARKNYX_TEE_GATEWAY ?? "\u0000")
+    ) {
+      transportLeaks.push(url);
+    }
+    return original(input, init);
+  }) as typeof fetch;
+}
+
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 
@@ -242,8 +271,16 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
         client: createDaemonClient({ programId, rpcUrl: RPC, payer, keystore }),
       }),
       depositor: payer.publicKey,
-      // REST placer keeps the smoke simple (no warm-socket reconnect to reason about).
-      placer: new RestOrderPlacer({ baseUrl: GATEWAY, token }),
+      // REST placer keeps the smoke simple (no warm-socket reconnect to reason
+      // about). It MUST be given the transport's fetch: `placeOrder` defaults
+      // to global fetch, so omitting it sent the order POST — the single most
+      // sensitive call the daemon makes — over an unverified connection. The
+      // leak guard below is what caught that.
+      placer: new RestOrderPlacer({
+        baseUrl: GATEWAY,
+        token,
+        fetchImpl: transport.fetch,
+      }),
     });
   });
 
@@ -332,6 +369,15 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     console.log(`  · GET /orders/${orderId.slice(0, 8)} -> ${got.status}`);
+
+    // The guard, asserted last so it covers the WHOLE flow: attestation,
+    // deposit, place, and the read-backs. Under ra-tls every one of those must
+    // have travelled on the verified transport.
+    expect(
+      transportLeaks,
+      `these CVM calls bypassed the verified transport and used global fetch:\n  ` +
+        transportLeaks.join("\n  "),
+    ).toEqual([]);
 
     daemon.stop();
   }, 180_000);
