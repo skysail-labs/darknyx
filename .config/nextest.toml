@@ -56,3 +56,34 @@ slow-timeout = { period = "120s", terminate-after = 4 }
 # every binary listed here.
 filter = 'binary(merkle_host) + binary(merkle_fuzz) + binary(smoke)'
 slow-timeout = { period = "120s", terminate-after = 4 }
+
+# ---------------------------------------------------------------------------
+# CI profile — `cargo nextest run --profile ci`.
+#
+# The default profile's `threads-required = 4` is a MEMORY bound tuned for an
+# 8-core dev machine. On a 2-core CI runner it is actively harmful: 4 required
+# threads is more than the whole pool, so nextest runs each heavy binary
+# strictly one at a time AND lets nothing else run beside it. `cargo test`, by
+# contrast, threads *within* a binary and so still got 2-way parallelism there.
+#
+# Measured on this repo's runners (warm cache), default profile vs `cargo test`:
+#   rust  72s -> 161s | vault-zk 157s -> 146s
+#   tee  462s -> 521s | vault-litesvm 150s -> 138s
+# i.e. ~15% SLOWER overall — the regression this profile exists to remove.
+#
+# Memory is not the binding constraint on the runner it appeared to be: two
+# concurrent provers hold ~2 x 130 MB of proving key against several GB of RAM.
+# So CI drops the thread reservation and keeps only the timeouts.
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 10 }
+# Print the captured output of failures immediately; this is what replaces the
+# `--nocapture` the jobs used to pass (nextest's own `--no-capture` would force
+# test-threads=1 and re-serialise everything).
+failure-output = "immediate"
+fail-fast = false
+
+[[profile.ci.overrides]]
+# Same binaries as the default profile's memory cap, but WITHOUT
+# `threads-required`: they only need a longer timeout here, not a reservation.
+filter = 'binary(prover_roundtrip) + binary(n16_assemble_prove_verify) + binary(prove_throughput_bench) + binary(valid_input_intake_verify) + binary(rapidsnark_roundtrip) + binary(match_batch_verify) + binary(zk_roundtrip) + binary(zk_spend_roundtrip) + binary(deposit_with_proof) + binary(merge_verify) + binary(user_commitment_registration) + binary(merkle_host) + binary(merkle_fuzz) + binary(smoke)'
+slow-timeout = { period = "180s", terminate-after = 4 }
