@@ -268,9 +268,16 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          # First cold boot on a fresh CVM includes a full ~GB image pull, so give
-          # it up to ~10 min. (Warm redeploys in the tree-loop are much faster.)
-          for i in $(seq 1 60); do
+          # First cold boot includes a full ~GB image pull. The nightly builds a
+          # NEW image every run, so the host has never cached it — this is
+          # always the slow path, never the warm one.
+          #
+          # Raised 60 -> 120 (10 -> 20 min) after the first run that ever
+          # reached this step timed out at exactly 600 s while the enclave was
+          # in fact still starting, and came up shortly after. Earlier runs
+          # never got this far, so the budget had never been exercised against
+          # a genuinely fresh image.
+          for i in $(seq 1 120); do
             # -k: the enclave serves its OWN boot-scoped certificate, so there
             # is no CA chain to validate. This is a LIVENESS probe only — the
             # security check is the SPKI-against-quote verification the test
@@ -280,7 +287,25 @@ jobs:
               echo "CVM healthy after ~$((i*10))s"; jq -e -r '.tee_pubkey' /tmp/info.json > /dev/null; break
             fi
             sleep 10
-            [ "$i" = 60 ] && { echo "::error::CVM did not become healthy at $GATEWAY"; exit 1; }
+            if [ "$i" = 120 ]; then
+              # Dump the enclave's own boot log before failing.
+              #
+              # Without this the step reports only "did not become healthy" and
+              # the cleanup step then STOPS the CVM, so the reason is gone by
+              # the time anyone looks — the failure is undiagnosable after the
+              # fact. Under `ra-tls` the boot can fail closed on purpose
+              # (TransportIdentity::generate refuses to fall back to
+              # plaintext), and that is exactly the line worth seeing.
+              echo "::group::enclave boot log (last 120 lines)"
+              phala cvms logs "$CVM" 2>&1 | tail -120 || echo "(logs unavailable)"
+              echo "::endgroup::"
+              echo "::group::route probes"
+              echo "-8443s (RA-TLS, -k):  $(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$GATEWAY/info" || true)"
+              echo "-8080  (plaintext):   $(curl -s  -o /dev/null -w '%{http_code}' --max-time 20 "${GATEWAY/-8443s./-8080.}/info" || true)"
+              echo "::endgroup::"
+              echo "::error::CVM did not become healthy at $GATEWAY"
+              exit 1
+            fi
           done
 
       # T-03P: every cvm-* suite runs over the VERIFIED transport, which needs
