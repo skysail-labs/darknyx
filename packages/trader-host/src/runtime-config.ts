@@ -143,8 +143,23 @@ function assertKnownEnvironment(env: NodeJS.ProcessEnv): void {
   }
 }
 
+/** Non-environment inputs a deployment supplies in code. */
+export interface TraderHostRuntimeOptions {
+  /**
+   * `fetch` for every CVM-bound request (T-03P). Supply the verified transport
+   * from `@darknyx/sdk/transport-node` to bind each upstream enclave request to
+   * an attested certificate on the socket carrying it.
+   *
+   * Not an environment variable, because building it requires a DCAP verifier
+   * and governance pins that belong to the deployment rather than to a string.
+   * Unset is the legacy gateway-terminated path.
+   */
+  cvmFetch?: typeof fetch;
+}
+
 export async function loadTraderHostRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env,
+  options?: TraderHostRuntimeOptions,
 ): Promise<TraderHostRuntimeConfig> {
   assertKnownEnvironment(env);
   const origin = required(env, "DARKNYX_TRADER_ORIGIN");
@@ -184,8 +199,16 @@ export async function loadTraderHostRuntimeConfig(
     1_000,
     60_000,
   );
+  // T-03P: one fetch for every CVM-bound path — the proxy, the token issuer,
+  // and account provisioning. A deployment supplies the verified transport
+  // from `@darknyx/sdk/transport-node`; unset is the legacy
+  // gateway-terminated path. Threading it in ONE place is deliberate: three
+  // separate opt-ins is how one of them ends up unverified.
+  const cvmFetch = options?.cvmFetch;
+
   const resolveCredentials = createProvisioningCredentialResolver({
     gatewayUrl: gateway,
+    ...(cvmFetch ? { fetchImpl: cvmFetch } : {}),
     storePath: accountStore,
     encryptionKey,
     adminCredentials: admin,
@@ -210,9 +233,11 @@ export async function loadTraderHostRuntimeConfig(
         gatewayUrl: gateway,
         resolveCredentials,
         requestTimeoutMs: proxyTimeoutMs,
+        ...(cvmFetch ? { fetchImpl: cvmFetch } : {}),
       }),
       gatewayUpstreamUrl: gateway,
       rpcUpstreamUrl: rpc,
+      ...(cvmFetch ? { cvmFetch } : {}),
       proxyTimeoutMs,
       maxProxyRequestsPerMinute: integer(
         env,

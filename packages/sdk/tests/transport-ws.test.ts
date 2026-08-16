@@ -93,7 +93,13 @@ describe("createVerifiedWebSocketFactory — send gating", () => {
     ws.send('{"login":"bearer-token"}');
     expect(f.sent).toEqual([]); // still queued — nothing on the wire yet
 
+    // `ws` emits `upgrade` while the socket is still CONNECTING, so passing
+    // the certificate check is NOT yet permission to write — `inner.send()`
+    // would throw. The frame must stay queued until `open`.
     f.emit("upgrade", f.peer(SPKI));
+    expect(f.sent).toEqual([]); // verified, but not yet writable
+
+    f.emit("open");
     expect(f.sent).toEqual(['{"login":"bearer-token"}']); // flushed, in order
   });
 
@@ -133,6 +139,8 @@ describe("createVerifiedWebSocketFactory — send gating", () => {
     ws.send("b");
     ws.send("c");
     f.emit("upgrade", f.peer(SPKI));
+    expect(f.sent).toEqual([]); // verified, still CONNECTING
+    f.emit("open");
     expect(f.sent).toEqual(["a", "b", "c"]);
   });
 
@@ -144,6 +152,7 @@ describe("createVerifiedWebSocketFactory — send gating", () => {
     });
     const ws = factory("wss://example/v1/stream");
     f.emit("upgrade", f.peer(SPKI));
+    f.emit("open");
     ws.send("later");
     expect(f.sent).toEqual(["later"]);
   });
@@ -162,10 +171,14 @@ describe("createVerifiedWebSocketFactory — open and message gating", () => {
     const onOpen = vi.fn();
     ws.addEventListener("open", onOpen);
 
-    f.emit("open");
+    // Real `ws` ordering: `upgrade` always precedes `open`. Passing the
+    // certificate check alone must NOT surface open, because the socket is
+    // still CONNECTING and any frame the caller sends from its open handler
+    // would throw.
+    f.emit("upgrade", f.peer(SPKI));
     expect(onOpen).not.toHaveBeenCalled();
 
-    f.emit("upgrade", f.peer(SPKI));
+    f.emit("open");
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
@@ -183,6 +196,7 @@ describe("createVerifiedWebSocketFactory — open and message gating", () => {
     expect(onMessage).not.toHaveBeenCalled();
 
     f.emit("upgrade", f.peer(SPKI));
+    f.emit("open");
     f.emit("message", "after");
     expect(onMessage).toHaveBeenCalledTimes(1);
   });

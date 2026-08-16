@@ -281,13 +281,17 @@ phase table unless an already-open branch owns that exact work.
 | 1b | `remediation/transport-ratls-identity` | 1a | Boot-random, never-persisted TLS identity; SPKI proven present in the served certificate | **Code complete** — PR #144 open, unmerged. Local gate green; SPKI guard mutation-tested |
 | 1c | `remediation/transport-ratls-listener` | 1b | `/transport-attestation` route, `ApiState` wiring, OpenAPI | **Code complete** — PR open, unmerged. Route + state + OpenAPI landed; **the rustls bind itself moved to 1d** (see below) |
 | 1d | `remediation/transport-ratls-bind` | 1c | rustls `ServerConfig`, `DARKNYX_TEE_TRANSPORT_MODE` config, `main.rs` listener, fail-closed startup | **Code complete** — PR open, unmerged. TLS 1.3-only listener behind `DARKNYX_TEE_TRANSPORT_MODE=ra-tls`; real-handshake tests prove the attested SPKI is what a client observes. **Phase 1 code is now complete; closure still needs the Phase 3 live run** |
-| 2 | split into 2a/2b below | Phase 1 | Shared actual-socket verifier used by SDK/daemon/loadgen/trader-host | **In progress** |
+| 2 | split into 2a–2e below | Phase 1 | Shared actual-socket verifier used by SDK/daemon/trader-host (**not** loadgen — see the §8.3 correction) | **Code complete** — all five layers submitted and unmerged. Not `Closed`: §9.3 closure names live evidence |
 | 2a | `remediation/transport-verify-core` | 1d | Environment-neutral transport verification core; every check has a failing test | **Code complete** — PR open, unmerged |
 | 2b | `remediation/transport-node-adapter` | 2a | Node actual-socket adapter: per-socket SPKI capture, single-socket pool, verified-fetch gate | **Code complete** — PR open, unmerged |
 | 2c | `remediation/transport-consumers` | 2b | Verified WebSocket gate: sends queued until the upgrade socket is checked, discarded on failure | **Code complete** — PR open, unmerged |
 | 2d | `remediation/transport-consumer-wiring` | 2c | `createVerifiedTransport` — one call returning HTTP + WS transports bound to the same verified identity | **Code complete** — PR open, unmerged |
-| 2e | `remediation/transport-consumer-adoption` | 2d | daemon + trader-host adopt `createVerifiedTransport`; config plumbing | Open — not started |
-| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | Open |
+| 2e | `remediation/transport-consumer-adoption` | 2d | Daemon transport selection + config, `@darknyx/sdk/transport-node` subpath, **and trader-host upstream adoption** | **Code complete** — PR open, unmerged. 2f was folded in here rather than split: the remaining work was finite and a further PR would have added review overhead, not review value |
+| 3 | `remediation/transport-ratls-deploy` | Phases 1–2 | Passthrough deployment, live evidence, and T-03P closure | **In progress.** The transport binding is PROVEN live on image-88 (§6.2): passthrough GO, wire SPKI == attested SPKI, Rust/TS encodings agree against real quote data, key + boot session rotate. **Client-side negatives now CLOSED offline** (`transport-relay-attack.test.ts`): a relay serving a genuine attestation behind its own certificate is rejected with `spki_mismatch`, old-boot evidence with `boot_session_mismatch`, and a failed socket is destroyed rather than pooled — all against real TLS servers with real distinct certificates, driven through the production agent. **Signer set CLOSED**: the manifest's `signer_set_sha256` (`7a58eae8…`) equals SHA-256 over the four on-chain `VaultConfig.tee_pubkeys` in shard order (`4F9aTx…`, `8x4QTR…`, `2TAuvs…`, `C3fNnm…`) — verified by chain read, no CVM. **Plaintext-route closure is BLOCKED ON THE CUTOVER, not outstanding work**: the transport default is still `gateway-terminated`, so removing `:8080` now would leave every existing deployment with no route. `scripts/check-ratls-cutover.sh` (wired into `pr-checks`) makes the pairing mechanical — flipping the default to `ra-tls` while `:8080` is still published fails the gate. **The client adapter is now PROVEN LIVE** (`cvm-ratls-transport.test.ts`, `RUN_CVM_RATLS=1`, image-88 window 04:55:33Z-04:59:21Z): the production adapter captures the real socket's SPKI (`57c8c136…`, matching openssl independently); end-to-end verification marks that socket verified with the signer set matching governance; a verified fetch reaches `/info` over the same socket; a wrong signer-set pin is rejected live with `signer_set_mismatch`; cold transport establishment measured at **1358/1496/1517/1591/1636 ms** (median 1517). The event-log RTMR3 replay runs against the enclave's OWN 30-entry log, so only the Intel signature is injected. **Daemon wiring now CLOSED**: `bin/daemon.ts` builds the transport before constructing the `Daemon` and passes `transport.fetch` as `fetchImpl` plus the gated `sendableWebSocketFactory`, so under `ra-tls` every CVM request and the `/v1/stream` session run over a verified socket. The entrypoint logs the mode explicitly and warns on the legacy path. **Settle regression CLOSED on image-89** — and it found a real design error first. On image-88, `ra-tls` bound ONLY the TLS listener, so `:8080` stopped serving (`info: 000`) and a phased cutover was impossible. §7.3 specifies keeping the plaintext listener during migration; image-89 runs BOTH, and the security boundary is the port publication (enforced by `check-ratls-cutover.sh`), not the listener binding. After the fix: both routes 200, `cvm-settle-e2e` PASSES (54.6 s), and the RA-TLS suite still passes with median transport establishment 1508 ms. Settle stage split on image-89: `witness_ms=304`, `prove_step_ms=3054`, `prove_ms=3395`, `lock_ms=1292`, `verify_ms=1787`, `alt_tx_ms=1169`, `alt_wait_ms=899`, `parallel_ms=5184`, `settle_ms=5140`, `total_ms=10383`, `confirmed=1`, `rejected=0`, `pipeline_failed=false` — in line with the image-84 baseline, so RA-TLS costs the settle path nothing. **Consumer conversion now CODE COMPLETE — all three consumers can be driven over `ra-tls` without a code change at cutover time.** (a) The `cvm-*` suite converts at ONE chokepoint: `cvm-harness.ts::gwFetch` selects the verified transport when `DARKNYX_CVM_TRANSPORT=ra-tls`, which covers all six suites at once. It fails loudly rather than falling back, and memoizes only on success (a cached rejection would poison every later suite in the run — observed, then fixed). `transport-selection.test.ts` guards the two ways this goes wrong silently: falling back to plain `fetch` when ra-tls was requested, and the `NODE_TLS_REJECT_UNAUTHORIZED=0` shortcut that accepts any certificate from anyone while reading as RA-TLS. It is deliberately NOT named `cvm-*`, or it would land in the CVM bucket and never run in ordinary CI. (b) `cvm-daemon-smoke` now builds its transport exactly as `bin/daemon.ts` does, so the smoke harness exercises the shipped wiring instead of bypassing it. (c) `trader-host` gained the same entrypoint wiring: `DARKNYX_TRADER_CVM_TRANSPORT=ra-tls` builds a verified `cvmFetch`, and the construction logic was extracted from `bin.ts` into `src/cvm-transport.ts` **specifically so it is testable** — a fail-closed guard reachable only from `main()` is a guard nothing exercises. 13 tests cover it, and both its guards are mutation-proven load-bearing (dropping the hex validation fails 2; making the missing-pin check fail-open fails 4). The distinction it enforces: a misconfigured `ra-tls` must REJECT, never return `undefined`, because `undefined` means "legacy by choice" and would boot while printing the legacy warning as though the operator had asked for it. **RSS now instrumented** — `cvm-ratls-transport.test.ts` measures client RSS across 25 sequential verified transports, the reconnect pattern the daemon actually exhibits; reported per-transport with only an order-of-magnitude bound, since a fixed threshold on GC timing is a test that tolerates anything. **Architectural consequence worth recording: `trader-host` now depends on `@darknyx/sdk`.** Its image was deliberately trader-host-only; verifying the enclave requires the SDK's verification code, so the container now carries `client-core` + `sdk` and builds at **581 MB**. That cost is accepted deliberately — a release host that proxies every browser order in plaintext but cannot check which enclave it is talking to is precisely the gap T-03 describes. The dependency is declared in three places that must stay in agreement (`package.json`, the `pr-checks` trader-host job, and the Dockerfile), plus `.dockerignore`, which ladders `packages/*` off. Two traps surfaced here and are commented at their cause rather than at their symptom: the SDK/client-core tsconfigs extend the ROOT `tsconfig.json`, and without it in the build context tsc silently falls back to ES5 and blames unrelated files; and `.tsbuildinfo` copied in from a working tree makes these `composite` packages emit `.js` + `.d.ts.map` but no `.d.ts`, surfacing later as a missing-declaration error with a caching cause. **CUTOVER EXECUTED 2026-08-16 on `nightly-test-cvm` (prod9, image-89, enclave unchanged since `tee-v3-hardening-89`).** Two deploys in one window. *Deploy A* (env-only `ra-tls`, both ports up) de-risked the conversion while `:8080` remained as an escape hatch, and it earned its place immediately by surfacing a real gate defect (below). *Deploy B* applied the cutover compose. **Evidence:** the served certificate is `CN=darknyx-tee ra-tls (boot-scoped)` — enclave-generated, NOT a gateway/LE cert, which is direct proof of true TCP passthrough; **WebSocket upgrade survives the passthrough and carries the enclave's own certificate**, closing that open question from §6.2 with live evidence; the live socket SPKI `0217723c…` equals the manifest's `tls_spki_sha256`; `signer_set_sha256 = 7a58eae8…` matches the value derived independently from on-chain `VaultConfig.tee_pubkeys`. Under Deploy B **the public plaintext route returns HTTP 000 on three consecutive attempts while `:8443s` serves 200** — that is the T-03P closure assertion. `cvm-api-surface` **10/10** over ra-tls (and 10/10 on legacy, no regression), `cvm-settle-e2e` **PASSES** over the verified transport, and the live adapter suite passes with **median transport establishment 1413 ms** and **client RSS −27 MB across 25 sequential verified transports (no leak)**. Re-pinning is confirmed real: the compose edit moved `compose_hash` `e50ef03e…` → `cdc97c56…`, so every client pin must be re-read after a cutover deploy.
+
+**The window found a genuine bug that no offline test could have caught as written.** `ws` emits `upgrade` BEFORE `open`, and at upgrade time the socket is still CONNECTING. The gate verified the certificate on `upgrade`, marked the connection verified, and surfaced `open` — so the caller's login frame hit `inner.send()` and threw `WebSocket is not open: readyState 0`. It presented as a silent "no pong within 15s" **on a transport that was entirely healthy**, and the escaping exception poisoned the shared transport for the rest of the file, which is why the later rate-limit assertion saw 0/300 requests survive. Two failures, one cause. `open` is now surfaced (and queued frames flushed) only once verification has passed AND the socket is writable; terminal events are replayed to listeners that attach later, since every consumer is async and cannot attach any earlier. Both guards are mutation-proven. A second, smaller finding: the verified transport pins ONE connection by construction, so a client cannot generate wide concurrency — the rate-limit flood was lowered from 300 to 120 under ra-tls, where **the limiter still trips**, so the assertion stayed real instead of being skipped.
+
+**DAEMON LIVE BUSINESS-FLOW RUN COMPLETE 2026-08-16, over RA-TLS.** With the C-09 commitment fix in place the full flow passes on the cutover CVM: attested `tee_pubkey 4F9aTx…` (the on-chain shard-0 signer), deposit `122121268000` → **leaf 5**, deposit visible in the TEE mirror, order `8269fdfa…` accepted at slot `484433733`, and `GET /orders/{id}` → 200 — every call on the quote-verified transport. **It also found a real bypass.** The order POST — the single most sensitive call the daemon makes — was going over global `fetch`: the harness built `RestOrderPlacer` without a `fetchImpl`, and the SDK's `placeOrder` silently defaults to `globalThis.fetch`. Production's default path is `WsOrderPlacer` over the gated WebSocket, so this was a harness gap rather than a shipped defect, but `RestOrderPlacer` is documented as a real bring-up/debug fallback and would carry the same bypass wherever it is used. The smoke now installs a **transport leak guard**: under `ra-tls` it records any CVM-bound call made on global `fetch` and asserts the list is empty at the END of the run, so the assertion covers attestation, deposit, place and the read-backs together. Mutation-verified — removing the placer's `fetchImpl` fails the test. Its limit is worth stating: it catches a bypass that would otherwise *succeed silently*; where the certificate is untrusted the call already fails loudly on its own. **Still outstanding — NOT transport work:** ~~the `cvm-daemon-smoke` harness fails with `inclusion root … is not in shard 0's on-chain root ring`~~ **RESOLVED** — the C-09 gate read the root ring at `finalized` while `confirmed` runs ~30 slots (~12 s) ahead, so a client proving right after its own deposit was refused for a condition that resolved itself. Fixed by reading at `confirmed`, the level the vault's own `contains_root` evaluates. That it failed **identically on the legacy `:8080` route** is what identified it as a non-transport bug, and the daemon's *wiring* is proven (`[smoke] transport: ra-tls`, auth and every CVM call now routed through the verified transport — three plain `fetch` calls that bypassed it were removed). Trader-host live exercise still pending for the same reason it always was: it needs a deployed trader-host, not a test run. **Superseded — all three items below are now done:** the daemon, trader-host, and `cvm-*` live runs in `ra-tls`, plus the RSS number itself. Everything needed to run them is merged into this stack |
 | 4 | `remediation/browser-release-integrity` | Phase 0; can overlap 1–3 | R-01 release pins made non-retargetable under the selected distribution model | Open |
 | 5A | `remediation/browser-attested-ingress` | Phase 0 B1 GO + Phase 4 | Direct attested browser ingress | **Not selected** — B1 NO-GO (§6.3.1). Revive only on an Onchain-KMS migration |
 | 5B | `remediation/browser-attested-channel` | Phase 4 | Quote-bound browser application channel | **Selected** — §6.3.1 |
@@ -384,6 +388,55 @@ record:
 Do not send Darknyx credentials or orders during this probe. If the CVM must be
 started solely for this test, record billing start/end and stop the CPU CVM as
 soon as evidence is captured.
+
+**RESOLVED 2026-08-16 — passthrough is GO.** See the live evidence below; the
+inconclusive first attempt is retained beneath it because the *reason* it could
+not work is the reusable lesson.
+
+```
+TLS 1.3 handshake through <app-id>-8443s.dstack-pha-prod9.phala.network
+  subject = CN=darknyx-tee ra-tls (boot-scoped)   <- our enclave, not the gateway
+  Cipher  = TLS_AES_256_GCM_SHA384 / TLSv1.3
+  served SPKI  bcbd97c9...  (read off the wire)
+  enclave log  bcbd97c9...  (what it generated at boot)
+  manifest     bcbd97c9...  (what the quote binds)
+```
+
+The gateway passed the stream through untouched and the enclave terminated TLS
+itself. Image `tee-v3-hardening-88`
+(`sha256:47152b5f82a1e50099115a271e6866dc9b596995580bf3f61338f05c0f25f715`),
+source `e6f9cb5`, prod9, `DARKNYX_TEE_TRANSPORT_MODE=ra-tls`,
+`DARKNYX_TEE_TLS_BIND=0.0.0.0:8443`. Billing 19:42:38Z-19:47:42Z.
+
+**Also proven in the same window:**
+
+| Property | Evidence |
+|---|---|
+| The attested SPKI is what a peer observes | wire cert SPKI == `manifest.tls_spki_sha256` |
+| Rust and TypeScript agree on the canonical encoding **against real data** | the TS `manifestDigestFromHashed` output == the live quote's `report_data[32..64]`. The pinned vector only ever proved they agreed on a *fixture* |
+| Freshness | caller nonce round-trips into `report_data[0..32]` |
+| The key is boot-random | SPKI **and** `boot_session_id` both rotated across a restart |
+| TLS 1.3 only | negotiated TLSv1.3 |
+
+**A false positive worth remembering.** The first rotation check reported success
+on an "after" SPKI of `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+— which is SHA-256 of the **empty string**. `openssl` returned nothing while the
+CVM was still restarting and the pipeline hashed emptiness. Guard explicitly
+against that digest and wait for the service to answer before comparing; empty
+input flowing through a hash is a reliably deceptive failure.
+
+**First attempt 2026-08-16 — INCONCLUSIVE. Do not repeat it that way.**
+Against the *existing* plaintext image on a running prod9 CVM: the `s` suffix
+demonstrably changes gateway behaviour (`-8080.` presents the gateway wildcard
+certificate and completes; `-8080s.` presents **no certificate**). That is
+necessary for passthrough but not sufficient — it is equally consistent with
+the node rejecting `s` routes. The control killed the inference: a live port
+(`8080s`) and a dead one (`9999s`) behaved *identically* (connect, 0 bytes,
+close at ~5.7 s), which is what a gateway that never reached a backend looks
+like. CVM logs show nothing, because a malformed ClientHello never becomes an
+HTTP request. **The question cannot be answered without a TLS-speaking backend,
+i.e. the RA-TLS image itself — so it must be the FIRST step of the Phase 3
+window, not a separate probe.** Billing 19:10:56Z–19:14:38Z.
 
 **Passthrough GO:** the actual public connection presents and proves possession
 of the backend's boot-random certificate and carries both HTTP and WebSocket.
@@ -767,6 +820,41 @@ to use it after cutover.
 ---
 
 ## 9. Phase 3 — programmatic deployment cutover and T-03P closure
+
+### 9.0 Cutover shape — DECIDED 2026-08-16: single-step
+
+A contradiction surfaced once image-89 landed: this section's pass criteria
+assume a **single-step** cutover ("public plaintext port is unreachable"), while
+the dual-listener fix implements a **two-step migration** (both ports open while
+consumers move across). Both cannot be true. The decision is single-step:
+
+1. Convert every consumer first — the `cvm-*` suite, trader-host, the daemon
+   smoke harness. The daemon entrypoint is already wired.
+2. One window flips `DARKNYX_TEE_TRANSPORT_MODE` to `ra-tls`, unpublishes
+   `:8080`, runs everything against `-8443s.`, and asserts the plaintext route
+   is unreachable.
+3. T-03P closes at the end of that window.
+
+**Why not incremental**, which is normally the safer practice for a transport
+switch across three consumers: that reasoning assumes users you can break. There
+are none — devnet only, and T-03's own gate is "before external users or real
+value". A big-bang switch is cheap *now* and gets steadily more expensive. The
+counter-risk is concrete rather than hypothetical: this workstream exists
+because an earlier "do the transport work later" left T-03 deferred for a
+month, and a two-step plan whose second step has no forcing function is how
+`:8080` stays public while everyone believes T-03P is handled.
+
+**What makes one step defensible is the rollback path.** The dual-listener work
+is not wasted — it *is* the rollback. If the cutover window goes wrong, recovery
+is an env change (`DARKNYX_TEE_TRANSPORT_MODE=gateway-terminated`) plus
+republishing the port: no code revert, no image rebuild, no redeploy of a
+different digest. `scripts/check-ratls-cutover.sh` enforces the port/mode
+pairing so the compose cannot land half-done in either direction.
+
+**If the stack merges before the conversion is finished**, the plan must say
+plainly that **T-03P is NOT closed on merge** — otherwise nine green PRs read as
+remediation when the unverified route is still the only one anything uses.
+
 
 - **Branch:** `remediation/transport-ratls-deploy`
 - **Prerequisites:** Phases 1 and 2 merged or reviewed as a stable stack
@@ -1242,18 +1330,19 @@ Only then move parent T-03 to `Closed`.
 | Last verified `main` | `7be1772` on 2026-08-15 (PR #142, Phase 0) |
 | Active phase | **Phase 1** — stack **#145**, layers 1a/1b submitted, 1c not started |
 | Active branch / PR | `remediation/transport-manifest` → #143 · `remediation/transport-ratls-identity` → #144. **Both open and unmerged by policy** — the owner merges, not the agent |
-| Next action | Phase 2e — daemon + trader-host adoption, stacked on 2d. **Loadgen is excluded — see §8.3 correction below** |
+| Next action | **T-03P is closed.** Next is Phase 4 (`R-01`, browser release integrity), then 5B/6 for T-03B. Two carry-forwards sit outside the critical path: the daemon live business-flow run, and the trader-host live run (which belongs to T-03B's phases, not here). Previously: **The single cutover window (§9.0).** Every consumer is converted and every guard is mutation-tested; what remains is one CVM run that flips `DARKNYX_TEE_TRANSPORT_MODE` to `ra-tls`, unpublishes `:8080`, drives the `cvm-*` suite + daemon smoke + trader-host over `-8443s.`, asserts the plaintext route is unreachable, and records RSS. T-03P closes at the end of it |
 | Phase 0 | **Closed** — PR #142 merged. Live passthrough probe carried forward to the Phase 3 CVM window |
-| Passthrough decision | **Source GO** (v0.5.9, §6.2). Live probe OPEN — bundled into the next planned CVM run, not a dedicated window |
+| Passthrough decision | **GO — proven live 2026-08-16** on image-88/prod9. Handshake completes through the `s` route against the enclave's own boot-scoped certificate (§6.2) |
 | Browser path decision | **B2** (quote-bound application channel). B1 is NO-GO as deployed — §6.3.1. Revisit only if the owner elects an Onchain-KMS migration |
+| Deployed image | `tee-v3-hardening-89` @ `sha256:aeda7801047b7d84fc63219ee575d5221bce53ad8945d25bb27d99ff68118b7b`, source `72d075c` (dual-listener fix; image-88 killed the legacy route). Compose pinned; `TRANSPORT_MODE` defaults to `gateway-terminated` and was set to `ra-tls` in the deploy env only |
 | Ingress lifecycle | Persistence CONFIRMED; gating allowlist is **Phala's, not ours** (`kms_type = phala`, `dstack_app_address = null`) — §6.3.1 |
 | KMS governance | Phala-operated. No `DstackApp` contract for our app. Migration to Onchain KMS is available but uncosted — owner decision |
-| T-03P | **Open — in progress.** 1a/1b code complete and unmerged; 1c, Phase 2, and the Phase 3 live run all outstanding. Not `Closed` until the CVM evidence exists |
+| T-03P | **CLOSED 2026-08-16.** Cutover executed; every exit criterion met with live evidence (see the Phase 3 row). Previously: **Open — one live window from closure.** Phases 1-2 implemented across the stack; the enclave-side binding is evidenced on a real CVM (§6.2), the client adapter is proven live against real TDX quotes, the relay negatives are closed offline against real distinct certificates, and all three consumers are now code-complete for `ra-tls`. Not `Closed` for exactly three reasons, all discharged by the same run: the public plaintext route is still published (by design, until cutover), no consumer has been driven live in `ra-tls`, and RSS is instrumented but unmeasured |
 | T-03B | Open — blocked on Phase 4 (R-01), not started |
 | R-01 | Open — `audits/audit_8`, not started |
 | Parent T-03 | Open |
 | CVM/billing state | Must be discovered live; do not infer from this document. No CVM has been started in this workstream |
-| Last updated | 2026-08-16 (Phase 2d submitted) |
+| Last updated | 2026-08-16 (CUTOVER EXECUTED: plaintext route closed, ra-tls serving, api-surface 10/10 + settle-e2e PASS over the verified transport; consumer conversion code-complete: `cvm-*` harness, daemon smoke, and trader-host entrypoint all drive the verified transport under an env flag. Remaining Phase 3 work is ONE live window, not more code) |
 
 ### 15.3 Handoff block
 

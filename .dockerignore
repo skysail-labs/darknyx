@@ -14,12 +14,26 @@
 !Cargo.lock
 !package.json
 !package-lock.json
+# packages/sdk and packages/client-core extend the ROOT tsconfig. Without it
+# tsc does not fail on the missing `extends` — it falls back to ES5 defaults
+# and reports a pile of unrelated lib errors (`Promise` missing, no
+# `Number.isSafeInteger`), which sends you looking at the wrong file entirely.
+!tsconfig.json
 !crates
 !programs
 !packages
 packages/*
 !packages/trader-host
 packages/trader-host/dist
+# T-03P: trader-host verifies the enclave transport itself, and that code is in
+# @darknyx/sdk (which depends on client-core). Both must reach the build stage
+# or the COPY fails with "not found" rather than a missing-module error, so the
+# cause reads as a Docker problem instead of a dependency one.
+!packages/sdk
+packages/sdk/dist
+packages/sdk/tests
+!packages/client-core
+packages/client-core/dist
 
 # N=16 settle-prover artifacts, copied into the runtime image (the
 # prover reads /circuits/build/match_batch_n16/). Ladder-include ONLY
@@ -54,3 +68,10 @@ third_party/rapidsnark/depends/gmp/package*
 # above is widened later.
 **/target
 **/node_modules
+
+# Incremental build state must never enter a build context. These packages are
+# `composite`, so a .tsbuildinfo copied in from a developer's working tree makes
+# tsc believe it already emitted — it then writes .js and .d.ts.map but NO
+# .d.ts, and the failure surfaces three steps later as "could not find a
+# declaration file for @darknyx/sdk". The image must always build from scratch.
+**/*.tsbuildinfo

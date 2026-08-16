@@ -53,6 +53,14 @@ export interface CreateVerifiedTransportOptions {
   /** Opens the underlying `ws` socket. Supplied by the consumer so the SDK
    *  carries no dependency on a particular WebSocket implementation. */
   createWebSocket?: (url: string) => NodeWebSocketLike;
+  /**
+   * Called when a gated WebSocket refuses its peer.
+   *
+   * Strongly recommended for any long-lived consumer: without it the refusal
+   * is invisible and the stream client reconnects into it indefinitely,
+   * reporting only a generic transport error.
+   */
+  onTransportViolation?: (err: TransportVerificationError) => void;
   /** Injected for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -106,12 +114,37 @@ export async function createVerifiedTransport(
     await verifyTransportOnSocket(verifyOpts);
   const bootSessionId = manifest.bootSessionId;
 
-  const fetchImpl = createVerifiedFetch(verifyOpts);
+  // Reconnects are pinned to the boot session established HERE.
+  //
+  // `createVerifiedFetch` re-verifies whenever it gets a replacement socket.
+  // Without this pin that re-verification only checks compose hash and signer
+  // set — both of which survive a restart — so a RESTARTED enclave would pass
+  // and start receiving this session's private request bytes. The transport is
+  // supposed to bind one boot, and `verify-transport` already implements the
+  // check; it was simply never given the expected value.
+  //
+  // Deliberately a separate object from `verifyOpts`: the FIRST verification
+  // cannot pin a boot session it has not learned yet, so only the reconnect
+  // path carries it.
+  const reconnectOpts = { ...verifyOpts, expectedBootSessionId: bootSessionId };
+  const fetchImpl = createVerifiedFetch(reconnectOpts);
 
   const webSocketFactory = opts.createWebSocket
     ? createVerifiedWebSocketFactory({
         verifiedSpkiSha256,
         createSocket: opts.createWebSocket,
+        // Surface rejections. Without this a gated WebSocket that refuses its
+        // peer is COMPLETELY silent: the stream client sees only a generic
+        // "WebSocket transport error", indistinguishable from a network blip,
+        // and reconnects into the same refusal forever.
+        //
+        // That is not a logging nicety. A relay substituting a certificate on
+        // the stream is the single most security-relevant event this feature
+        // can produce, and it was unobservable — which is exactly why a live
+        // failure could not be diagnosed after the fact.
+        ...(opts.onTransportViolation
+          ? { onViolation: opts.onTransportViolation }
+          : {}),
       })
     : undefined;
 

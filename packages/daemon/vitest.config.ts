@@ -7,6 +7,12 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      // Subpath aliases must precede the bare specifier: Vite matches these in
+      // order, and a bare "@darknyx/sdk" entry would otherwise swallow
+      // "@darknyx/sdk/transport-node" and resolve it as a path *under* index.ts.
+      "@darknyx/sdk/transport-node": fileURLToPath(
+        new URL("../sdk/src/transport-node.ts", import.meta.url),
+      ),
       "@darknyx/sdk": fileURLToPath(
         new URL("../sdk/src/index.ts", import.meta.url),
       ),

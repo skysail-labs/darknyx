@@ -36,9 +36,9 @@
  * a runtime surprise. The verification core it calls is environment-neutral.
  */
 
-import { Agent, type AgentOptions } from "node:https";
 import type { TLSSocket } from "node:tls";
 import { createHash } from "node:crypto";
+import { Agent, buildConnector, fetch as undiciFetch } from "undici";
 
 import {
   verifyTransportAttestation,
@@ -100,45 +100,56 @@ export function socketSpkiSha256(socket: TLSSocket): Uint8Array {
  */
 export class TransportAgent extends Agent {
   /** SPKI hash per live socket. */
-  private readonly spki = new WeakMap<TLSSocket, Uint8Array>();
+  private readonly spki = new WeakMap<object, Uint8Array>();
   /** Sockets that have passed verification. Never inherited across sockets. */
-  private readonly verified = new WeakSet<TLSSocket>();
-  /** The socket most recently created, for the single-socket pool. */
+  private readonly verified = new WeakSet<object>();
+  /** The socket most recently established, for the single-connection pool. */
   private current?: TLSSocket;
 
-  constructor(options: AgentOptions = {}) {
-    super({
-      ...options,
-      keepAlive: true,
-      // See the module docs: a pool reintroduces the probe-vs-request gap.
-      maxSockets: 1,
+  constructor() {
+    // `connect` is the hook that makes this whole adapter work.
+    //
+    // An earlier revision passed an `https.Agent` to global `fetch` and read
+    // the socket off it. That silently did nothing: Node's global fetch is
+    // undici, which ignores the `agent` option entirely (it takes a
+    // `dispatcher`). The agent never saw a socket, so the SPKI comparison ran
+    // against a value that was never captured — the check was inert. Hence
+    // undici directly, with our own connector.
+    const base = buildConnector({
       // The certificate is self-signed by design; WebPKI validation is
       // meaningless here and its absence is NOT the security model. The SPKI
       // comparison against a quote-bound manifest is.
       rejectUnauthorized: false,
     });
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createConnection(options: any, callback: any): any {
-    const socket = super.createConnection(options, callback) as TLSSocket;
-    socket.once("secureConnect", () => {
-      try {
-        this.spki.set(socket, socketSpkiSha256(socket));
-      } catch {
-        // Leave it unrecorded: `spkiFor` throws, so the socket can never be
-        // marked verified. Failing closed beats guessing.
-      }
-      this.current = socket;
+    super({
+      // One connection: with a pool, the attestation exchange and the request
+      // that follows can land on different sockets, which is the gap this
+      // exists to close.
+      connections: 1,
+      pipelining: 1,
+      connect: (opts, callback) => {
+        base(opts, (err, socket) => {
+          if (!err && socket) {
+            const tls = socket as unknown as TLSSocket;
+            try {
+              this.spki.set(tls, socketSpkiSha256(tls));
+              this.current = tls;
+              tls.once("close", () => {
+                if (this.current === tls) this.current = undefined;
+              });
+            } catch {
+              // Leave it unrecorded: `spkiFor` throws, so the socket can never
+              // be marked verified. Failing closed beats guessing.
+            }
+          }
+          callback(err as Error | null, socket as never);
+        });
+      },
     });
-    socket.once("close", () => {
-      if (this.current === socket) this.current = undefined;
-    });
-    return socket;
   }
 
   /** The SPKI recorded for a socket, or throw if none was captured. */
-  spkiFor(socket: TLSSocket): Uint8Array {
+  spkiFor(socket: object): Uint8Array {
     const s = this.spki.get(socket);
     if (!s) {
       throw new TransportVerificationError(
@@ -149,11 +160,11 @@ export class TransportAgent extends Agent {
     return s;
   }
 
-  isVerified(socket: TLSSocket | undefined): boolean {
+  isVerified(socket: object | undefined): boolean {
     return socket !== undefined && this.verified.has(socket);
   }
 
-  markVerified(socket: TLSSocket): void {
+  markVerified(socket: object): void {
     this.verified.add(socket);
   }
 
@@ -280,7 +291,9 @@ export async function verifyTransportOnSocket(
   opts: VerifiedTransportOptions,
 ): Promise<VerifiedSocket> {
   const { agent, deps } = opts;
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  // undici's fetch, not the global one — the dispatcher below is only honoured
+  // by undici, and the global may be a different implementation entirely.
+  const fetchImpl = opts.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
   const nonce = deps.randomNonce();
   if (nonce.length !== 32) fail("malformed", "nonce generator returned non-32 bytes");
   const nonceHex = Array.from(nonce, (b) => b.toString(16).padStart(2, "0")).join(
@@ -299,9 +312,8 @@ export async function verifyTransportOnSocket(
         // socket, which is precisely what must not happen.
         redirect: "error",
         signal: controller.signal,
-        // @ts-expect-error — `agent` is a Node-only fetch option
-        agent,
-      },
+        dispatcher: agent,
+      } as never,
     );
     if (!res.ok) fail("malformed", `attestation endpoint returned ${res.status}`);
 
@@ -315,8 +327,15 @@ export async function verifyTransportOnSocket(
     }
     body = JSON.parse(text) as TransportAttestationBody;
 
-    // The socket that served THIS response. Not a probe, not the pool's idea
-    // of a current connection at some later moment.
+    // The most recently CONNECTED socket — which is the serving socket here
+    // only because this agent is pinned to `connections: 1, pipelining: 1`,
+    // so at most one socket exists and requests do not overlap on it.
+    //
+    // Stated precisely because the previous comment claimed more than the
+    // code provides ("the socket that served THIS response"): undici exposes
+    // no per-response socket attribution, so the single-connection pin IS the
+    // mechanism, not an optimisation. Raising `connections` above 1 would
+    // silently invalidate this and must not be done.
     const live = agent.currentSocket();
     if (!live) fail("malformed", "no live socket carried the attestation");
     socket = live;
@@ -393,14 +412,37 @@ export function createVerifiedFetch(
     await inflight;
   };
 
+  const verifiedOrigin = new URL(opts.baseUrl).origin;
+
   return async (input, init) => {
+    // Refuse any origin other than the one that was verified.
+    //
+    // The returned function used to forward `input` unchanged, so a consumer
+    // could hand it an absolute URL for a different host — through a bug, a
+    // config value, or a server-supplied endpoint — and the request would
+    // leave over a transport whose attestation says nothing about that peer,
+    // while every log line still read "verified".
+    const target = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url,
+      opts.baseUrl,
+    );
+    if (target.origin !== verifiedOrigin) {
+      throw new TransportVerificationError(
+        `refusing to send to ${target.origin} on a transport verified for ${verifiedOrigin}`,
+        "malformed",
+      );
+    }
+
     await ensureVerified();
-    const fetchImpl = opts.fetchImpl ?? fetch;
+    const fetchImpl = opts.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
     return fetchImpl(input, {
       ...init,
       redirect: "error",
-      // @ts-expect-error — `agent` is a Node-only fetch option
-      agent,
-    });
+      dispatcher: agent,
+    } as never);
   };
 }

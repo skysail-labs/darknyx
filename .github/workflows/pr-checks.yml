@@ -111,6 +111,7 @@ jobs:
               - 'deploy/**'
               - 'Dockerfile*'
               - 'scripts/check-compose-image-digests.sh'
+              - 'scripts/check-ratls-cutover.sh'
               - 'scripts/check-icicle-cuda-arch-env.sh'
               # And the workflow itself, so an edit that weakens a guard's
               # invocation — or this very filter — runs the guards it affects.
@@ -148,6 +149,13 @@ jobs:
               - '.github/workflows/pr-checks.yml'
             trader_host:
               - 'packages/trader-host/**'
+              # T-03P made trader-host depend on the SDK (and transitively on
+              # client-core) for the verified transport, and its job now BUILDS
+              # both. Without these paths an SDK-only change skips the
+              # trader-host release build and integration suite entirely — the
+              # exact change most likely to break it.
+              - 'packages/sdk/**'
+              - 'packages/client-core/**'
               - 'deploy/trader-host/**'
               - '.dockerignore'
               - 'package.json'
@@ -215,6 +223,19 @@ jobs:
 
       - name: CVM compose image identities are immutable
         run: bash scripts/check-compose-image-digests.sh
+
+      # T-03P: the transport default and the published ports must agree. A
+      # compose that reports ra-tls while still publishing :8080 leaves an
+      # unauthenticated plaintext route open beside the verified one.
+      - name: RA-TLS cutover guard (transport mode vs published ports)
+        run: bash scripts/check-ratls-cutover.sh
+
+      # The cvm-* suites need a live CVM, so they self-skip in this workflow —
+      # and a SKIPPED suite reports green. That let two of them become
+      # structurally unrunnable for weeks without a red build. This reads their
+      # source instead, which needs no CVM and no secrets.
+      - name: cvm-* suites reach the CVM through the verified transport
+        run: bash scripts/check-cvm-suites-use-transport.sh
 
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
@@ -686,6 +707,15 @@ jobs:
 
       - name: npm ci (root, with workspaces)
         run: npm ci
+
+      - name: Build the SDK that trader-host verifies the enclave with
+        # T-03P: trader-host is the process that sees every browser order in
+        # plaintext, so it must be able to verify the enclave transport itself.
+        # That code lives in @darknyx/sdk, which makes this a real dependency
+        # rather than a build-order convenience.
+        run: |
+          npm -w @darknyx/client-core run build
+          npm -w @darknyx/sdk run build
 
       - name: Build and typecheck the production release host
         run: |

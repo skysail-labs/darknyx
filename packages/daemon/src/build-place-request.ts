@@ -65,7 +65,8 @@ export interface BuildPlaceRequestArgs {
   /** Merkle-tree shard the note lives in (default 0). */
   treeId?: number;
   fetchImpl?: typeof fetch;
-  /** Finalized on-chain recent-root-ring gate. Production daemon supplies it. */
+  /** On-chain recent-root-ring gate (read at `confirmed`, the level the
+   *  vault itself evaluates). Production daemon supplies it. */
   verifyRoot?: RootVerifier;
 }
 

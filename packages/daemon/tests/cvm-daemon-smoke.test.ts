@@ -32,6 +32,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import WebSocket from "ws";
+import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
+import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
+import { buildDaemonTransport } from "../src/transport.js";
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -65,6 +70,35 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+/**
+ * Leak guard: under `ra-tls`, NOTHING may reach the CVM on global `fetch`.
+ *
+ * Every CVM-bound call is supposed to go through the verified transport, but
+ * "supposed to" is not a property — the SDK's client helpers each default to
+ * `globalThis.fetch` when no `fetchImpl` is supplied, so a single missing
+ * argument silently downgrades one call while the run still reports
+ * `transport: ra-tls`. That is precisely what happened to the order POST.
+ *
+ * Recording the URLs rather than throwing keeps the failure legible: the test
+ * asserts on the collected list at the end, so the message names the exact
+ * endpoint that bypassed the transport instead of surfacing as a TLS error
+ * from somewhere deep in a library.
+ */
+const transportLeaks: string[] = [];
+{
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: never, init: never) => {
+    const url = String((input as { url?: string })?.url ?? input);
+    if (
+      process.env.DARKNYX_CVM_TRANSPORT === "ra-tls" &&
+      url.startsWith(process.env.DARKNYX_TEE_GATEWAY ?? "\u0000")
+    ) {
+      transportLeaks.push(url);
+    }
+    return original(input, init);
+  }) as typeof fetch;
+}
+
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 
@@ -75,10 +109,15 @@ const READY =
   existsSync(CONFIG_PATH);
 const maybe = READY ? describe : describe.skip;
 
-// Bootstrap creds are HARDCODED in docker-compose.yaml (runbook gotcha 3).
-const API_KEY = "darknyx-test-api-key";
-const API_SECRET = "darknyx-test-secret";
-const PASSPHRASE = "darknyx-test-passphrase";
+// Bootstrap creds default to the ones HARDCODED in docker-compose.yaml
+// (runbook gotcha 3), but a real deploy injects fresh ones through the
+// encrypted env — a production tier REFUSES the public test credentials. Take
+// them from the environment when present so this harness works against a
+// properly-provisioned CVM instead of only against compose defaults.
+const API_KEY = process.env.DARKNYX_TEE_API_KEY ?? "darknyx-test-api-key";
+const API_SECRET = process.env.DARKNYX_TEE_API_SECRET ?? "darknyx-test-secret";
+const PASSPHRASE =
+  process.env.DARKNYX_TEE_PASSPHRASE ?? "darknyx-test-passphrase";
 const FEE_RATE_BPS = 30n;
 const SYMBOL = "SOL-USDC";
 
@@ -105,6 +144,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
   let quoteMint: PublicKey;
   let token: string;
   let daemon: Daemon;
+  let transport: Awaited<ReturnType<typeof buildDaemonTransport>>;
 
   beforeAll(async () => {
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
@@ -113,8 +153,49 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     payer = loadKp(".devnet/keypairs/cvm-buyer-payer.json");
     quoteMint = new PublicKey(cfg.quoteMint.pubkey);
 
+    // T-03P: build the transport BEFORE the first request. Every CVM-bound
+    // call in this file must go through it — an `/auth/token` on plain fetch
+    // would hand a bearer credential to an unverified peer, which is the exact
+    // exchange the verified transport exists to protect.
+    const ratls = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+    transport = await buildDaemonTransport(
+      {
+        gatewayUrl: GATEWAY,
+        transportMode: ratls
+          ? ("ra-tls" as const)
+          : ("gateway-terminated" as const),
+        ...(ratls
+          ? {
+              expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+              attestation: {
+                composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+              },
+            }
+          : {}),
+      } as DaemonConfig,
+      {
+        verifierDeps: {
+          verifyQuote: (q: string) =>
+            createDcapQuoteVerifier({})(
+              Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+            ),
+          parseEventLog,
+          randomNonce: () => new Uint8Array(randomBytes(32)),
+        },
+        ...(ratls
+          ? {
+              createWebSocket: (u: string) =>
+                new WebSocket(u, {
+                  rejectUnauthorized: false,
+                }) as unknown as NodeWebSocketLike,
+            }
+          : {}),
+      },
+    );
+    console.log(`[smoke] transport: ${transport.mode}`);
+
     // auth → bearer
-    const r = await fetch(`${GATEWAY}/auth/token`, {
+    const r = await transport.fetch(`${GATEWAY}/auth/token`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -133,8 +214,18 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       deriveAccountIdentity(seed, payer.publicKey.toBytes()),
     );
 
+    // `ratls` is established above, where the transport is built.
     const config: DaemonConfig = {
       gatewayUrl: GATEWAY,
+      transportMode: ratls ? ("ra-tls" as const) : ("gateway-terminated" as const),
+      ...(ratls
+        ? {
+            expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+            attestation: {
+              composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+            },
+          }
+        : {}),
       gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
       token,
       rpcUrl: RPC,
@@ -151,8 +242,19 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       programId: cfg.vaultProgramId,
     };
     const programId = new PublicKey(cfg.vaultProgramId);
+
+    // The transport was built above, before the first credentialed request.
     daemon = new Daemon({
       config,
+      fetchImpl: transport.fetch,
+      ...(transport.webSocketFactory
+        ? {
+            sendableWebSocketFactory:
+              transport.webSocketFactory as ConstructorParameters<
+                typeof Daemon
+              >[0]["sendableWebSocketFactory"],
+          }
+        : {}),
       keystore,
       store: new DaemonStore(":memory:"),
       prover: nodeValidInputProver({
@@ -169,8 +271,16 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
         client: createDaemonClient({ programId, rpcUrl: RPC, payer, keystore }),
       }),
       depositor: payer.publicKey,
-      // REST placer keeps the smoke simple (no warm-socket reconnect to reason about).
-      placer: new RestOrderPlacer({ baseUrl: GATEWAY, token }),
+      // REST placer keeps the smoke simple (no warm-socket reconnect to reason
+      // about). It MUST be given the transport's fetch: `placeOrder` defaults
+      // to global fetch, so omitting it sent the order POST — the single most
+      // sensitive call the daemon makes — over an unverified connection. The
+      // leak guard below is what caught that.
+      placer: new RestOrderPlacer({
+        baseUrl: GATEWAY,
+        token,
+        fetchImpl: transport.fetch,
+      }),
     });
   });
 
@@ -225,7 +335,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
         const u = new URL("/tree/inclusion", GATEWAY);
         u.searchParams.set("commitment", dep.commitment);
         u.searchParams.set("tree_id", "0");
-        const r = await fetch(u.toString(), {
+        const r = await transport.fetch(u.toString(), {
           headers: { authorization: `Bearer ${token}` },
         });
         if (r.status === 200) break;
@@ -255,10 +365,19 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
     );
 
     // confirm it's resting in the CVM book (200) rather than gone.
-    const got = await fetch(`${GATEWAY}/orders/${orderId}`, {
+    const got = await transport.fetch(`${GATEWAY}/orders/${orderId}`, {
       headers: { authorization: `Bearer ${token}` },
     });
     console.log(`  · GET /orders/${orderId.slice(0, 8)} -> ${got.status}`);
+
+    // The guard, asserted last so it covers the WHOLE flow: attestation,
+    // deposit, place, and the read-backs. Under ra-tls every one of those must
+    // have travelled on the verified transport.
+    expect(
+      transportLeaks,
+      `these CVM calls bypassed the verified transport and used global fetch:\n  ` +
+        transportLeaks.join("\n  "),
+    ).toEqual([]);
 
     daemon.stop();
   }, 180_000);

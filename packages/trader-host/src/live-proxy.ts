@@ -334,6 +334,9 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   ) {
     throw new Error("public release endpoints do not match the live proxy");
   }
+  // T-03P: CVM-bound requests may use a verified transport; the RPC upstream
+  // must not (it is Helius, not the enclave — see `cvmFetch` in types.ts).
+  const cvmFetch = options.cvmFetch ?? fetch;
   const timeoutMs = options.proxyTimeoutMs ?? 20_000;
   const rateLimit = options.maxProxyRequestsPerMinute ?? 600;
   const rates = new Map<string, RateWindow>();
@@ -525,7 +528,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
       const requestBody = body ? Uint8Array.from(body).buffer : undefined;
       try {
         const upstream = await fetchBounded(
-          fetch,
+          isRpc ? fetch : cvmFetch,
           target,
           {
             method,

@@ -85,7 +85,11 @@ describe("onchainRootVerifier (C-09)", () => {
     await expect(verify(r(0xab), 0)).resolves.toBeUndefined();
     expect(rpc.getAccountInfo).toHaveBeenCalledWith(
       expect.any(PublicKey),
-      "finalized",
+      // `confirmed`, deliberately: the vault's own `contains_root` runs
+      // against live state, so this is the level that reflects what the
+      // program will see. `finalized` refused roots that were already valid
+      // and broke clients proving right after their own deposit.
+      "confirmed",
     );
   });
 

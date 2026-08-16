@@ -796,7 +796,23 @@ async fn main() -> Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid DARKNYX_TEE_HTTP_BIND={:?}: {e}", cfg.http_bind))?;
     match transport_identity {
-        // ── RA-TLS: terminate TLS in-enclave (T-03P) ──────────────────
+        // ── RA-TLS: terminate TLS in-enclave, AND keep plaintext for the
+        //    migration window (T-03P) ──────────────────────────────────
+        //
+        // Both listeners run. That is deliberate and it is what makes a phased
+        // cutover possible: the daemon, trader-host, the loadgen and the cvm-*
+        // suite cannot all switch transports in the same instant, so during
+        // migration old clients keep reaching :8080 while new ones use the
+        // passthrough route on :8443.
+        //
+        // An earlier revision REPLACED the plaintext listener instead of adding
+        // to it. That looked tidier and broke the legacy route outright — the
+        // settle regression caught it as `info: 000`, i.e. nothing listening.
+        //
+        // The security boundary is therefore the PORT PUBLICATION, not this
+        // branch: at cutover the compose stops publishing :8080 so the plaintext
+        // listener is reachable only inside the CVM network.
+        // `scripts/check-ratls-cutover.sh` enforces that pairing.
         Some(identity) => {
             let tls_addr: SocketAddr = cfg.tls_bind.parse().map_err(|e| {
                 anyhow::anyhow!("invalid DARKNYX_TEE_TLS_BIND={:?}: {e}", cfg.tls_bind)
@@ -805,16 +821,26 @@ async fn main() -> Result<()> {
                 "RA-TLS transport selected but the TLS server config could not be built; \
                  refusing to start rather than falling back to plaintext",
             )?;
+            let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::info!(
                 tls_addr = %tls_addr,
+                plaintext_addr = %listener.local_addr().unwrap_or(addr),
                 spki_sha256 = %identity.fingerprint(),
                 "darknyx-tee RA-TLS listening (TLS 1.3 only) — verify the served \
-                 certificate against GET /transport-attestation"
+                 certificate against GET /transport-attestation. The plaintext \
+                 listener also runs for the migration window; the cutover closes \
+                 it by unpublishing the port, not by unbinding it here."
             );
             let acceptor = axum_server::tls_rustls::RustlsConfig::from_config(server_config);
-            axum_server::bind_rustls(tls_addr, acceptor)
-                .serve(app.into_make_service())
-                .await?;
+            let tls =
+                axum_server::bind_rustls(tls_addr, acceptor).serve(app.clone().into_make_service());
+            let plain = axum::serve(listener, app);
+            // Either listener exiting is fatal: a half-serving process would
+            // answer some clients and silently strand others.
+            tokio::select! {
+                r = tls   => r.context("RA-TLS listener exited")?,
+                r = plain => r.context("plaintext listener exited")?,
+            }
         }
         // ── Legacy: plaintext behind the gateway's TLS termination ────
         None => {

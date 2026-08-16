@@ -1,13 +1,36 @@
 #!/usr/bin/env node
 import { createReleaseHost } from "./host.js";
 import { loadTraderHostRuntimeConfig } from "./runtime-config.js";
+import { buildCvmFetch } from "./cvm-transport.js";
 
 async function main(): Promise<void> {
   const checkOnly = process.argv.slice(2).includes("--check-config");
   if (process.argv.length > (checkOnly ? 3 : 2)) {
     throw new Error("usage: darknyx-trader-host [--check-config]");
   }
-  const config = await loadTraderHostRuntimeConfig();
+  // T-03P: build the verified transport for CVM-bound requests when the
+  // deployment asks for it, exactly as the daemon entrypoint does. Unset is
+  // the legacy gateway-terminated path.
+  //
+  // This is here rather than in runtime-config because building it needs a
+  // DCAP verifier and governance pins — deployment inputs, not env strings.
+  const cvmFetch = await buildCvmFetch(process.env);
+  const config = await loadTraderHostRuntimeConfig(
+    process.env,
+    cvmFetch ? { cvmFetch } : undefined,
+  );
+  if (cvmFetch) {
+    process.stdout.write(
+      "trader-host transport: ra-tls — CVM-bound requests are bound to a " +
+        "quote-verified certificate on their own socket\n",
+    );
+  } else {
+    process.stderr.write(
+      "trader-host transport: gateway-terminated (legacy). TLS terminates at " +
+        "the dstack gateway and nothing binds the quote to the upstream " +
+        "connection. Set DARKNYX_TRADER_CVM_TRANSPORT=ra-tls to enable.\n",
+    );
+  }
   // Constructing the host validates the static root, public endpoint pins,
   // limits, and all serving headers even during a check-only deployment gate.
   const server = createReleaseHost(config.host);

@@ -26,12 +26,13 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-86 (commit f1dcf5a,
-    # seven-minute development push-oracle freshness; pot19 N=16 proving key
+    # Source tag for audit cross-reference: tee-v3-hardening-89 (commit 72d075c,
+    # T-03P RA-TLS with BOTH listeners during the migration window — image-88
+    # bound only TLS and killed the legacy :8080 route; pot19 N=16 proving key
     # fetched via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:fff91701219740553c658d93a407af2f06a86be90ba3927c0ac302855a7ce81e
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:aeda7801047b7d84fc63219ee575d5221bce53ad8945d25bb27d99ff68118b7b
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -95,6 +96,22 @@ services:
       # so production stays quiet by default.
       DARKNYX_TEE_LOG: ${DARKNYX_TEE_LOG:-info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info}
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
+
+      # ── T-03P: in-enclave TLS termination ──────────────────────────
+      # Defaults to `ra-tls` since the 2026-08-16 cutover. The plaintext
+      # listener still BINDS (both run, which is what makes rollback possible)
+      # but :8080 is no longer published, so the only route in is the RA-TLS
+      # one below. `scripts/check-ratls-cutover.sh` enforces that pairing.
+      #
+      # To roll back, set this to `gateway-terminated` AND restore the :8080
+      # publication — the guard requires both to move together.
+      #
+      # Under `ra-tls` the enclave terminates TLS itself with a boot-random,
+      # quote-bound key and is reached through the gateway's `s`-suffix
+      # passthrough route (`<app-id>-8443s.<base-domain>`). Clients verify the
+      # served certificate against GET /transport-attestation.
+      DARKNYX_TEE_TRANSPORT_MODE: ${DARKNYX_TEE_TRANSPORT_MODE:-ra-tls}
+      DARKNYX_TEE_TLS_BIND: "0.0.0.0:8443"
 
       # Real Pyth feed for the matcher's oracle. Exactly one versioned source
       # owns the cache per boot. Dev/CVM rehearsals read the upgraded sponsored
@@ -202,9 +219,21 @@ services:
       DARKNYX_TEE_NUM_TREES: ${DARKNYX_TEE_NUM_TREES:-1}
 
     ports:
-      # 8080: darknyx-tee's internal HTTP. dstack-ingress fronts this
-      # on :443 once that container is added (Phase 2+).
-      - "8080:8080"
+      # 8080 is NOT published. The enclave still BINDS it (the listener runs
+      # under both modes, which is what makes a rollback possible), but it is
+      # no longer publicly routable: after the T-03P cutover the only way in is
+      # the RA-TLS route below, where the client can bind the served
+      # certificate to a TDX quote. Publishing it again alongside
+      # `ra-tls` re-opens an unauthenticated path that bypasses that check,
+      # and `scripts/check-ratls-cutover.sh` fails the build if you do.
+      #
+      # To ROLL BACK: restore this publication AND set the transport default
+      # back to `gateway-terminated`. The guard requires the pair to move
+      # together, in either direction.
+      # 8443: the RA-TLS listener. Reached as `<app-id>-8443s.<base-domain>`
+      # so the gateway passes the TLS stream through instead of terminating
+      # it — the `s` suffix is what selects passthrough.
+      - "8443:8443"
 
 # Named volumes. dstack backs these with the CVM's LUKS-encrypted data
 # disk (sealing key from dstack-kms), so they persist across restart +

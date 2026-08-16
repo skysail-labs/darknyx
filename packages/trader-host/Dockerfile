@@ -5,12 +5,26 @@
 FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS build
 
 WORKDIR /build
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json tsconfig.json ./
+# T-03P: trader-host verifies the enclave transport itself, and that code is
+# in @darknyx/sdk. The image is no longer trader-host-only, which is a real
+# size cost accepted deliberately: a release host that proxies every browser
+# order but cannot check who it is talking to is the gap T-03 describes.
+COPY packages/client-core/package.json packages/client-core/package.json
+COPY packages/sdk/package.json packages/sdk/package.json
 COPY packages/trader-host/package.json packages/trader-host/package.json
-RUN npm ci --workspace @darknyx/trader-host
+RUN npm ci --workspace @darknyx/client-core \
+            --workspace @darknyx/sdk \
+            --workspace @darknyx/trader-host
+COPY packages/client-core/ packages/client-core/
+COPY packages/sdk/ packages/sdk/
 COPY packages/trader-host/ packages/trader-host/
-RUN npm -w @darknyx/trader-host run build \
-    && npm prune --omit=dev --workspace @darknyx/trader-host
+RUN npm -w @darknyx/client-core run build \
+    && npm -w @darknyx/sdk run build \
+    && npm -w @darknyx/trader-host run build \
+    && npm prune --omit=dev --workspace @darknyx/client-core \
+                            --workspace @darknyx/sdk \
+                            --workspace @darknyx/trader-host
 
 FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
 
@@ -19,6 +33,10 @@ ENV NODE_ENV=production \
     DARKNYX_TRADER_PORT=8080
 WORKDIR /app
 COPY --from=build /build/node_modules node_modules
+COPY --from=build /build/packages/client-core/package.json packages/client-core/package.json
+COPY --from=build /build/packages/client-core/dist packages/client-core/dist
+COPY --from=build /build/packages/sdk/package.json packages/sdk/package.json
+COPY --from=build /build/packages/sdk/dist packages/sdk/dist
 COPY --from=build /build/packages/trader-host/package.json packages/trader-host/package.json
 COPY --from=build /build/packages/trader-host/dist packages/trader-host/dist
 

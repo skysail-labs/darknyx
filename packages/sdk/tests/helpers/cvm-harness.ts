@@ -18,6 +18,10 @@
  */
 
 import { resolve } from "node:path";
+
+import type { NodeWebSocketLike } from "../../src/tee/transport-ws.node.js";
+import type { SendableWebSocketLike } from "../../src/orders/trading-ws-client.js";
+import { TransportVerificationError } from "../../src/tee/verify-transport.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -134,18 +138,183 @@ export const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
   return aligned;
 };
 
+/**
+ * The transport every `cvm-*` suite uses (T-03P).
+ *
+ * `DARKNYX_CVM_TRANSPORT=ra-tls` routes through the verified transport: the
+ * enclave's certificate is checked against a quote-bound manifest on the socket
+ * carrying each request. Anything else is the legacy gateway-terminated path.
+ *
+ * This is the single conversion point for all six suites — they all reach the
+ * CVM through `gwFetch` — which is why the cutover is one edit here rather than
+ * six.
+ *
+ * Built lazily and once: establishing the transport costs a TDX quote
+ * (~1.5 s), and a per-request rebuild would both slow the suite and defeat the
+ * point of pinning one verified connection.
+ *
+ * Cached only on SUCCESS. Caching a rejected promise would poison the transport
+ * for the rest of the process — a transient failure during CVM restart would
+ * become permanent, and in tests each case would inherit the first case's
+ * error rather than producing its own.
+ */
+let verifiedFetch: Promise<typeof fetch> | undefined;
+/**
+ * SPKI established by the transport verification, needed to gate the
+ * WebSocket upgrade. Kept beside the fetch because both must describe the SAME
+ * boot session: a socket verified under a previous boot is exactly what
+ * `boot_session_mismatch` exists to reject.
+ */
+let verifiedSpki: Uint8Array | undefined;
+
+function ratlsRequested(): boolean {
+  return process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+}
+
+async function getTransport(): Promise<typeof fetch> {
+  verifiedFetch ??= (async () => {
+    const compose = process.env.DARKNYX_EXPECT_COMPOSE_HASH?.trim();
+    const signers = process.env.DARKNYX_EXPECT_SIGNER_SET?.trim();
+    const gateway = process.env.DARKNYX_TEE_GATEWAY?.trim();
+    // Fail loudly rather than falling back. A cvm suite that silently ran over
+    // the legacy path while the operator believed it was testing ra-tls would
+    // report a green cutover that never happened.
+    if (!gateway) throw new Error("DARKNYX_TEE_GATEWAY is required");
+    if (!compose || !signers) {
+      throw new Error(
+        "DARKNYX_CVM_TRANSPORT=ra-tls requires DARKNYX_EXPECT_COMPOSE_HASH and " +
+          "DARKNYX_EXPECT_SIGNER_SET; without them a verified transport proves " +
+          "a channel to some enclave, not the governed one",
+      );
+    }
+    const { TransportAgent, createVerifiedFetch } = await import(
+      "../../src/tee/transport-agent.node.js"
+    );
+    const { parseEventLog } = await import("../../src/tee/verify-core.js");
+    const { createDcapQuoteVerifier } = await import("../../src/tee/dcap.js");
+    const { randomBytes } = await import("node:crypto");
+    const dcap = createDcapQuoteVerifier({});
+    const agent = new TransportAgent();
+    const { verifyTransportOnSocket } = await import(
+      "../../src/tee/transport-agent.node.js"
+    );
+    const verifyDeps = {
+      verifyQuote: (quoteHex: string) =>
+        dcap(
+          Uint8Array.from(
+            quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+          ),
+        ),
+      parseEventLog,
+      randomNonce: () => new Uint8Array(randomBytes(32)),
+    };
+    const expectedSignerSet = Uint8Array.from(
+      signers.match(/../g)!.map((b) => parseInt(b, 16)),
+    );
+    // Verify once up front so the SPKI is available to the WebSocket gate.
+    // Without this the stream would open unchecked while HTTP was verified —
+    // the partial mode that is worse than no protection, because the operator
+    // and the logs would both say "verified".
+    const established = await verifyTransportOnSocket({
+      baseUrl: gateway,
+      agent,
+      deps: verifyDeps,
+      expectedComposeHash: compose,
+      expectedSignerSetSha256: expectedSignerSet,
+    });
+    verifiedSpki = established.spkiSha256;
+    return createVerifiedFetch({
+      baseUrl: gateway,
+      agent,
+      deps: verifyDeps,
+      expectedComposeHash: compose,
+      expectedSignerSetSha256: expectedSignerSet,
+    });
+  })().catch((e: unknown) => {
+    verifiedFetch = undefined; // do not cache a failure
+    verifiedSpki = undefined;
+    throw e;
+  });
+  return verifiedFetch;
+}
+
+/**
+ * Open a WebSocket to the CVM, gated the same way `gwFetch` is.
+ *
+ * Under `ra-tls` this checks the upgrade socket's certificate against the SPKI
+ * established during transport verification, and discards queued frames if it
+ * does not match — so no credential is ever written to an unverified stream.
+ * Under the legacy path it is a plain `ws` connection, unchanged.
+ *
+ * The returned object exposes the `ws` event API (`on`) that the cvm suites
+ * already use, so converting a test is a one-line substitution rather than a
+ * rewrite of its event handling.
+ */
+export async function gwWebSocket(url: string): Promise<SendableWebSocketLike> {
+  const { default: WS } = await import("ws");
+  if (!ratlsRequested()) return new WS(url) as unknown as SendableWebSocketLike;
+
+  // Ensure verification has run; this is what populates `verifiedSpki`.
+  await getTransport();
+  if (!verifiedSpki) {
+    throw new Error(
+      "ra-tls requested but no verified SPKI is available — refusing to open " +
+        "an ungated stream",
+    );
+  }
+  const { createVerifiedWebSocketFactory } = await import(
+    "../../src/tee/transport-ws.node.js"
+  );
+  return createVerifiedWebSocketFactory({
+    verifiedSpkiSha256: verifiedSpki,
+    // `rejectUnauthorized: false` is safe ONLY because the SPKI gate below is
+    // what actually authenticates the peer: Node's CA check cannot validate an
+    // enclave-generated boot-scoped certificate, and the quote-bound SPKI is a
+    // strictly stronger check than any CA chain would be. It is not a
+    // "make TLS pass" shortcut — with the gate removed, this line alone would
+    // accept any certificate from anyone.
+    createSocket: (u: string) =>
+      new WS(u, { rejectUnauthorized: false }) as unknown as NodeWebSocketLike,
+    onViolation: (e) => {
+      // Loud: a rejected upgrade under ra-tls is the exact event this whole
+      // remediation exists to make visible.
+      console.error(`[cvm-harness] WebSocket transport violation: ${e.kind}`);
+    },
+  })(url);
+}
+
 /** fetch with retries — the dstack gateway can transiently close the socket
  *  (UND_ERR_SOCKET) for the first minute after a CVM restart. */
+/**
+ * The transport a consumer should be given when it takes its own `fetchImpl`.
+ *
+ * Same selection as {@link gwFetch}: the verified transport under `ra-tls`,
+ * plain fetch otherwise. Exposed because SDK entry points such as
+ * `verifyTeeAttestation` do their own fetching, and handing them the global
+ * one would leave those calls on an unverified connection while the rest of
+ * the suite is verified.
+ */
+export async function gwTransportFetch(): Promise<typeof fetch> {
+  return ratlsRequested() ? await getTransport() : fetch;
+}
+
 export async function gwFetch(
   url: string,
   init?: RequestInit,
   tries = 6,
 ): Promise<Response> {
+  const f = ratlsRequested() ? await getTransport() : fetch;
   let last: unknown;
   for (let i = 0; i < tries; i++) {
     try {
-      return await fetch(url, init);
+      return await f(url, init);
     } catch (e) {
+      // NEVER retry a security rejection. The loop exists for UND_ERR_SOCKET
+      // while a CVM restarts; a `spki_mismatch` or `signer_set_mismatch` is a
+      // verdict, not a transient. Retrying one burns six verification
+      // exchanges and — worse — reports the failure as a timeout after ~18s
+      // instead of naming the peer that failed its check.
+      if (e instanceof TransportVerificationError) throw e;
       last = e;
       await new Promise((r) => setTimeout(r, 3000));
     }

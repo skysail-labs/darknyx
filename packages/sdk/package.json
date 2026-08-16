@@ -2,7 +2,7 @@
   "name": "@darknyx/sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "Darknyx dark pool TypeScript SDK — factory-function API, injectable providers, staged errors.",
+  "description": "Darknyx dark pool TypeScript SDK \u2014 factory-function API, injectable providers, staged errors.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,6 +38,10 @@
     "./browser-account": {
       "types": "./dist/browser-account.d.ts",
       "default": "./dist/browser-account.js"
+    },
+    "./transport-node": {
+      "types": "./dist/transport-node.d.ts",
+      "default": "./dist/transport-node.js"
     }
   },
   "files": [
@@ -60,7 +64,8 @@
     "@solana/web3.js": "^1.98.0",
     "circom_tester": "0.0.24",
     "circomlibjs": "^0.1.7",
-    "tweetnacl": "1.0.3"
+    "tweetnacl": "1.0.3",
+    "undici": "6.28.0"
   },
   "optionalDependencies": {
     "snarkjs": "^0.7.5"
