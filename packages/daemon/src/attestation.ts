@@ -226,7 +226,8 @@ export interface VerifyAttestationOptions {
   token: string;
   expected?: ExpectedMeasurements;
   quoteVerifier?: QuoteVerifier;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport; see `OrderClientOptions.fetchImpl`. */
+  fetchImpl: typeof fetch;
   /** Require real DCAP + governance pins. Defaults to true (secure-by-default). */
   strict?: boolean;
   /** Accepted TCB statuses. Defaults to {@link DEFAULT_TCB_ALLOWLIST}. */
@@ -241,7 +242,7 @@ export async function verifyAttestation(
   opts: VerifyAttestationOptions,
 ): Promise<AttestationResult> {
   const strict = opts.strict ?? true;
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl;
   const nonce = Uint8Array.from(randomBytes(32));
 
   const att = await fetchAttestation(

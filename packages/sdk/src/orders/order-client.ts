@@ -33,7 +33,19 @@ export interface OrderClientOptions {
   baseUrl: string;
   /** Bearer token from `POST /auth/token`. */
   token: string;
-  fetchImpl?: typeof fetch;
+  /**
+   * REQUIRED. The transport this call must use.
+   *
+   * Not optional and not defaulted: an omitted `fetchImpl` used to fall back
+   * to `globalThis.fetch`, which silently bypasses the verified transport.
+   * Seven call sites did exactly that, each looking correct, and each only
+   * surfaced during a billable live CVM run. Making it required converts every
+   * one of those into a compile error.
+   *
+   * Browser and legacy callers pass `globalThis.fetch` explicitly — a
+   * statement of intent rather than an accident.
+   */
+  fetchImpl: typeof fetch;
 }
 
 export interface PlaceOrderResponse {
@@ -97,7 +109,7 @@ export async function placeOrder(
   opts: OrderClientOptions,
   order: PlaceOrderRequest,
 ): Promise<PlaceOrderResponse> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(opts.baseUrl, "orders"), {
     method: "POST",
     headers: authHeaders(opts.token),
@@ -112,7 +124,7 @@ export async function cancelOrder(
   orderIdHex: string,
   cancel: CancelOrderRequest,
 ): Promise<CancelOrderResponse> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
     method: "DELETE",
     headers: authHeaders(opts.token),
@@ -127,7 +139,7 @@ export async function modifyOrder(
   oldOrderIdHex: string,
   modify: ModifyOrderRequest,
 ): Promise<ModifyOrderResponse> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(opts.baseUrl, `orders/${oldOrderIdHex}`), {
     method: "PUT",
     headers: authHeaders(opts.token),
@@ -141,7 +153,7 @@ export async function getOrder(
   opts: OrderClientOptions,
   orderIdHex: string,
 ): Promise<unknown> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(opts.baseUrl, `orders/${orderIdHex}`), {
     headers: { authorization: `Bearer ${opts.token}` },
   });

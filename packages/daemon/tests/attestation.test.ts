@@ -392,6 +392,9 @@ describe("Daemon — attestation gate", () => {
 
   it("refuses to start when attestation fails", async () => {
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,
@@ -420,6 +423,9 @@ describe("Daemon — attestation gate", () => {
 
   it("starts + records the identity when attestation passes", async () => {
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,
@@ -454,6 +460,9 @@ describe("Daemon — attestation gate", () => {
 
   it("refuses to start when on-chain tee_pubkeys don't match the attested set", async () => {
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,
@@ -501,6 +510,8 @@ describe("Daemon — attestation gate", () => {
       subscribeOrders: (() => ({ close() {} })) as never,
       verifyAttestation: async () => verifiedIdentity(),
       verifyRoot: false as const,
+      // Offline: transport stated explicitly, now that it is required.
+      fetchImpl: globalThis.fetch,
     };
     const rpcFailure = new Daemon({
       ...common,
@@ -520,6 +531,9 @@ describe("Daemon — attestation gate", () => {
   it("does not permit the on-chain key check to be disabled in strict mode", async () => {
     const attest = vi.fn(async () => verifiedIdentity());
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config({ attestOnchainCheck: false }),
       keystore: keystore(),
       store,
@@ -562,6 +576,9 @@ describe("Daemon — attestation gate", () => {
       close: vi.fn(),
     };
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,
@@ -652,6 +669,9 @@ describe("Daemon — attestation gate", () => {
     let now = 1_000;
     let rpcFails = false;
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,
@@ -706,6 +726,9 @@ describe("Daemon — attestation gate", () => {
     vi.useFakeTimers();
     const reader = vi.fn(async () => [TEE_PUBKEY_B58]);
     const daemon = new Daemon({
+      // Offline test. `fetchImpl` is required now, so the transport is
+      // stated rather than defaulting to global fetch.
+      fetchImpl: globalThis.fetch,
       config: config(),
       keystore: keystore(),
       store,

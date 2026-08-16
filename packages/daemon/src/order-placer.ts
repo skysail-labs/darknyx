@@ -54,7 +54,9 @@ export interface RestOrderPlacerOptions {
   /** Gateway origin, e.g. `https://<app>-8080.dstack-…`. */
   baseUrl: string;
   token: string;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport. See `OrderClientOptions.fetchImpl`: an
+   *  omitted value used to fall back to global fetch and bypass verification. */
+  fetchImpl: typeof fetch;
 }
 
 /** REST {@link OrderPlacer} — thin wrapper over the SDK order-client. Stateless;

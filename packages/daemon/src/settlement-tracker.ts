@@ -29,7 +29,9 @@ export interface SettlementTrackerOptions {
   gatewayUrl: string;
   token: string;
   treeId?: number;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport. See `OrderClientOptions.fetchImpl`: an
+   *  omitted value used to fall back to global fetch and bypass verification. */
+  fetchImpl: typeof fetch;
   /** Poll interval for resolving pending leaf indices (ms). Default 5000. */
   pollMs?: number;
   /** Fired when a note's leaf index is resolved. */
