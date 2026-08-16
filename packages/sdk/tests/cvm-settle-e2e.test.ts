@@ -31,7 +31,8 @@
  * DARKNYX_CVM_BASE_QTY tunes the trade size.
  *
  * Run:
- *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=https://<app_id>-8080.dstack-pha-prod5.phala.network \
+ *   RUN_CVM_E2E=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+ *     DARKNYX_TEE_GATEWAY=https://<app_id>-8443s.dstack-pha-<node>.phala.network \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
  */

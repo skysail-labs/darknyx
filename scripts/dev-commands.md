@@ -416,13 +416,15 @@ phala cvms logs  "$CVM" 2>&1 | tail -40            # logs
 phala cvms get   "$CVM"                            # status / app id
 ```
 
-Gateway URL (no custom domain yet): `https://<app_id>-8080.dstack-pha-<node>.phala.network`,
+Gateway URL (no custom domain yet): `https://<app_id>-8443s.dstack-pha-<node>.phala.network`,
+(the **`s` suffix** selects dstack TLS passthrough, so the enclave — not the
+gateway — terminates TLS; `:8080` is no longer published, see T-03P),
 where `<node>` is assigned PER CVM (`prod9`, `prod5`, …). Probe it; a wrong
 suffix returns HTTP 000, which looks like a dead enclave rather than a bad URL.
 For the dev CVM:
 
 ```sh
-GW="https://$CVM-8080.dstack-pha-$NODE.phala.network"   # resolve $CVM + $NODE first
+GW="https://$CVM-8443s.dstack-pha-$NODE.phala.network"  # resolve $CVM + $NODE first
 curl -s "$GW/info" | jq .                          # signer (tee_pubkey), app_id, RTMRs
 ```
 
@@ -529,7 +531,7 @@ grows.
 
 ```sh
 HELIUS="https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
-GW="https://$CVM-8080.dstack-pha-$NODE.phala.network"   # resolve $CVM + $NODE first
+GW="https://$CVM-8443s.dstack-pha-$NODE.phala.network"  # resolve $CVM + $NODE first
 
 # 1. Fresh devnet state (mints + settle ALT + reset + e2e-config.json):  §4.4
 # 2. CVM deployed with the REAL mints + fee 30 + owner + Helius + sync floor:  §5.1–5.3
@@ -801,7 +803,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Vault program id | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` |
 | Matching-engine program id (retiring) | `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe` |
 | CVM image | `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (built by the `tee-image` workflow on a `tee-v3-hardening-*` tag; GH repo `skysail-labs/darknyx`) |
-| Gateway URL form | `https://<app_id>-8080.dstack-pha-<node>.phala.network` — `<node>` is per-CVM; probe it |
+| Gateway URL form | `https://<app_id>-8443s.dstack-pha-<node>.phala.network` — the `s` suffix selects TLS passthrough; `<node>` is per-CVM, probe it. `:8080` is unpublished since the T-03P cutover |
 | Pyth SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | Placeholder dev mints | base `[1,0…,0xb1]`, quote `[1,0…,0x9e]` (loadgen regime) |
 | Test keypair dir (gitignored) | `.devnet/keypairs/` |

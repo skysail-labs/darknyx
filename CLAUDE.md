@@ -50,6 +50,24 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
   byte-identical Poseidon / nullifier / note / key derivation that the TS SDK
   has parity tests against.
+* **Browser trader (`packages/browser-client/` + `packages/trader-host/`)** —
+  shipped 2026-08. `browser-client` is the in-browser trader: keys and proving
+  stay on-device in a custody Worker behind WebAuthn-PRF, and it ships as a
+  signed release whose artifacts are SRI-pinned. `trader-host` is the ordinary
+  Node process that serves that release and **proxies** its CVM and RPC calls;
+  it holds no keys. `packages/client-core/` is the platform-neutral logic both
+  it and the SDK share. **`trader-host` is the reason T-03B exists**: it sees
+  every browser order in plaintext, so the browser half of the transport work
+  is about removing that trust, not about the daemon.
+
+  **Each of these has its own README — read it rather than expanding this
+  file.** `packages/browser-client/README.md` (custody Worker, WebAuthn-PRF,
+  release signing, the trader-host origin boundary),
+  `packages/trader-host/README.md` (release serving, session security, the
+  proxy contract), `packages/client-core/README.md`, and
+  `packages/indexer/README.md`. This section is deliberately a pointer: the
+  per-package details drift faster than this file is updated, and duplicating
+  them here is how the two end up disagreeing.
 
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
 the order/cancel canonical signing — single source of truth, used by the
@@ -520,7 +538,7 @@ test ! -e .devnet/darknyx-deploy.env
 
 # Probe for the node that actually fronts this CVM — the suffix is per-CVM.
 for n in prod9 prod5 prod7; do
-  U="https://$CVM-8080.dstack-pha-$n.phala.network"
+  U="https://$CVM-8443s.dstack-pha-$n.phala.network"   # `s` = TLS passthrough (§3.4b)
   [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$U/info")" = 200 ] \
     && { GW="$U"; break; }
 done
@@ -586,6 +604,80 @@ cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
 > a bucket run fails deterministically (with the "reset first" message) instead
 > of racing. Only the non-leaf tests (`cvm-api-surface`, `cvm-attestation-e2e`)
 > are reset-free. Full workflow: **[`docs/cvm-run-runbook.md`](docs/cvm-run-runbook.md) §5**.
+
+### 3.4b The transport is RA-TLS — reach the CVM on `-8443s.`, not `-8080.`
+
+Since the **T-03P cutover (2026-08-16)** the enclave terminates TLS itself with
+a boot-random, quote-bound key, and **`:8080` is no longer published** — it
+returns HTTP 000. The route is the dstack passthrough form, where the trailing
+**`s`** is what makes the gateway bridge raw TCP instead of terminating TLS:
+
+```sh
+CVM=<app_id>                       # phala cvms list
+GW="https://$CVM-8443s.dstack-pha-<node>.phala.network"   # probe <node>; it is per-CVM
+```
+
+The served certificate is the enclave's own (`CN=darknyx-tee ra-tls
+(boot-scoped)`), so it is **self-signed by design**. Clients verify it against
+`GET /transport-attestation` — they do NOT fall back to a CA check, and
+`NODE_TLS_REJECT_UNAUTHORIZED=0` is never the fix (it accepts any certificate
+from anyone while still reporting as RA-TLS).
+
+**Three governance pins every RA-TLS client needs.** Read them from the live
+enclave after each deploy — a compose edit of any kind moves `compose_hash`:
+
+```sh
+curl -sk "$GW/transport-attestation?nonce=$(openssl rand -hex 32)" -o /tmp/ta.json
+# compose_hash lives in the event log; signer set is in the manifest
+python3 - <<'PY'
+import json; d=json.load(open('/tmp/ta.json')); m=d['manifest']
+ev=json.loads(d['event_log']) if isinstance(d['event_log'],str) else d['event_log']
+print("DARKNYX_EXPECT_COMPOSE_HASH=",
+      [e['event_payload'] for e in ev if str(e.get('event'))=='compose-hash'][0], sep="")
+print("DARKNYX_EXPECT_SIGNER_SET=", m['signer_set_sha256'], sep="")
+PY
+```
+
+**Running the suites.** `DARKNYX_CVM_TRANSPORT=ra-tls` is the single switch —
+`cvm-harness.ts::gwFetch`/`gwWebSocket` route every suite through the verified
+transport, and it FAILS LOUDLY rather than falling back:
+
+```sh
+export DARKNYX_EXPECT_COMPOSE_HASH=<from above>
+export DARKNYX_EXPECT_SIGNER_SET=<from above>
+export DARKNYX_TEE_API_KEY=... DARKNYX_TEE_API_SECRET=... DARKNYX_TEE_PASSPHRASE=...
+
+# the transport suite itself (RSS test REQUIRES --expose-gc, and says so)
+( cd packages/sdk && RUN_CVM_RATLS=1 NODE_OPTIONS="--expose-gc" \
+    DARKNYX_TEE_RATLS_URL="$GW" ../../node_modules/.bin/vitest run \
+    tests/cvm-ratls-transport.test.ts )
+
+# any cvm-* suite (ONE leaf-count test per reset + cold boot — see §3.4)
+( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+    ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts )
+
+# attestation (own gate) and the daemon (own gate + its own env)
+( cd packages/sdk && RUN_CVM_ATTEST=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+    DARKNYX_TEE_GATEWAY="$GW" ../../node_modules/.bin/vitest run --project cvm \
+    tests/cvm-attestation-e2e.test.ts )
+( cd packages/daemon && RUN_CVM_DAEMON=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+    DARKNYX_TEE_GATEWAY="$GW" ../../node_modules/.bin/vitest run \
+    tests/cvm-daemon-smoke.test.ts )
+```
+
+> **The `cvm-*` suites do NOT run in `pr-checks`** — they self-skip without
+> their `RUN_*` flag, and **a skipped suite reports green**. Their real
+> coverage is the scheduled `cvm-e2e.yml` (Mon/Thu), which needs the repo
+> variable `DARKNYX_NIGHTLY_CVM_ID` set. If that is unset the workflow fails at
+> its preflight step and never reaches a test — which is how two suites stayed
+> broken for weeks. Treat a green PR as saying nothing about the CVM path.
+
+**Rollback.** The plaintext listener still BINDS inside the enclave; only its
+port publication is gone. To roll back, set
+`DARKNYX_TEE_TRANSPORT_MODE=gateway-terminated` **and** restore the
+`"8080:8080"` publication — `scripts/check-ratls-cutover.sh` fails the build
+unless the two move together, in either direction.
 
 ### 3.5 STOP THE CVM when done — **CPU CVMs ONLY**
 
@@ -973,7 +1065,7 @@ it after; never commit a secret).**
 
 ---
 
-*Last updated: 2026-07-16 — current architecture: vault (only on-chain
+*Last updated: 2026-08-16 — current architecture: vault (only on-chain
 program) + the in-CVM matcher/settler (`crates/darknyx-tee`) on Phala, validated
 end-to-end on devnet (`cvm-settle-e2e` real settle + loadgen). The
 `matching_engine` / MagicBlock-ER / PER path has been removed. Note model is

@@ -27,7 +27,8 @@
  * rotated/funded (settles happen), buyer+seller payers funded.
  *
  * Run:
- *   RUN_CVM_DAEMON_LIFECYCLE=1 DARKNYX_TEE_GATEWAY=https://<app>-8080.dstack-… \
+ *   RUN_CVM_DAEMON_LIFECYCLE=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+ *     DARKNYX_TEE_GATEWAY=https://<app>-8443s.dstack-… \
  *     SOLANA_RPC_URL=<helius> ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/daemon && ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
  */
