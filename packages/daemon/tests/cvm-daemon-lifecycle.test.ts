@@ -232,9 +232,16 @@ maybe(
     let buyerStore: DaemonStore;
 
     // Orders need a FUTURE expiry_slot — the matcher sweeps expiry_slot=0
-    // (limitPolicy's "GTC" default) as already-expired.
+    // (limitPolicy's "GTC" default) as already-expired — but the CVM also
+    // REJECTS an expiry beyond `MAX_LOCK_TTL_SLOTS` (4500, ~30 min) ahead,
+    // the F-05 cap on how long a note may sit locked.
+    //
+    // This used to ask for +100_000 and was rejected outright. The margin
+    // below the cap is deliberate: slots advance between reading `getSlot`
+    // and the CVM evaluating the order, so asking for exactly 4500 would be
+    // intermittently over.
     async function futureExpiry(): Promise<bigint> {
-      return BigInt((await conn.getSlot("confirmed")) + 100_000);
+      return BigInt((await conn.getSlot("confirmed")) + 4_000);
     }
 
     // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──
@@ -302,11 +309,17 @@ maybe(
         ),
         baseUrl: GATEWAY,
         token,
+        // Fetches /tree/inclusion internally; without this it does so on
+        // global fetch and cannot reach the enclave.
+        fetchImpl: tfetch,
         prover: nodeValidInputProver(VI),
         ownerCommitmentBlinding: ks.ownerBlinding,
         tokenMint: baseMint.toBytes(),
       });
-      const resp = await placeOrder({ baseUrl: GATEWAY, token }, req);
+      const resp = await placeOrder(
+        { baseUrl: GATEWAY, token, fetchImpl: tfetch },
+        req,
+      );
       expect(resp.status).toBeTruthy();
     }
 
@@ -413,7 +426,11 @@ maybe(
         payer: buyerPayer,
         keystore,
         artifacts: { k2: MERGE(2), k4: MERGE(4) },
-        leavesFetcher: httpLeavesFetcher({ gatewayUrl: GATEWAY, token }),
+        leavesFetcher: httpLeavesFetcher({
+          gatewayUrl: GATEWAY,
+          token,
+          fetchImpl: tfetch,
+        }),
       });
       const rawMerge = getMergeFunction({ client });
       buyer = new Daemon({
