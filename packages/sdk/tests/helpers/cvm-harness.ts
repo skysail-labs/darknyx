@@ -285,6 +285,19 @@ export async function gwWebSocket(url: string): Promise<SendableWebSocketLike> {
 
 /** fetch with retries — the dstack gateway can transiently close the socket
  *  (UND_ERR_SOCKET) for the first minute after a CVM restart. */
+/**
+ * The transport a consumer should be given when it takes its own `fetchImpl`.
+ *
+ * Same selection as {@link gwFetch}: the verified transport under `ra-tls`,
+ * plain fetch otherwise. Exposed because SDK entry points such as
+ * `verifyTeeAttestation` do their own fetching, and handing them the global
+ * one would leave those calls on an unverified connection while the rest of
+ * the suite is verified.
+ */
+export async function gwTransportFetch(): Promise<typeof fetch> {
+  return ratlsRequested() ? await getTransport() : fetch;
+}
+
 export async function gwFetch(
   url: string,
   init?: RequestInit,

@@ -37,6 +37,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import WebSocket from "ws";
+
+import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
+import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
+import { buildDaemonTransport } from "../src/transport.js";
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -80,6 +86,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+
+const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+
+/**
+ * One transport for the whole file, selected exactly as the daemon entrypoint
+ * selects it.
+ *
+ * This suite previously hardcoded `gateway-terminated` and used global fetch
+ * throughout. After the cutover unpublished the plaintext route, that made it
+ * silently UNRUNNABLE — it died on DEPTH_ZERO_SELF_SIGNED_CERT before reaching
+ * a single assertion.
+ */
+let sharedTransport: Awaited<ReturnType<typeof buildDaemonTransport>>;
+const tfetch: typeof fetch = ((i: never, init: never) =>
+  sharedTransport.fetch(i, init)) as typeof fetch;
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 const READY =
   process.env.RUN_CVM_DAEMON_LIFECYCLE === "1" &&
@@ -88,10 +109,15 @@ const READY =
   existsSync(CONFIG_PATH);
 const maybe = READY ? describe : describe.skip;
 
+// Defaults are the compose-hardcoded bootstrap creds, but a properly
+// provisioned CVM injects fresh ones through the encrypted env (a production
+// tier REFUSES the public test credentials). Take them from the environment
+// when present so this runs against a real deployment rather than only
+// against compose defaults.
 const API = {
-  key: "darknyx-test-api-key",
-  secret: "darknyx-test-secret",
-  pass: "darknyx-test-passphrase",
+  key: process.env.DARKNYX_TEE_API_KEY ?? "darknyx-test-api-key",
+  secret: process.env.DARKNYX_TEE_API_SECRET ?? "darknyx-test-secret",
+  pass: process.env.DARKNYX_TEE_PASSPHRASE ?? "darknyx-test-passphrase",
 };
 const FEE_BPS = 30n;
 const SYMBOL = "SOL-USDC";
@@ -140,7 +166,7 @@ interface E2EConfig {
 }
 
 async function authToken(): Promise<string> {
-  const r = await fetch(`${GATEWAY}/auth/token`, {
+  const r = await tfetch(`${GATEWAY}/auth/token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -164,7 +190,7 @@ async function authToken(): Promise<string> {
  * RUN_CVM_DAEMON_LIFECYCLE=1.
  */
 async function bootSessionId(): Promise<Uint8Array> {
-  const r = await fetch(`${GATEWAY}/info`);
+  const r = await tfetch(`${GATEWAY}/info`);
   expect(r.status, "/info failed").toBe(200);
   const info = (await r.json()) as { boot_session_id: string };
   expect(
@@ -181,7 +207,7 @@ async function waitForLeaf(commitment: string, token: string): Promise<void> {
     const u = new URL("/tree/inclusion", GATEWAY);
     u.searchParams.set("commitment", commitment);
     u.searchParams.set("tree_id", "0");
-    const r = await fetch(u.toString(), {
+    const r = await tfetch(u.toString(), {
       headers: { authorization: `Bearer ${token}` },
     });
     if (r.status === 200) return;
@@ -286,7 +312,7 @@ maybe(
 
     async function leafCount(): Promise<number> {
       // The TEE mirror's leaf count, under reserves on /transparency.
-      const r = await fetch(`${GATEWAY}/transparency`, {
+      const r = await tfetch(`${GATEWAY}/transparency`, {
         headers: { authorization: `Bearer ${token}` },
       });
       const j = (await r.json()) as { reserves?: { leaf_count?: number } };
@@ -294,6 +320,42 @@ maybe(
     }
 
     beforeAll(async () => {
+      // Built before any gateway call: `/auth/token` below exchanges an API
+      // secret for a bearer token and must not travel on global fetch.
+      sharedTransport = await buildDaemonTransport(
+        {
+          gatewayUrl: GATEWAY,
+          transportMode: RATLS
+            ? ("ra-tls" as const)
+            : ("gateway-terminated" as const),
+          ...(RATLS
+            ? {
+                expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+                attestation: {
+                  composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+                },
+              }
+            : {}),
+        } as DaemonConfig,
+        {
+          verifierDeps: {
+            verifyQuote: (q: string) =>
+              createDcapQuoteVerifier({})(
+                Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+              ),
+            parseEventLog,
+            randomNonce: () => new Uint8Array(randomBytes(32)),
+          },
+          ...(RATLS
+            ? {
+                createWebSocket: (u: string) =>
+                  new WebSocket(u, {
+                    rejectUnauthorized: false,
+                  }) as unknown as NodeWebSocketLike,
+              }
+            : {}),
+        },
+      );
       cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
       conn = new Connection(RPC, "confirmed");
       admin = loadKp(
@@ -315,9 +377,20 @@ maybe(
 
       const config: DaemonConfig = {
         gatewayUrl: GATEWAY,
-        // Legacy path: predates T-03P and exercises the gateway-terminated
-        // transport. Stated rather than defaulted.
-        transportMode: "gateway-terminated" as const,
+        // Selected, not hardcoded. Pinning this to "gateway-terminated" made
+        // the suite unrunnable after the cutover unpublished the plaintext
+        // route.
+        transportMode: RATLS
+          ? ("ra-tls" as const)
+          : ("gateway-terminated" as const),
+        ...(RATLS
+          ? {
+              expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+              attestation: {
+                composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+              },
+            }
+          : {}),
         gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
         token,
         rpcUrl: RPC,
@@ -345,6 +418,19 @@ maybe(
       const rawMerge = getMergeFunction({ client });
       buyer = new Daemon({
         config,
+        // The shipped wiring: every CVM call and the /v1/stream session run
+        // over the selected transport. Omitting these left the daemon's own
+        // attestation fetch on global fetch, which fails closed against the
+        // enclave's self-signed certificate.
+        fetchImpl: sharedTransport.fetch,
+        ...(sharedTransport.webSocketFactory
+          ? {
+              sendableWebSocketFactory:
+                sharedTransport.webSocketFactory as ConstructorParameters<
+                  typeof Daemon
+                >[0]["sendableWebSocketFactory"],
+            }
+          : {}),
         keystore,
         store: buyerStore,
         prover: nodeValidInputProver(VI),
@@ -462,7 +548,7 @@ maybe(
         )}`,
       );
       console.log(`  · daemon notes=${buyer.listNotes().length}`);
-      const cvmOrder = await fetch(`${GATEWAY}/orders/${orderId}`, {
+      const cvmOrder = await tfetch(`${GATEWAY}/orders/${orderId}`, {
         headers: { authorization: `Bearer ${token}` },
       });
       console.log(

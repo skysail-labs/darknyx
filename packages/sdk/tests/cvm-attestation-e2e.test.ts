@@ -21,6 +21,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
+import { gwFetch, gwTransportFetch } from "./helpers/cvm-harness.js";
+
 import {
   composeHashFromEventLog,
   createDcapQuoteVerifier,
@@ -48,7 +50,11 @@ async function getJson<T>(path: string): Promise<T> {
   const headers: Record<string, string> = TOKEN
     ? { authorization: `Bearer ${TOKEN}` }
     : {};
-  const res = await fetch(new URL(path, GATEWAY).toString(), { headers });
+  // Through the harness transport, not global fetch: under `ra-tls` the
+  // enclave serves a self-signed certificate, so a plain fetch fails with
+  // DEPTH_ZERO_SELF_SIGNED_CERT — and, more importantly, would be reaching
+  // the enclave over a connection nothing verified.
+  const res = await gwFetch(new URL(path, GATEWAY).toString(), { headers });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }
@@ -116,6 +122,7 @@ gate("live CVM attestation (real DCAP)", () => {
     const onchainKeys = vaultConfigTeePubkeys(acct!.data);
 
     const r = await verifyTeeAttestation(GATEWAY, composeHash!, {
+      fetchImpl: await gwTransportFetch(),
       token: TOKEN,
       expectedTeePubkey: onchainKeys[0],
     });
@@ -131,7 +138,10 @@ gate("live CVM attestation (real DCAP)", () => {
     const boot = await fetchAttestation(Uint8Array.from(randomBytes(32)));
     const composeHash = composeHashFromEventLog(parseEventLog(boot.event_log));
     await expect(
-      verifyTeeAttestation(GATEWAY, composeHash!, { token: TOKEN }),
+      verifyTeeAttestation(GATEWAY, composeHash!, {
+        token: TOKEN,
+        fetchImpl: await gwTransportFetch(),
+      }),
     ).rejects.toMatchObject({ kind: "pin_required" });
   });
 
