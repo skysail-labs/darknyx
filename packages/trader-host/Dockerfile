@@ -5,7 +5,7 @@
 FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS build
 
 WORKDIR /build
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json tsconfig.json ./
 # T-03P: trader-host verifies the enclave transport itself, and that code is
 # in @darknyx/sdk. The image is no longer trader-host-only, which is a real
 # size cost accepted deliberately: a release host that proxies every browser
