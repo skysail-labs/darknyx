@@ -456,6 +456,20 @@ maybe(
           gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
           token,
           cancelOnDisconnect: true,
+          // MUST carry the gated factory. Without it WsOrderPlacer builds a
+          // raw `ws` connection, which cannot complete a handshake against the
+          // enclave's self-signed certificate — and, if it could, would be
+          // placing orders over a peer nothing verified. This was the cause of
+          // the live "WebSocket transport error" on this suite: the injected
+          // placer bypassed the transport the rest of the daemon was using.
+          ...(sharedTransport.webSocketFactory
+            ? {
+                webSocketFactory:
+                  sharedTransport.webSocketFactory as ConstructorParameters<
+                    typeof WsOrderPlacer
+                  >[0]["webSocketFactory"],
+              }
+            : {}),
         }),
         settlementPollMs: 2000,
       });
