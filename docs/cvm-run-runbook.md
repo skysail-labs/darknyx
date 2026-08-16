@@ -231,7 +231,7 @@ test ! -e .devnet/darknyx-deploy.env
 # The gateway's node suffix is assigned PER CVM — probe, never hardcode. A wrong
 # suffix returns HTTP 000, which reads like a dead enclave rather than a bad URL.
 for n in prod9 prod5 prod7; do
-  U="https://$CVM-8080.dstack-pha-$n.phala.network"
+  U="https://$CVM-8443s.dstack-pha-$n.phala.network"
   [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$U/info")" = 200 ] \
     && { GW="$U"; break; }
 done

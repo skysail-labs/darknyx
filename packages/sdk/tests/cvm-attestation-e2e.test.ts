@@ -6,7 +6,8 @@
  *
  * Env-gated (auto-skips offline / in CI without a CVM):
  *   RUN_CVM_ATTEST=1
- *   DARKNYX_TEE_GATEWAY=https://<app>-8080.dstack-...phala.network
+ *   DARKNYX_CVM_TRANSPORT=ra-tls \
+ *   DARKNYX_TEE_GATEWAY=https://<app>-8443s.dstack-...phala.network
  *   DARKNYX_TEE_TOKEN=<bearer>            (if the gateway requires auth on /info)
  *   SOLANA_RPC_URL=<helius>           (for the on-chain tee_pubkeys cross-check)
  *   DARKNYX_VAULT_PROGRAM_ID=<base58>     (default: devnet vault)
