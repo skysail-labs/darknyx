@@ -106,7 +106,20 @@ export async function createVerifiedTransport(
     await verifyTransportOnSocket(verifyOpts);
   const bootSessionId = manifest.bootSessionId;
 
-  const fetchImpl = createVerifiedFetch(verifyOpts);
+  // Reconnects are pinned to the boot session established HERE.
+  //
+  // `createVerifiedFetch` re-verifies whenever it gets a replacement socket.
+  // Without this pin that re-verification only checks compose hash and signer
+  // set — both of which survive a restart — so a RESTARTED enclave would pass
+  // and start receiving this session's private request bytes. The transport is
+  // supposed to bind one boot, and `verify-transport` already implements the
+  // check; it was simply never given the expected value.
+  //
+  // Deliberately a separate object from `verifyOpts`: the FIRST verification
+  // cannot pin a boot session it has not learned yet, so only the reconnect
+  // path carries it.
+  const reconnectOpts = { ...verifyOpts, expectedBootSessionId: bootSessionId };
+  const fetchImpl = createVerifiedFetch(reconnectOpts);
 
   const webSocketFactory = opts.createWebSocket
     ? createVerifiedWebSocketFactory({

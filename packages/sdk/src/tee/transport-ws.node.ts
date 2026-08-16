@@ -42,6 +42,16 @@ import { createHash } from "node:crypto";
 import type { TLSSocket } from "node:tls";
 
 import { TransportVerificationError } from "./verify-transport.js";
+import type { TransportFailure } from "./verify-transport.js";
+
+/**
+ * Bound on a WebSocket handshake that never completes.
+ *
+ * Generous — a slow gateway is not an attack — but finite, because the queued
+ * login frame carries a bearer token and must not sit in memory indefinitely
+ * on a socket that will never be verified.
+ */
+const HANDSHAKE_TIMEOUT_MS = 20_000;
 import type {
   SendableWebSocketFactory,
   SendableWebSocketLike,
@@ -110,10 +120,19 @@ export function createVerifiedWebSocketFactory(
   return (url: string): SendableWebSocketLike => {
     const inner = opts.createSocket(url);
 
-    let state: "pending" | "verified" | "rejected" = "pending";
+    let state: "pending" | "verified" | "rejected" | "closed" = "pending";
     /** Frames the caller tried to send before the check completed. */
     let pending: string[] = [];
     let sawUpgrade = false;
+    // A server can accept the TCP connection and then emit neither `upgrade`
+    // nor `open`. Without a bound, `state` stays "pending" for the life of the
+    // process and the queued login frame — which carries a bearer token —
+    // stays in memory on a socket that will never be verified.
+    const handshakeTimer = setTimeout(() => {
+      if (state === "pending") reject("handshake did not complete in time", "malformed");
+    }, HANDSHAKE_TIMEOUT_MS);
+    // Never let this timer hold a Node process open on its own.
+    (handshakeTimer as unknown as { unref?: () => void }).unref?.();
 
     const openCbs: Array<() => void> = [];
     const messageCbs: Array<(ev: { data: unknown }) => void> = [];
@@ -136,6 +155,7 @@ export function createVerifiedWebSocketFactory(
     const surfaceOpen = () => {
       if (openFired || state !== "verified" || !innerOpened) return;
       openFired = true;
+      clearTimeout(handshakeTimer);
       // Flush here rather than at verification time — the socket may not have
       // been writable then.
       for (const frame of pending) inner.send(frame);
@@ -143,15 +163,16 @@ export function createVerifiedWebSocketFactory(
       for (const cb of openCbs) cb();
     };
 
-    const reject = (detail: string) => {
+    const reject = (detail: string, kind: TransportFailure = "spki_mismatch") => {
       if (state === "rejected") return;
       state = "rejected";
+      clearTimeout(handshakeTimer);
       // Discard unsent frames. A queued login frame must not be delivered
       // late on a connection that failed its check.
       pending = [];
       const err = new TransportVerificationError(
         `websocket transport rejected: ${detail}`,
-        "spki_mismatch",
+        kind,
       );
       rejection = err;
       opts.onViolation?.(err);
@@ -164,10 +185,14 @@ export function createVerifiedWebSocketFactory(
     };
 
     inner.on("upgrade", (res) => {
+      // Terminal states stay terminal. A late `upgrade` after close (or after
+      // a rejection) must not resurrect the connection to "verified" — doing
+      // so re-armed `send()` on a dead socket.
+      if (state === "closed" || state === "rejected") return;
       sawUpgrade = true;
       const observed = upgradeSocketSpki(res?.socket);
       if (!observed) {
-        reject("no peer certificate on the upgrade socket");
+        reject("no peer certificate on the upgrade socket", "malformed");
         return;
       }
       if (!eq(observed, opts.verifiedSpkiSha256)) {
@@ -179,11 +204,12 @@ export function createVerifiedWebSocketFactory(
     });
 
     inner.on("open", () => {
+      if (state === "closed" || state === "rejected") return;
       // If `open` arrives without an `upgrade` event we have no certificate to
       // compare and must not assume the connection is fine. Plain `ws://`
       // reaches here, which is exactly the case worth refusing.
       if (!sawUpgrade) {
-        reject("connection completed without a TLS upgrade to inspect");
+        reject("connection completed without a TLS upgrade to inspect", "malformed");
         return;
       }
       innerOpened = true;
@@ -198,6 +224,13 @@ export function createVerifiedWebSocketFactory(
     });
 
     inner.on("close", (code, reason) => {
+      // `close` is TERMINAL. Previously it only forwarded the event, leaving
+      // `state` at "pending", with two consequences: `send()` kept appending
+      // to a queue on a dead socket — accumulating a bearer token in memory
+      // with no error to the caller — and nothing ever released it.
+      if (state !== "rejected") state = "closed";
+      pending = [];
+      clearTimeout(handshakeTimer);
       for (const cb of closeCbs) {
         cb({ code, reason: typeof reason === "string" ? reason : undefined });
       }
@@ -237,7 +270,9 @@ export function createVerifiedWebSocketFactory(
         }
       },
       send(data: string): void {
-        if (state === "rejected") return; // never send on a failed connection
+        // Never send on a failed OR closed connection. Queueing after close
+        // silently retains credentials on a dead socket.
+        if (state === "rejected" || state === "closed") return;
         // Queue until the check has passed AND the socket is writable. Writing
         // at "verified but still CONNECTING" throws inside the caller's own
         // open handler, which is how a healthy transport produced a hung

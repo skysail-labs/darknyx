@@ -15,7 +15,7 @@
  * synchronously connected fine.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createVerifiedWebSocketFactory } from "../src/tee/transport-ws.node.js";
 import type { NodeWebSocketLike } from "../src/tee/transport-ws.node.js";
@@ -251,5 +251,91 @@ describe("gated WebSocket — listeners attached after the connection completes"
       });
     });
     expect(err, "late error listener never learned of the rejection").toBeTruthy();
+  });
+});
+
+describe("gated WebSocket — close and stall are terminal", () => {
+  /** A socket that connects at TCP level and then never upgrades or opens. */
+  class StalledSocket implements NodeWebSocketLike {
+    readonly sent: string[] = [];
+    private handlers = new Map<string, ((...a: never[]) => void)[]>();
+    on(event: string, cb: (...a: never[]) => void): void {
+      const l = this.handlers.get(event) ?? [];
+      l.push(cb);
+      this.handlers.set(event, l);
+    }
+    emit(event: string, ...args: unknown[]): void {
+      for (const cb of this.handlers.get(event) ?? []) {
+        (cb as (...a: unknown[]) => void)(...args);
+      }
+    }
+    send(data: string): void {
+      this.sent.push(data);
+    }
+    close(): void {}
+  }
+
+  it("drops queued frames when the socket closes", async () => {
+    // A credential queued before verification must not survive the socket.
+    // Previously `close` only forwarded the event, so `state` stayed "pending"
+    // and the bearer token sat in the queue on a dead connection.
+    const inner = new StalledSocket();
+    const factory = createVerifiedWebSocketFactory({
+      verifiedSpkiSha256: await expectedSpki(SPKI),
+      createSocket: () => inner,
+    });
+    const ws = factory("wss://enclave.example/v1/stream");
+    ws.send(JSON.stringify({ op: "login", token: "bearer" }));
+
+    inner.emit("close", 1006);
+
+    // DIFFERENTIAL: asserting `sent === []` here would pass either way, since
+    // a frame that is still queued has also not reached the wire. So drive the
+    // connection to a state that WOULD flush — a successful upgrade + open —
+    // and assert nothing comes out. With the queue retained, the credential
+    // flushes here; with close terminal, it is gone.
+    inner.emit("upgrade", {
+      socket: {
+        getPeerX509Certificate: () => ({
+          publicKey: { export: () => Buffer.from(SPKI) },
+        }),
+      },
+    });
+    inner.emit("open");
+    expect(
+      inner.sent,
+      "a frame queued before close survived and flushed afterwards",
+    ).toEqual([]);
+
+    // A send after close must not re-queue either — same differential.
+    ws.send(JSON.stringify({ op: "login", token: "bearer" }));
+    inner.emit("open");
+    expect(inner.sent).toEqual([]);
+  });
+
+  it("rejects a handshake that never completes, rather than queueing forever", async () => {
+    // The peer accepts TCP and then goes silent. Without a bound this stays
+    // "pending" for the life of the process with the token still queued.
+    vi.useFakeTimers();
+    try {
+      const inner = new StalledSocket();
+      const violations: string[] = [];
+      const factory = createVerifiedWebSocketFactory({
+        verifiedSpkiSha256: await expectedSpki(SPKI),
+        createSocket: () => inner,
+        onViolation: (e) => violations.push(e.kind),
+      });
+      const ws = factory("wss://enclave.example/v1/stream");
+      ws.send(JSON.stringify({ op: "login", token: "bearer" }));
+
+      vi.advanceTimersByTime(20_001);
+
+      expect(violations).toContain("malformed");
+      expect(inner.sent, "a stalled handshake still flushed the queue").toEqual(
+        [],
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
