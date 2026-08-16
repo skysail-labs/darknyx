@@ -317,6 +317,8 @@ cargo nextest run --workspace                       # unit + litesvm integration
                                                     #   and the artifact-required one
                                                     #   below, and skip the doctest
                                                     #   guard (cargo test runs them).
+                                                    #   NOTE: CI now runs nextest too,
+                                                    #   so this line mirrors CI exactly.
 # T-12: needs circuit artifacts — §2.1's `bash scripts/build-circuits.sh` must have run.
 # Under this flag a missing .wasm/.r1cs/.zkey is a hard FAILURE, not a silent skip,
 # so a proof-backed test can never report success without proving.
@@ -343,12 +345,35 @@ silently skipping the proof-backed intake tests.
 process and parallelises across the ~48 test binaries, where `cargo test` runs
 them one binary at a time — measured 266 s → 156 s on 8 cores. It does **not**
 run doctests. The workspace has none, and `scripts/check-no-doctests.sh` fails
-the gate if one is ever added, so the omission cannot become a silent gap. CI
-still runs `cargo test`: nextest's advantage comes from spare cores, so it is
-much smaller on a 2-core runner. Install with
-`cargo install cargo-nextest --locked`; `.config/nextest.toml` caps
-`test-threads` because ~50 tests each load a proving key (the N=16 key is 97 MB)
-and process-per-test would otherwise multiply peak memory.
+the gate if one is ever added, so the omission cannot become a silent gap.
+
+**CI runs nextest too, as of 2026-08-16** (`pr-checks.yml`, all four Rust jobs:
+`rust`, `vault-zk`, `vault-litesvm`, `tee`). An earlier revision of this file
+said CI deliberately stayed on `cargo test` because the advantage comes from
+spare cores; that reasoning applied to the whole workspace, but the dominant
+job is `tee` at ~460 s with ~290 tests, many of which load a proving key, and
+process-per-test parallelism helps there even on a small runner. Two things
+came with the switch and must stay:
+
+* `scripts/check-no-doctests.sh` is now wired into the `rust` job. Before the
+  switch it lived only in the local gate, so CI had **no** protection against a
+  silently-skipped doctest.
+* `--nocapture` was **dropped** from the `vault-zk` and `tee` jobs. nextest's
+  equivalent (`--no-capture`) forces `test-threads=1`, which would erase the
+  parallelism entirely. It loses nothing: nextest prints the captured output of
+  FAILING tests by default (verified, not assumed).
+
+nextest is pinned by version **and SHA-256** in CI rather than installed from
+`https://get.nexte.st/latest`, which would be an unpinned supply-chain hop into
+a job holding the cargo cache — the same reasoning that has every action in that
+file pinned by commit.
+
+Install locally with `cargo install cargo-nextest --locked`. `.config/nextest.toml`
+does **not** set `test-threads` (its default is already logical-CPU count, and
+pinning it there would read as a memory bound it does not provide); memory is
+bounded by `threads-required = 4` on the proving-key binaries, since ~50 tests
+each load one (the N=16 key is now 130 MB after the pot19 move) and
+process-per-test multiplies that working set instead of sharing it.
 
 Expected: ~workspace Rust tests pass; ~94 SDK tests pass + a few env-gated
 ones skip (they need `RUN_DEVNET_E2E=1` / `RUN_CVM_E2E=1` / `RUN_DEVNET_DW=1`

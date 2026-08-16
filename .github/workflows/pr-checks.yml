@@ -267,13 +267,44 @@ jobs:
       # Library unit tests only. Integration tests under `programs/vault/tests/`
       # need the circuit artefacts (they shell out to snarkjs) — promoted in
       # Phase 3.
+      # cargo-nextest: each test runs in its own process and binaries run in
+      # PARALLEL, where `cargo test` runs the ~48 test binaries one after
+      # another. Pinned by version and verified by SHA-256, matching how every
+      # action in this file is pinned by commit — `https://get.nexte.st/latest`
+      # would be an unpinned supply-chain hop into a job that holds the cargo
+      # cache.
+      - name: Install cargo-nextest (pinned + checksummed)
+        run: |
+          set -euo pipefail
+          VER=0.9.143
+          SHA=66786b9abe23920d022a182d1416b1bbc8130dd4872a9553d76985a1708dcd1e
+          URL="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${VER}/cargo-nextest-${VER}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/nextest.tar.gz "$URL"
+          echo "${SHA}  /tmp/nextest.tar.gz" | sha256sum -c -
+          tar zxf /tmp/nextest.tar.gz -C "$HOME/.cargo/bin"
+          cargo nextest --version
+
       - name: darkpool-crypto unit tests
-        run: cargo test -p darkpool-crypto --lib
+        run: cargo nextest run -p darkpool-crypto --lib
+
+      # REQUIRED companion to the nextest switch, not a nicety.
+      #
+      # nextest does not run doctests. The workspace has none today, so nothing
+      # is lost — but a doctest added later would be silently skipped by CI,
+      # and a test that never executes is indistinguishable from one that
+      # passes. This repo has repeatedly found gates that reported success
+      # without checking anything (T-11, T-12, T-13, T-18); adopting a runner
+      # that drops a whole category without a tripwire would repeat that.
+      #
+      # The script was already in the local gate but had NEVER been wired into
+      # CI, so before this change CI had no such protection at all.
+      - name: No executable doctests (nextest skips them)
+        run: bash scripts/check-no-doctests.sh
 
       - name: vault lib unit tests
         # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
         # byte-stability) and `test_id` (program-ID sanity).
-        run: cargo test -p vault --lib
+        run: cargo nextest run -p vault --lib
 
       # SDK parity tests shell out to these helper binaries via spawnSync.
       # They cross-validate TS Poseidon / note-commitment / nullifier /
@@ -1032,15 +1063,36 @@ jobs:
           name: circuit-build
           path: circuits/build
 
+      # cargo-nextest: each test runs in its own process and binaries run in
+      # PARALLEL, where `cargo test` runs the ~48 test binaries one after
+      # another. Pinned by version and verified by SHA-256, matching how every
+      # action in this file is pinned by commit — `https://get.nexte.st/latest`
+      # would be an unpinned supply-chain hop into a job that holds the cargo
+      # cache.
+      - name: Install cargo-nextest (pinned + checksummed)
+        run: |
+          set -euo pipefail
+          VER=0.9.143
+          SHA=66786b9abe23920d022a182d1416b1bbc8130dd4872a9553d76985a1708dcd1e
+          URL="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${VER}/cargo-nextest-${VER}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/nextest.tar.gz "$URL"
+          echo "${SHA}  /tmp/nextest.tar.gz" | sha256sum -c -
+          tar zxf /tmp/nextest.tar.gz -C "$HOME/.cargo/bin"
+          cargo nextest --version
+
       - name: Cross-env round-trips + merkle host tests
         run: |
-          cargo test -p vault \
+          # `--nocapture` is deliberately DROPPED: nextest's equivalent
+          # (`--no-capture`) forces test-threads=1, which would remove the
+          # parallelism this change exists to gain. nextest already prints the
+          # captured output of FAILING tests, which is what --nocapture was
+          # there for.
+          cargo nextest run -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
             --test merkle_host \
             --test merkle_fuzz \
-            --test account_layout_fixture \
-            -- --nocapture
+            --test account_layout_fixture
           # NOTE: `merge_verify` is deliberately NOT here. It began as a pure
           # host round-trip target, but it now also drives litesvm (the merge
           # rejection paths), which needs `target/deploy/vault.so` — an
@@ -1104,6 +1156,23 @@ jobs:
           name: circuit-build
           path: circuits/build
 
+      # cargo-nextest: each test runs in its own process and binaries run in
+      # PARALLEL, where `cargo test` runs the ~48 test binaries one after
+      # another. Pinned by version and verified by SHA-256, matching how every
+      # action in this file is pinned by commit — `https://get.nexte.st/latest`
+      # would be an unpinned supply-chain hop into a job that holds the cargo
+      # cache.
+      - name: Install cargo-nextest (pinned + checksummed)
+        run: |
+          set -euo pipefail
+          VER=0.9.143
+          SHA=66786b9abe23920d022a182d1416b1bbc8130dd4872a9553d76985a1708dcd1e
+          URL="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${VER}/cargo-nextest-${VER}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/nextest.tar.gz "$URL"
+          echo "${SHA}  /tmp/nextest.tar.gz" | sha256sum -c -
+          tar zxf /tmp/nextest.tar.gz -C "$HOME/.cargo/bin"
+          cargo nextest --version
+
       - name: vault integration tests
         # Incl. the settle-regression suite migrated from matching_engine:
         # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
@@ -1115,7 +1184,7 @@ jobs:
         # both vault.so and the circuit artefacts, which is why it cannot live
         # in the proof-only job).
         run: |
-          cargo test -p vault \
+          cargo nextest run -p vault \
             --test set_protocol_config \
             --test set_tee_pubkey \
             --test user_commitment_registration \
@@ -1126,8 +1195,7 @@ jobs:
             --test withdraw_lock_lifecycle \
             --test deposit_with_proof \
             --test initialize_governance \
-            --test market_config \
-            -- --nocapture
+            --test market_config
 
   # ------------------------------------------------------------------
   # T-08 — dependency vulnerability gate.
@@ -1232,11 +1300,31 @@ jobs:
       # step re-ran all ~353 of them a second time (~25 s of pure duplication,
       # visible as two identical "353 passed" lines in the job log). The lib
       # tests are still individually identifiable in the output below.
+      # cargo-nextest: each test runs in its own process and binaries run in
+      # PARALLEL, where `cargo test` runs the ~48 test binaries one after
+      # another. Pinned by version and verified by SHA-256, matching how every
+      # action in this file is pinned by commit — `https://get.nexte.st/latest`
+      # would be an unpinned supply-chain hop into a job that holds the cargo
+      # cache.
+      - name: Install cargo-nextest (pinned + checksummed)
+        run: |
+          set -euo pipefail
+          VER=0.9.143
+          SHA=66786b9abe23920d022a182d1416b1bbc8130dd4872a9553d76985a1708dcd1e
+          URL="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${VER}/cargo-nextest-${VER}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o /tmp/nextest.tar.gz "$URL"
+          echo "${SHA}  /tmp/nextest.tar.gz" | sha256sum -c -
+          tar zxf /tmp/nextest.tar.gz -C "$HOME/.cargo/bin"
+          cargo nextest --version
+
       - name: darknyx-tee lib + integration tests (artifact-required)
         env:
           # A missing circuit artifact must FAIL here, never skip. See T-12.
           REQUIRE_CIRCUIT_ARTIFACTS: "1"
-        run: cargo test -p darknyx-tee --tests -- --nocapture
+        # `--nocapture` dropped for the same reason as the vault-zk job: it
+        # maps to nextest's serial `--no-capture`. This is the job the change
+        # is aimed at (462 s, ~290 tests, many loading a proving key).
+        run: cargo nextest run -p darknyx-tee --tests
 
   # ------------------------------------------------------------------
   # Aggregator. Branch protection should require ONLY this status check.
