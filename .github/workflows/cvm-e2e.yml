@@ -480,7 +480,22 @@ jobs:
             # tree-consuming test, so a plain rm would leave the most-written
             # secret file on the runner as recoverable blocks.
             shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
-            for i in $(seq 1 40); do curl -fsS "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && break; sleep 6; done
+            # -k, like the first health wait: the enclave serves its OWN
+            # boot-scoped certificate, so there is no CA chain to validate.
+            # This is the SECOND health wait in this workflow and it was missed
+            # when the first one was fixed — without -k it can never succeed
+            # against the RA-TLS route, so it burned its full 40x6s budget and
+            # then ran the test against a CVM it had not confirmed was up.
+            #
+            # It also now FAILS LOUDLY instead of falling through: a silent
+            # fall-through turns "the CVM never came back" into a confusing
+            # test failure several minutes later.
+            READY=0
+            for i in $(seq 1 40); do
+              curl -fsSk "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && { READY=1; break; }
+              sleep 6
+            done
+            [ "$READY" = 1 ] || { echo "::error::CVM did not come back after redeploy for $T"; exit 1; }
           }
           FAILED=""
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
