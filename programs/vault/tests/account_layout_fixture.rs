@@ -54,8 +54,8 @@ use std::path::PathBuf;
 use anchor_lang::prelude::Address as Pubkey;
 use bytemuck::Pod;
 use vault::state::{
-    BatchValidityMarker, MarketConfig, MerkleTree, NoteLock, VaultConfig, MERKLE_DEPTH,
-    ROOT_HISTORY_SIZE,
+    BatchValidityMarker, ConsumedNoteEntry, DepositedNoteEntry, MarketConfig, MerkleTree, NoteLock,
+    OutstandingMint, VaultConfig, WalletEntry, MERKLE_DEPTH, ROOT_HISTORY_SIZE,
 };
 
 const DISC: usize = 8;
@@ -177,6 +177,46 @@ fn render() -> String {
         f,
     ));
 
+    // ---- The four guard/registry PDAs ----
+    //
+    // Added when the Anchor v2 port needed layout identity asserted for ALL
+    // NINE account structs, not the five that happened to be here. These are
+    // the smallest and least glamorous, which is exactly why they were the ones
+    // missing: nothing in the settle path reads them field-by-field, so a
+    // silent offset shift would surface as a PDA that derives fine and decodes
+    // to garbage.
+    let mut f = Vec::new();
+    zc!(WalletEntry, f, commitment: 32, owner: 32, created_slot: 8, bump: 1);
+    accounts.push(account(
+        "WalletEntry",
+        DISC + core::mem::size_of::<WalletEntry>(),
+        f,
+    ));
+
+    let mut f = Vec::new();
+    zc!(DepositedNoteEntry, f, note_commitment: 32, deposited_slot: 8, bump: 1);
+    accounts.push(account(
+        "DepositedNoteEntry",
+        DISC + core::mem::size_of::<DepositedNoteEntry>(),
+        f,
+    ));
+
+    let mut f = Vec::new();
+    zc!(ConsumedNoteEntry, f, note_use_tag: 32, match_id: 16, consumed_slot: 8, bump: 1);
+    accounts.push(account(
+        "ConsumedNoteEntry",
+        DISC + core::mem::size_of::<ConsumedNoteEntry>(),
+        f,
+    ));
+
+    let mut f = Vec::new();
+    zc!(OutstandingMint, f, mint: 32, outstanding: 8, bump: 1);
+    accounts.push(account(
+        "OutstandingMint",
+        DISC + core::mem::size_of::<OutstandingMint>(),
+        f,
+    ));
+
     format!(
         "{{\n  \"_generated_by\": \"programs/vault/tests/account_layout_fixture.rs\
          (UPDATE_LAYOUT_FIXTURE=1 cargo test -p vault --test account_layout_fixture)\",\n  \
@@ -195,6 +235,58 @@ fn ser<T: Pod>(v: &T) -> Vec<u8> {
 /// point of the test is that the NUMBER is unchanged from the borsh era.
 fn borsh_len<T: Default + Pod>() -> usize {
     DISC + core::mem::size_of::<T>()
+}
+
+#[test]
+fn space_constants_match_the_pod_sizes() {
+    // `init` allocates `SPACE` bytes; the runtime then interprets those bytes as
+    // the Pod struct. If the two drift the account is mis-sized — too small and
+    // loads fail, too large and rent is silently overpaid forever.
+    //
+    // These constants were hand-written for the v1 BORSH layout. That they still
+    // equal `8 + size_of::<T>()` under v2's repr(C) Pod layout is the check that
+    // the migration preserved the on-wire size, independently of the JSON
+    // fixture (which only records what the structs currently are).
+    assert_eq!(
+        MarketConfig::SPACE,
+        DISC + core::mem::size_of::<MarketConfig>(),
+        "MarketConfig::SPACE drifted from the Pod size"
+    );
+    assert_eq!(
+        OutstandingMint::SPACE,
+        DISC + core::mem::size_of::<OutstandingMint>(),
+        "OutstandingMint::SPACE drifted from the Pod size"
+    );
+    assert_eq!(
+        BatchValidityMarker::SPACE,
+        DISC + core::mem::size_of::<BatchValidityMarker>(),
+        "BatchValidityMarker::SPACE drifted from the Pod size"
+    );
+}
+
+#[test]
+fn every_account_struct_is_covered() {
+    // The fixture silently covered only 5 of the 9 `#[account]` structs, which
+    // is how WalletEntry / DepositedNoteEntry / ConsumedNoteEntry /
+    // OutstandingMint went unasserted through a layout-changing migration. Pin
+    // the count so a new account type cannot be added without a layout entry.
+    let rendered = render();
+    for name in [
+        "VaultConfig",
+        "MarketConfig",
+        "MerkleTree",
+        "WalletEntry",
+        "DepositedNoteEntry",
+        "ConsumedNoteEntry",
+        "NoteLock",
+        "OutstandingMint",
+        "BatchValidityMarker",
+    ] {
+        assert!(
+            rendered.contains(&format!("\"{name}\"")),
+            "{name} is missing from the layout fixture"
+        );
+    }
 }
 
 #[test]

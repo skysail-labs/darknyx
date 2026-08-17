@@ -46,6 +46,32 @@
       "payer": { "offset": 8, "size": 32 },
       "expiry_slot": { "offset": 40, "size": 8 },
       "bump": { "offset": 48, "size": 1 }
+    },
+    "WalletEntry": {
+      "account_len": 88,
+      "commitment": { "offset": 8, "size": 32 },
+      "owner": { "offset": 40, "size": 32 },
+      "created_slot": { "offset": 72, "size": 8 },
+      "bump": { "offset": 80, "size": 1 }
+    },
+    "DepositedNoteEntry": {
+      "account_len": 56,
+      "note_commitment": { "offset": 8, "size": 32 },
+      "deposited_slot": { "offset": 40, "size": 8 },
+      "bump": { "offset": 48, "size": 1 }
+    },
+    "ConsumedNoteEntry": {
+      "account_len": 72,
+      "note_use_tag": { "offset": 8, "size": 32 },
+      "match_id": { "offset": 40, "size": 16 },
+      "consumed_slot": { "offset": 56, "size": 8 },
+      "bump": { "offset": 64, "size": 1 }
+    },
+    "OutstandingMint": {
+      "account_len": 49,
+      "mint": { "offset": 8, "size": 32 },
+      "outstanding": { "offset": 40, "size": 8 },
+      "bump": { "offset": 48, "size": 1 }
     }
   }
 }
