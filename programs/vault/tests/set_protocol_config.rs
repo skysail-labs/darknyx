@@ -24,7 +24,14 @@ const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 // Must match `declare_id!` in programs/vault/src/lib.rs. LiteSVM
 // verifies the embedded declared id in target/deploy/vault.so against
 // the id supplied to add_program_from_file and rejects mismatches.
-const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+// Derived from the program crate, NOT hand-copied. A literal here silently
+// desynchronises from declare_id!(): the harness then loads the .so at an
+// address the binary does not claim, and every settle-path test fails with
+// IncorrectProgramId. That is exactly what happened when the v2 experiment
+// moved to its own program id.
+fn vault_program_id() -> anchor_lang::prelude::Address {
+    vault::ID
+}
 
 fn program_so_path() -> PathBuf {
     common::vault_program_so()
@@ -115,7 +122,7 @@ fn set_protocol_config_happy_path_writes_all_fields() {
     );
 
     let mut svm = LiteSVM::new();
-    let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
+    let program_id: Pubkey = vault_program_id();
     svm.add_program_from_file(program_id, &program_path)
         .unwrap();
 
@@ -153,7 +160,7 @@ fn set_protocol_config_rejects_non_admin_signer() {
     }
 
     let mut svm = LiteSVM::new();
-    let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
+    let program_id: Pubkey = vault_program_id();
     svm.add_program_from_file(program_id, &program_path)
         .unwrap();
 
@@ -185,7 +192,7 @@ fn set_protocol_config_rejects_fee_rate_above_max() {
     }
 
     let mut svm = LiteSVM::new();
-    let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
+    let program_id: Pubkey = vault_program_id();
     svm.add_program_from_file(program_id, &program_path)
         .unwrap();
 

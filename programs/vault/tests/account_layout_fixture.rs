@@ -47,8 +47,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use anchor_lang::prelude::Pubkey;
-use anchor_lang::AnchorSerialize;
+// v2: accounts are Pod, so the on-wire bytes are the struct's own repr(C)
+// image rather than a borsh encoding. `bytemuck::bytes_of` reads exactly those
+// bytes, which is what makes this fixture a LAYOUT check under both models --
+// and therefore the thing that proves v1 and v2 agree byte for byte.
+use anchor_lang::prelude::Address as Pubkey;
+use bytemuck::Pod;
 use vault::state::{
     BatchValidityMarker, MarketConfig, MerkleTree, NoteLock, VaultConfig, MERKLE_DEPTH,
     ROOT_HISTORY_SIZE,
@@ -183,14 +187,14 @@ fn render() -> String {
     )
 }
 
-fn ser<T: AnchorSerialize>(v: &T) -> Vec<u8> {
-    let mut out = Vec::new();
-    v.serialize(&mut out).expect("borsh serialize");
-    out
+fn ser<T: Pod>(v: &T) -> Vec<u8> {
+    bytemuck::bytes_of(v).to_vec()
 }
 
-fn borsh_len<T: Default + AnchorSerialize>() -> usize {
-    DISC + ser(&T::default()).len()
+/// Named `borsh_len` historically. Under v2 the body is the Pod size, and the
+/// point of the test is that the NUMBER is unchanged from the borsh era.
+fn borsh_len<T: Default + Pod>() -> usize {
+    DISC + core::mem::size_of::<T>()
 }
 
 #[test]
@@ -232,7 +236,7 @@ fn borsh_probes_confirm_accumulated_offsets() {
     // BatchValidityMarker: `payer` at 8, `expiry_slot` at 40.
     let marker = BatchValidityMarker {
         payer: Pubkey::new_from_array([0xAB; 32]),
-        expiry_slot: 0x1122_3344_5566_7788,
+        expiry_slot: 0x1122_3344_5566_7788.into(),
         ..Default::default()
     };
     let bytes = ser(&marker);
@@ -251,7 +255,7 @@ fn borsh_probes_confirm_accumulated_offsets() {
     let market = MarketConfig {
         base_mint: Pubkey::new_from_array([0x11; 32]),
         quote_mint: Pubkey::new_from_array([0x22; 32]),
-        price_scale: 0x0102_0304_0506_0708,
+        price_scale: 0x0102_0304_0506_0708.into(),
         ..Default::default()
     };
     let bytes = ser(&market);

@@ -22,7 +22,14 @@ use solana_transaction::Transaction;
 
 type Pubkey = Address;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
-const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+// Derived from the program crate, NOT hand-copied. A literal here silently
+// desynchronises from declare_id!(): the harness then loads the .so at an
+// address the binary does not claim, and every settle-path test fails with
+// IncorrectProgramId. That is exactly what happened when the v2 experiment
+// moved to its own program id.
+fn vault_program_id() -> anchor_lang::prelude::Address {
+    vault::ID
+}
 
 // VaultConfig layout: 8-byte Anchor disc + admin(32) + tee_pubkey(32) …
 // so tee_pubkey occupies bytes [40..72].
@@ -113,7 +120,7 @@ fn build_set_tee_pubkey_ix(
 
 fn load_svm() -> (LiteSVM, Pubkey) {
     let mut svm = LiteSVM::new();
-    let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
+    let program_id: Pubkey = vault_program_id();
     svm.add_program_from_file(program_id, program_so_path())
         .unwrap();
     (svm, program_id)

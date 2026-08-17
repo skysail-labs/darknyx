@@ -65,7 +65,8 @@ litesvm = { workspace = true, features = ["precompiles"] }
 # to something that actually compiles.
 solana-transaction-context = "=4.1.1"
 solana-program-runtime = "=4.1.1"
-solana-account = "~3.4"
+solana-clock = "3"              # v2: litesvm's get_sysvar wants solana's Clock, not anchor/pinocchio's
+solana-account = "4"            # v2: litesvm 0.15.2 wants ^4.3.0; must match or Account is two types
 # v2 EXPERIMENT: was "=2.2.0". anchor-lang 2.0.0-rc.1 declares solana-address
 # "^2.0" + wincode "^0.5", but solana-address only uses wincode 0.5 at 2.6.x
 # (2.2-2.5 -> 0.4.x, 2.7 -> 0.6). Any other choice makes Address implement
@@ -75,7 +76,7 @@ solana-account = "~3.4"
 solana-address = { workspace = true }
 solana-instruction = "3"        # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-keypair = "~3.1"
-solana-message = "3"            # v2 EXPERIMENT: relaxed for litesvm 0.15.2
+solana-message = { workspace = true }   # v2: must match solana-transaction 4.x's message type
 solana-signer = "~3.0"
 solana-transaction = { workspace = true }  # v2 EXPERIMENT: needs the workspace bincode feature for Transaction::new
 solana-system-interface = "3.0.0"
