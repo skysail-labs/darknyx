@@ -559,8 +559,17 @@ jobs:
       # Runs LAST: it deploys a different compose, and every step above must
       # see the RA-TLS one.
       - name: Legacy (gateway-terminated) path still works
+        env:
+          # Every other phala-invoking step sets this explicitly. Omitting it
+          # here left `phala deploy` unauthenticated.
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
           set -euo pipefail
+          # Tracing is load-bearing, not debug residue: the first run of this
+          # step exited 1 in under a second with NO output and no annotation,
+          # which is unlocalizable from the log. `set -x` is disabled only
+          # around the block that writes credentials.
+          set -x
           # DERIVED from the committed compose, never a second checked-in
           # file. Two env builders drifting is what produced a
           # compose_mismatch earlier in this workflow; a second compose would
@@ -578,6 +587,8 @@ jobs:
 
           umask 077
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          echo "checkpoint: sync floor = $FLOOR"
+          set +x
           {
             echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
             echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
@@ -593,12 +604,22 @@ jobs:
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
           } > /tmp/darknyx-legacy.env
+          set -x
+          echo "checkpoint: env file written ($(wc -l < /tmp/darknyx-legacy.env) lines)"
 
+          # `OUT=$(phala deploy ...)` under `set -e` exits the step on a failed
+          # deploy with the output still trapped in the substitution — a silent
+          # death. Capture the status, ALWAYS print the output, then decide.
+          DEPLOYED=0
           for d in $(seq 1 6); do
-            OUT=$(phala deploy --cvm-id "$CVM" -c /tmp/compose-legacy.yaml -e /tmp/darknyx-legacy.env --wait 2>&1)
-            echo "$OUT" | grep -q "already in progress" || break
+            OUT=$(phala deploy --cvm-id "$CVM" -c /tmp/compose-legacy.yaml -e /tmp/darknyx-legacy.env --wait 2>&1) && RC=0 || RC=$?
+            echo "$OUT"
+            if [ "$RC" = 0 ]; then DEPLOYED=1; break; fi
+            echo "$OUT" | grep -q "already in progress" \
+              || { echo "::error::legacy deploy failed (rc=$RC)"; exit 1; }
             echo "deploy busy — retry $d in 20s"; sleep 20
           done
+          [ "$DEPLOYED" = 1 ] || { echo "::error::legacy deploy never succeeded"; exit 1; }
           shred -u /tmp/darknyx-legacy.env 2>/dev/null || rm -f /tmp/darknyx-legacy.env
 
           LEGACY_GW="${GATEWAY/-8443s./-8080.}"
