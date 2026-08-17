@@ -229,10 +229,10 @@ solana-signer            = "~3.0"
 # v2 EXPERIMENT: relaxed from "=3.2.0" — litesvm 0.15.2 needs a newer build.
 solana-instruction       = "3"
 # v2 EXPERIMENT: relaxed from "=3.1.0" for the same reason.
-solana-message           = "3"
+solana-message           = "4"        # PROBE: 3 -> 4 (litesvm 0.15.2 wants ^4.2.4)
 # `serde` feature gives us `Transaction: Serialize`; `bincode`
 # unlocks `Transaction::new_signed_with_payer` + tx serialise.
-solana-transaction       = { version = "^3.1", features = ["serde", "bincode"] }
+solana-transaction       = { version = "4", features = ["serde", "wincode"] }  # PROBE: 4.x renamed the bincode feature to wincode
 solana-system-interface  = "3.0.0"
 # PR 4g.5c — per-batch ALT (Tx C). `bincode` feature unlocks the
 # `create_lookup_table` / `extend_lookup_table` ix builders.
