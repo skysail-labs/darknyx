@@ -22,7 +22,6 @@ pub mod zk;
 // root lets the macro resolve everything correctly even though our source lives
 // under `programs/vault/src/instructions/`.
 pub use instructions::close_batch_validity_marker;
-#[cfg(feature = "devnet-admin")]
 pub use instructions::close_vault_config;
 pub use instructions::create_wallet;
 pub use instructions::deposit;
@@ -31,7 +30,6 @@ pub use instructions::initialize_market;
 pub use instructions::lock_note;
 pub use instructions::merge;
 pub use instructions::release_lock;
-#[cfg(feature = "devnet-admin")]
 pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
@@ -43,6 +41,16 @@ pub use instructions::verify_match_batch;
 pub use instructions::withdraw;
 
 use instructions::*;
+// The v2 `#[program]` macro resolves `super::__client_accounts_<name>` for every
+// instruction, including ones whose fn is `#[cfg]`-gated out (it does not
+// propagate the cfg). These two globs hoist the generated modules for the
+// devnet-admin instructions to crate root so the FEATURELESS (mainnet) build
+// resolves them; the instructions themselves stay gated, so neither gains a
+// discriminator.
+#[cfg(not(feature = "devnet-admin"))]
+use instructions::close_vault_config::*;
+#[cfg(not(feature = "devnet-admin"))]
+use instructions::reset_merkle_tree::*;
 use zk::Groth16Proof;
 
 declare_id!("DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7"); // v2 EXPERIMENT id — NOT the production vault
@@ -143,7 +151,7 @@ pub mod vault {
     /// non-zero input use tags' consume/lock PDAs are passed as
     /// remaining_accounts.
     #[allow(clippy::too_many_arguments)]
-    pub fn merge<'info>(
+    pub fn merge(
         ctx: &mut Context<Merge>,
         tree_id: u8,
         input_use_tags: Vec<[u8; 32]>,
