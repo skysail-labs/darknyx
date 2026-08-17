@@ -33,9 +33,9 @@ export interface ServerTime {
 /** Fetch the engine's liveness / degraded-mode snapshot. */
 export async function fetchSystemStatus(
   baseUrl: string,
-  opts: { fetchImpl?: typeof fetch } = {},
+  opts: { fetchImpl: typeof fetch },
 ): Promise<SystemStatus> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(baseUrl, "system/status"));
   if (!res.ok)
     throw new Error(`/system/status ${res.status}: ${await res.text()}`);
@@ -45,9 +45,9 @@ export async function fetchSystemStatus(
 /** Fetch the server's current slot + unix time (the GTT conversion anchor). */
 export async function fetchServerTime(
   baseUrl: string,
-  opts: { fetchImpl?: typeof fetch } = {},
+  opts: { fetchImpl: typeof fetch },
 ): Promise<ServerTime> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const res = await f(apiUrl(baseUrl, "time"));
   if (!res.ok) throw new Error(`/time ${res.status}: ${await res.text()}`);
   return (await res.json()) as ServerTime;

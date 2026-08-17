@@ -90,7 +90,19 @@ export interface VerifyTeeAttestationOptions {
   quoteVerifier?: QuoteVerifier;
   /** PCCS endpoint override (pinned to Phala by default). */
   pccsUrl?: string;
-  fetchImpl?: typeof fetch;
+  /**
+   * REQUIRED. The transport this call must use.
+   *
+   * Not optional and not defaulted: an omitted `fetchImpl` used to fall back
+   * to `globalThis.fetch`, which silently bypasses the verified transport.
+   * Seven call sites did exactly that, each looking correct, and each only
+   * surfaced during a billable live CVM run. Making it required converts every
+   * one of those into a compile error.
+   *
+   * Browser and legacy callers pass `globalThis.fetch` explicitly — a
+   * statement of intent rather than an accident.
+   */
+  fetchImpl: typeof fetch;
   /** Accepted TCB statuses. Defaults to {@link DEFAULT_TCB_ALLOWLIST}. */
   tcbAllowlist?: readonly string[];
 }
@@ -136,7 +148,9 @@ async function getJson<T>(
 export async function verifyTeeAttestation(
   apiBaseUrl: string,
   expectedComposeHash: string,
-  opts: VerifyTeeAttestationOptions = {},
+  // No `= {}` default: `fetchImpl` is required, so an empty object is not a
+  // valid options value and the caller must state its transport.
+  opts: VerifyTeeAttestationOptions,
 ): Promise<TeeAttestation> {
   if (!expectedComposeHash) {
     throw new AttestationError(
@@ -144,7 +158,7 @@ export async function verifyTeeAttestation(
       "pin_required",
     );
   }
-  const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const fetchImpl = opts.fetchImpl;
   const verifier =
     opts.quoteVerifier ?? createDcapQuoteVerifier({ pccsUrl: opts.pccsUrl });
   const nonce = crypto.getRandomValues(new Uint8Array(32));

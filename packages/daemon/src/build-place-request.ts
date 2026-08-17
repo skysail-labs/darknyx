@@ -64,7 +64,9 @@ export interface BuildPlaceRequestArgs {
   prover: ValidInputProver;
   /** Merkle-tree shard the note lives in (default 0). */
   treeId?: number;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport. See `OrderClientOptions.fetchImpl`: an
+   *  omitted value used to fall back to global fetch and bypass verification. */
+  fetchImpl: typeof fetch;
   /** On-chain recent-root-ring gate (read at `confirmed`, the level the
    *  vault itself evaluates). Production daemon supplies it. */
   verifyRoot?: RootVerifier;

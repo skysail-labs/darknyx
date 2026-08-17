@@ -170,7 +170,9 @@ async function getJson<T>(
 export async function fetchInfo(
   gatewayUrl: string,
   token: string,
-  fetchImpl: typeof fetch = fetch,
+  /** REQUIRED — no global-fetch default. A direct caller could otherwise omit
+   *  the caller-selected CVM transport and bypass its verification. */
+  fetchImpl: typeof fetch,
 ): Promise<TeeInfo> {
   const b = await getJson<{
     app_id: string;
@@ -200,7 +202,9 @@ export async function fetchAttestation(
   gatewayUrl: string,
   token: string,
   nonce: Uint8Array,
-  fetchImpl: typeof fetch = fetch,
+  /** REQUIRED — no global-fetch default. A direct caller could otherwise omit
+   *  the caller-selected CVM transport and bypass its verification. */
+  fetchImpl: typeof fetch,
 ): Promise<AttestationQuote> {
   const url = new URL("/attestation", gatewayUrl);
   // The TEE query param is camelCase `reportData` (serde rename); the response
@@ -226,7 +230,8 @@ export interface VerifyAttestationOptions {
   token: string;
   expected?: ExpectedMeasurements;
   quoteVerifier?: QuoteVerifier;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport; see `OrderClientOptions.fetchImpl`. */
+  fetchImpl: typeof fetch;
   /** Require real DCAP + governance pins. Defaults to true (secure-by-default). */
   strict?: boolean;
   /** Accepted TCB statuses. Defaults to {@link DEFAULT_TCB_ALLOWLIST}. */
@@ -241,7 +246,7 @@ export async function verifyAttestation(
   opts: VerifyAttestationOptions,
 ): Promise<AttestationResult> {
   const strict = opts.strict ?? true;
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl;
   const nonce = Uint8Array.from(randomBytes(32));
 
   const att = await fetchAttestation(

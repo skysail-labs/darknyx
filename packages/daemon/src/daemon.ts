@@ -150,7 +150,15 @@ export interface DaemonDeps {
   streamTokenProvider?: StreamTokenProvider;
   /** Existing multiplexed stream session (tests or advanced embedding). */
   streamClient?: TradingClient;
-  fetchImpl?: typeof fetch;
+  /**
+   * REQUIRED. The transport every CVM call in this daemon uses.
+   *
+   * Optional here is what let `/auth/token`, `/tree/leaves` and the order POST
+   * each quietly reach the enclave on `globalThis.fetch` while the daemon
+   * logged "transport: ra-tls". Offline callers pass `globalThis.fetch`
+   * explicitly.
+   */
+  fetchImpl: typeof fetch;
   /** Verify the gateway's TEE attestation on start. Defaults to the real
    *  {@link verifyAttestation}; pass `false` to skip (tests/local-sim). */
   verifyAttestation?: typeof verifyAttestation | false;
@@ -192,7 +200,7 @@ export class Daemon {
   private readonly placer: OrderPlacer;
   /** Authenticated read-only TEE surface (account/instruments/settlement/…). */
   readonly tee: TeeReadClient;
-  private readonly fetchImpl?: typeof fetch;
+  private readonly fetchImpl: typeof fetch;
   private readonly treeId = 0;
 
   private readonly subscribeFillsFn?: SubscribeFillsFn;

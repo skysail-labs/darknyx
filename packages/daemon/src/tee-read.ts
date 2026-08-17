@@ -13,7 +13,8 @@
 export interface TeeReadOptions {
   gatewayUrl: string;
   token: string;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED — the CVM transport; see `OrderClientOptions.fetchImpl`. */
+  fetchImpl: typeof fetch;
 }
 
 export interface TeeInstrument {
@@ -48,7 +49,7 @@ export class TeeReadClient {
   constructor(private readonly opts: TeeReadOptions) {}
 
   private async get(path: string): Promise<unknown> {
-    const f = this.opts.fetchImpl ?? fetch;
+    const f = this.opts.fetchImpl;
     const res = await f(new URL(path, this.opts.gatewayUrl).toString(), {
       headers: { authorization: `Bearer ${this.opts.token}` },
     });
@@ -82,7 +83,7 @@ export class TeeReadClient {
    * failure, which throws, so a caller can tell "gone" from "cannot tell".
    */
   async order(orderId: string): Promise<TeeOrderStatus | null> {
-    const f = this.opts.fetchImpl ?? fetch;
+    const f = this.opts.fetchImpl;
     const path = `/orders/${encodeURIComponent(orderId)}`;
     const res = await f(new URL(path, this.opts.gatewayUrl).toString(), {
       headers: { authorization: `Bearer ${this.opts.token}` },

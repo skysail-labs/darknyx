@@ -59,6 +59,7 @@ function tracker(
 ): SettlementTracker {
   return new SettlementTracker({
     store,
+    fetchImpl: globalThis.fetch,
     gatewayUrl: "https://gw",
     token: "t",
     fetchInclusion,
@@ -111,6 +112,7 @@ describe("SettlementTracker", () => {
     let now = 1_000;
     const t = new SettlementTracker({
       store,
+      fetchImpl: globalThis.fetch,
       gatewayUrl: "https://gw",
       token: "t",
       fetchInclusion: fakeInclusion(known),
@@ -155,6 +157,7 @@ describe("SettlementTracker", () => {
     const fetch = fakeInclusion({});
     const t = new SettlementTracker({
       store,
+      fetchImpl: globalThis.fetch,
       gatewayUrl: "https://gw",
       token: "t",
       fetchInclusion: fetch,
@@ -187,6 +190,7 @@ describe("SettlementTracker", () => {
     store.put(changeNote(commitment));
     const t = new SettlementTracker({
       store,
+      fetchImpl: globalThis.fetch,
       gatewayUrl: "https://gw",
       token: "t",
       fetchInclusion: fetch,

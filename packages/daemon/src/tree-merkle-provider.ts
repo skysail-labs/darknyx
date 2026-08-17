@@ -47,10 +47,12 @@ export type LeavesFetcher = (
 export function httpLeavesFetcher(opts: {
   gatewayUrl: string;
   token: string;
-  fetchImpl?: typeof fetch;
+  /** REQUIRED: `/tree/leaves` is a CVM read and must use the verified
+   *  transport, never the global fetch. */
+  fetchImpl: typeof fetch;
 }): LeavesFetcher {
   return async (from, to, treeId) => {
-    const f = opts.fetchImpl ?? fetch;
+    const f = opts.fetchImpl;
     const url = new URL("/tree/leaves", opts.gatewayUrl);
     url.searchParams.set("from", String(from));
     url.searchParams.set("to", String(to));

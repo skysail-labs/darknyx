@@ -136,7 +136,19 @@ export interface InclusionFetchOptions {
   baseUrl: string;
   token: string;
   treeId?: number;
-  fetchImpl?: typeof fetch;
+  /**
+   * REQUIRED. The transport this call must use.
+   *
+   * Not optional and not defaulted: an omitted `fetchImpl` used to fall back
+   * to `globalThis.fetch`, which silently bypasses the verified transport.
+   * Seven call sites did exactly that, each looking correct, and each only
+   * surfaced during a billable live CVM run. Making it required converts every
+   * one of those into a compile error.
+   *
+   * Browser and legacy callers pass `globalThis.fetch` explicitly — a
+   * statement of intent rather than an accident.
+   */
+  fetchImpl: typeof fetch;
   /**
    * C-09: optional cross-check that the engine-returned root is in the on-chain
    * shard root ring before it's used to prove. Build one with
@@ -161,7 +173,7 @@ export async function fetchInclusionProof(
   opts: InclusionFetchOptions,
   noteCommitmentHex: string,
 ): Promise<InclusionWitness> {
-  const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const f = opts.fetchImpl;
   const url = apiUrl(opts.baseUrl, "tree/inclusion");
   // The TEE `/tree/inclusion` query param is `commitment` (see vault tree API);
   // `note_commitment` is the RESPONSE field, not the request param.
@@ -320,7 +332,8 @@ export async function proveAndBuildOrder(
     ownerCommitmentBlinding: bigint;
     tokenMint: Uint8Array;
     treeId?: number;
-    fetchImpl?: typeof fetch;
+    /** REQUIRED — see InclusionFetchOptions.fetchImpl. */
+    fetchImpl: typeof fetch;
     /** C-09: cross-check the engine root against the on-chain ring — see
      *  {@link onchainRootVerifier}. */
     verifyRoot?: RootVerifier;

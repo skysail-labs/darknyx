@@ -66,6 +66,10 @@ export async function fetchOrderFills(
   orderId: string,
   opts: { since?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<IndexerFill[]> {
+  // The INDEXER, not the enclave: an off-TEE service on an ordinary
+  // certificate. Requiring the quote-bound CVM transport here would be as
+  // wrong as routing Solana RPC through it — the attestation says nothing
+  // about this peer, and pinning to it would only break the call.
   const f = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const url = apiUrl(baseUrl, "fills");
   url.searchParams.set("order_id", orderId);
