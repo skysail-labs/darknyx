@@ -45,7 +45,7 @@ pub use instructions::withdraw;
 use instructions::*;
 use zk::Groth16Proof;
 
-declare_id!("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+declare_id!("DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7"); // v2 EXPERIMENT id — NOT the production vault
 
 #[program]
 pub mod vault {
