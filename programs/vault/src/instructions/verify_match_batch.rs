@@ -33,7 +33,7 @@ use anchor_lang::prelude::*;
 use darkpool_crypto::match_config_digest;
 
 #[derive(Accounts)]
-#[instruction(merkle_root: [u8; 32], proof: Groth16Proof)]
+#[instruction(merkle_root: [u8; 32])]
 pub struct VerifyMatchBatch {
     /// Anyone can pay rent / submit the proof. Authorization is the proof itself —
     /// a forged proof simply fails Groth16 verification and no marker is created.
@@ -104,12 +104,12 @@ pub fn verify_match_batch_handler(
     // Public inputs, in circuit order: [root, config_digest]. The digest is
     // recomputed from authoritative accounts, never accepted from the prover.
     let (fee_rate_bps, protocol_owner) = {
-        let cfg = ctx.accounts.vault_config;
-        (cfg.fee_rate_bps as u64, cfg.protocol_owner_commitment)
+        let cfg = &ctx.accounts.vault_config;
+        (cfg.fee_rate_bps.get() as u64, cfg.protocol_owner_commitment)
     };
     let market = &ctx.accounts.market_config;
-    require!(market.enabled, VaultError::MarketDisabled);
-    require!(market.price_scale > 0, VaultError::InvalidMarketParameters);
+    require!(bool::from(market.enabled), VaultError::MarketDisabled);
+    require!(market.price_scale.get() > 0, VaultError::InvalidMarketParameters);
     let config_digest = match_config_digest(
         fee_rate_bps,
         &protocol_owner,

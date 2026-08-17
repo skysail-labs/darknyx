@@ -34,9 +34,9 @@ pub struct SetTeeAddress {
 /// keys). Replaces the whole `tee_pubkeys` array + `num_tee_keys`. One ix sets
 /// all K at the rotation ceremony (e.g. when a fresh CVM derives K dstack keys).
 pub fn set_tee_pubkey_handler(ctx: &mut Context<SetTeeAddress>, keys: Vec<Address>) -> Result<()> {
-    let mut cfg = ctx.accounts.vault_config;
+    let cfg = &mut ctx.accounts.vault_config;
     require!(
-        ctx.accounts.admin.address() == cfg.admin,
+        *ctx.accounts.admin.address() == cfg.admin,
         VaultError::Unauthorized
     );
     require!(

@@ -35,16 +35,16 @@ pub fn set_protocol_config_handler(
 ) -> Result<()> {
     require!(fee_rate_bps <= MAX_FEE_RATE_BPS, VaultError::InvalidFeeRate);
 
-    let mut cfg = ctx.accounts.vault_config;
+    let cfg = &mut ctx.accounts.vault_config;
     require!(
-        ctx.accounts.admin.address() == cfg.admin,
+        *ctx.accounts.admin.address() == cfg.admin,
         VaultError::Unauthorized
     );
 
     let old_commitment = cfg.protocol_owner_commitment;
-    let old_rate = cfg.fee_rate_bps;
+    let old_rate = cfg.fee_rate_bps.get();
     cfg.protocol_owner_commitment = protocol_owner_commitment;
-    cfg.fee_rate_bps = fee_rate_bps;
+    cfg.fee_rate_bps = fee_rate_bps.into();
 
     emit!(ProtocolConfigUpdated {
         admin: *ctx.accounts.admin.address(),

@@ -28,10 +28,11 @@ pub struct InitializeTree {
 /// Create one Merkle-tree shard account (`tree_id < num_trees`). Empty root is
 /// derived from the global `zero_subtree_roots` in `VaultConfig`. Admin-gated.
 pub fn initialize_tree_handler(ctx: &mut Context<InitializeTree>, tree_id: u8) -> Result<()> {
-    let cfg = ctx.accounts.vault_config;
-    require!(tree_id < cfg.num_trees, VaultError::InvalidProof);
-    let empty = empty_root(&cfg.zero_subtree_roots)?;
-    drop(cfg);
+    // v2: no `.load()` Ref, so there is no borrow guard to drop before
+    // touching `merkle_tree` below — read straight through the zero-copy view.
+    let num_trees = ctx.accounts.vault_config.num_trees;
+    require!(tree_id < num_trees, VaultError::InvalidProof);
+    let empty = empty_root(&ctx.accounts.vault_config.zero_subtree_roots)?;
 
     let tree = &mut ctx.accounts.merkle_tree;
     tree.leaf_count = (0).into();

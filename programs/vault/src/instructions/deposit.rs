@@ -3,6 +3,9 @@ use crate::merkle::append_leaf;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_deposit::*, Groth16Proof};
 use anchor_lang::prelude::*;
+// v2: the `token::mint = ...` / `token::authority = ...` init constraints emit
+// bare `token::` paths, so the MODULE must be in scope, not just its items.
+use anchor_spl::token;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 use std::mem::size_of;
 
@@ -32,8 +35,8 @@ pub struct Deposit {
 
     #[account(
         mut,
-        constraint = depositor_token_account.mint == token_mint.address() @ VaultError::Unauthorized,
-        constraint = depositor_token_account.owner == depositor.address() @ VaultError::Unauthorized,
+        constraint = depositor_token_account.mint() == token_mint.address() @ VaultError::Unauthorized,
+        constraint = depositor_token_account.owner() == depositor.address() @ VaultError::Unauthorized,
     )]
     pub depositor_token_account: Account<TokenAccount>,
 
@@ -120,10 +123,10 @@ pub fn deposit_handler(
     // and credits (both are `mut` in the Accounts struct, which the mut handle
     // requires), `cpi_handle()` for the read-only mint and authority.
     let cpi_accounts = TransferChecked {
-        from: ctx.accounts.depositor_token_account.cpi_handle_mut(),
-        to: ctx.accounts.vault_token_account.cpi_handle_mut(),
-        mint: ctx.accounts.token_mint.cpi_handle(),
-        authority: ctx.accounts.depositor.cpi_handle(),
+        from: ctx.accounts.depositor_token_account.to_cpi_handle_mut(),
+        to: ctx.accounts.vault_token_account.to_cpi_handle_mut(),
+        mint: ctx.accounts.token_mint.to_cpi_handle(),
+        authority: ctx.accounts.depositor.to_cpi_handle(),
     };
     transfer_checked(
         CpiContext::new(ctx.accounts.token_program.address(), cpi_accounts),
@@ -133,11 +136,14 @@ pub fn deposit_handler(
     )?;
 
     // Append into the shard's Merkle tree (zero_subtree_roots come from the
-    // global config). Scoped so the borrows release before the accounts below.
+    // global config).
+    //
+    // v1 took a `.load()` Ref here and had to `drop(cfg)` before touching
+    // another account, because the borrow guard was live. v2 `Account<T>` is a
+    // direct view over the buffer with no guard to release, so the roots are
+    // copied out (the array is Copy) and the scoping dance is gone.
     let (leaf_index, new_root) = {
-        let cfg = ctx.accounts.vault_config;
-        let zsr = cfg.zero_subtree_roots;
-        drop(cfg);
+        let zsr = ctx.accounts.vault_config.zero_subtree_roots;
         let tree = &mut ctx.accounts.merkle_tree;
         let leaf_index = tree.leaf_count.get();
         let new_root = append_leaf(tree, &zsr, note_commitment)?;
