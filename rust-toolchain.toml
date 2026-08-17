@@ -5,6 +5,10 @@
 # at the source level so this is a pure floor-raise — nothing in
 # the existing workspace depends on 1.89-specific behaviour.
 # CI will pull 1.91 automatically via this file.
-channel = "1.91.0"
+# v2 EXPERIMENT: 1.91.0 -> 1.92.0. litesvm 0.15.x pulls solana-syscalls 4.2.x,
+# which uses `maybe_uninit_write_slice` — stable only from 1.92. A downgrade of
+# solana-syscalls is blocked by a solana-program-runtime conflict, so the floor
+# has to rise. Workspace-wide: darknyx-tee builds on this too.
+channel = "1.93.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
