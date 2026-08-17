@@ -238,7 +238,11 @@ pub fn withdraw_handler(
         authority: ctx.accounts.vault_config.to_cpi_handle(),
     };
     transfer_checked(
-        CpiContext::new_with_signer(ctx.accounts.token_program.address(), cpi_accounts, signer_seeds),
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.address(),
+            cpi_accounts,
+            signer_seeds,
+        ),
         amount,
         ctx.accounts.token_mint.decimals(),
     )?;

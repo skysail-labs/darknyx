@@ -890,7 +890,9 @@ pub fn build_settle_batched_ix_for(
     let mut data = anchor_disc("tee_forced_settle_batched").to_vec();
     data.push(tree_id);
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
-    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&payload, anchor_lang::BORSH_CONFIG).unwrap());
+    data.extend_from_slice(
+        &anchor_lang::wincode::config::serialize(&payload, anchor_lang::BORSH_CONFIG).unwrap(),
+    );
     data.push(match_index);
     for s in merkle_proof.iter() {
         data.extend_from_slice(s);
@@ -1349,7 +1351,9 @@ pub fn deposit_note(
     data.extend_from_slice(&commitment);
     data.extend_from_slice(&fr_to_be_bytes(&secret.recovery_nonce));
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
-    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&proof, anchor_lang::BORSH_CONFIG).unwrap());
+    data.extend_from_slice(
+        &anchor_lang::wincode::config::serialize(&proof, anchor_lang::BORSH_CONFIG).unwrap(),
+    );
 
     let ix = Instruction {
         program_id: h.vault_id,

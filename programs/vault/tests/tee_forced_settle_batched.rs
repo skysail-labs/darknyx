@@ -12,8 +12,8 @@
 mod common;
 mod settle_harness;
 
-use solana_clock::Clock;
 use settle_harness::*;
+use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 

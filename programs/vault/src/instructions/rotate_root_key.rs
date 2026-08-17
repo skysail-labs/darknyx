@@ -21,7 +21,10 @@ pub struct RotateRootKey {
     pub vault_config: Account<VaultConfig>,
 }
 
-pub fn rotate_root_key_handler(ctx: &mut Context<RotateRootKey>, new_root_key: Address) -> Result<()> {
+pub fn rotate_root_key_handler(
+    ctx: &mut Context<RotateRootKey>,
+    new_root_key: Address,
+) -> Result<()> {
     let cfg = &mut ctx.accounts.vault_config;
     require!(
         *ctx.accounts.current_root_key.address() == cfg.root_key,

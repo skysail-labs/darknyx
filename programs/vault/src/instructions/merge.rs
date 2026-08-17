@@ -118,7 +118,11 @@ pub fn merge_handler<'info>(
     for (tag, note_lock) in active_tags.iter().zip(note_lock_accounts) {
         let (expected, _) =
             Address::find_program_address(&[NoteLock::SEED, tag.as_ref()], &crate::ID);
-        require_keys_eq!(*note_lock.address(), expected, VaultError::MergeAccountMismatch);
+        require_keys_eq!(
+            *note_lock.address(),
+            expected,
+            VaultError::MergeAccountMismatch
+        );
         // S-03: only a LIVE lock blocks the merge (N-04's intent — stop an
         // owner merging a live order's collateral and griefing the
         // counterparty — is preserved; an EXPIRED lock no longer bricks it).

@@ -109,7 +109,10 @@ pub fn verify_match_batch_handler(
     };
     let market = &ctx.accounts.market_config;
     require!(bool::from(market.enabled), VaultError::MarketDisabled);
-    require!(market.price_scale.get() > 0, VaultError::InvalidMarketParameters);
+    require!(
+        market.price_scale.get() > 0,
+        VaultError::InvalidMarketParameters
+    );
     let config_digest = match_config_digest(
         fee_rate_bps,
         &protocol_owner,

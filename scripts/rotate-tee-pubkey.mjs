@@ -75,7 +75,9 @@ const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
-    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+    // Overridable so this can drive a non-default vault (v2 experiment, a
+    // second foundation) without editing the script.
+    process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const admin = Keypair.fromSecretKey(
