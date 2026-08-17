@@ -14,7 +14,11 @@ cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# v2: anchor-spl no longer exposes `idl-build`. This project generates and
+# consumes no IDL — the SDK hand-codes every discriminator and Borsh layout
+# (CLAUDE.md §7.1) — so the feature is dropped outright rather than narrowed to
+# anchor-lang alone. Nothing referenced it.
+
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -27,7 +31,10 @@ test-sbf = []
 # `--features devnet-admin` (deploy-devnet.sh + the litesvm suites depend on it).
 devnet-admin = []
 [dependencies]
-anchor-lang = { workspace = true, features = ["init-if-needed"] }
+# v2 dropped the `init-if-needed` feature gate; the constraint is available
+# unconditionally (guide §7.1). `deposit` still uses it for the per-mint
+# OutstandingMint + vault ATA on the first deposit of each mint.
+anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-sha256-hasher = { workspace = true }

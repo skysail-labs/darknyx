@@ -31,9 +31,11 @@ authors = ["Darknyx Darkpool"]
 
 
 [workspace.dependencies]
-# Anchor
-anchor-lang = "1.1.2"
-anchor-spl  = "1.1.2"
+# Anchor — v2 EXPERIMENT (experiment/anchor-v2-rc1). v2 is a runtime rewrite:
+# pinocchio-based, no_std, zero-copy-by-default accounts. It does NOT depend on
+# the monolithic `solana-program`. See docs/anchor-v2-recon.md.
+anchor-lang = "2.0.0-rc.1"
+anchor-spl  = "2.0.0-rc.1"
 
 # Solana — monolithic facade (3.x re-exports the modular crates). Only
 # darkpool-matcher's change-note parity test still pulls this directly for
