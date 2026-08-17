@@ -13,7 +13,7 @@ use vault::state::{MerkleTree, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
 fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
     let zeros = compute_zero_subtree_roots().unwrap();
     let tree = MerkleTree {
-        leaf_count: 0,
+        leaf_count: 0u64.into(),
         current_root: empty_root(&zeros).unwrap(),
         roots: [[0u8; 32]; ROOT_HISTORY_SIZE],
         right_path: [[0u8; 32]; MERKLE_DEPTH as usize],

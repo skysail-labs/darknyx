@@ -45,7 +45,7 @@ fn owner_parts() -> (Fr, Fr, Fr) {
 fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
     let zeros = compute_zero_subtree_roots().unwrap();
     let tree = MerkleTree {
-        leaf_count: 0,
+        leaf_count: 0u64.into(),
         current_root: empty_root(&zeros).unwrap(),
         roots: [[0u8; 32]; ROOT_HISTORY_SIZE],
         right_path: [[0u8; 32]; MERKLE_DEPTH as usize],
@@ -419,7 +419,12 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
 
     let mut locked = Harness::setup();
     assert_eq!(install_merge_input_tree(&mut locked, &leaves), root);
-    seed_note_lock(&mut locked, &tags[0], &[0x44u8; 16], 1_000_000, 0);
+    // Relative to the current slot. litesvm 0.15 no longer starts near 0, so a
+    // hardcoded 1_000_000 can already be in the PAST — the lock then reads as
+    // expired and merge is (correctly) allowed, making this test pass its own
+    // setup while silently not testing the guard.
+    let now_slot = locked.svm.get_sysvar::<solana_clock::Clock>().slot;
+    seed_note_lock(&mut locked, &tags[0], &[0x44u8; 16], now_slot + 1_000_000, 0);
     let locked_ix = build_merge_ix(&locked, &proof, &tags, output, root);
     let locked_tx = Transaction::new(
         &[&locked.trader],

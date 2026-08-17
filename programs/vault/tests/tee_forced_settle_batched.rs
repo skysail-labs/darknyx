@@ -12,7 +12,7 @@
 mod common;
 mod settle_harness;
 
-use anchor_lang::prelude::Clock;
+use solana_clock::Clock;
 use settle_harness::*;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
