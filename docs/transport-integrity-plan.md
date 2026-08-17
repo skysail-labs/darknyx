@@ -293,6 +293,213 @@ build.
 
 ---
 
+## 5.4 zt-https ("Zero-Trust HTTPS") — evaluated 2026-08-16, does not displace RA-TLS **[CODE]**
+
+Raised after the cutover, from Phala's Turbine post and the domain-attestation
+docs. Recording it because the name recurs and the conclusion is not obvious.
+
+**It is zero-TRUST, not zero-knowledge.** No ZK proofs are involved. The
+artifact prefix in the source is literally `zt-cert:`.
+
+**The primitive** (`dstack/gateway/src/distributed_certbot.rs:443`):
+
+```rust
+let report_data = QuoteContentType::Custom("zt-cert").to_report_data(public_key_der);
+// = sha512("zt-cert:" ‖ public_key_der), TDX-quoted
+```
+
+It proves the TLS certificate's private key was generated inside a TEE. Around
+it sit **CAA records** locking the domain to a TEE-held ACME account and **CT
+logs** making issuance auditable; `dstack/ct_monitor/` automates checking every
+observed certificate's key against a quote.
+
+**The distinction that decides everything is WHOSE TEE holds the key.**
+
+| Flavour | Key location | Effect on T-03 |
+|---|---|---|
+| Gateway domain (`*.dstack-pha-*`) | **Phala's gateway TEE** | Makes the untrusted hop *accountable*; does NOT remove it. The gateway still terminates TLS (`gateway/src/proxy/tls_terminate.rs`) and sees plaintext order intent |
+| Custom domain + `dstack-ingress` | **our CVM** | Would remove the hop — this is the "B1 attested ingress" path |
+
+**B1 remains NO-GO. Three independent blockers, two re-confirmed at v0.5.9:**
+
+1. **Governance** — `kms_type = phala`, `dstack_app_address = null`: the compose
+   allowlist gating key release is Phala's, not ours (§6.3.1). Unchanged.
+2. **DNS** — `dstack/certbot/src/dns01_client/` contains exactly ONE provider,
+   `cloudflare.rs`. Our DNS is GoDaddy. This is what originally disqualified
+   ingress and it is still true; now verified in source rather than recalled.
+3. **Freshness** — ingress evidence is a static file on a mounted volume
+   (`evidences:/evidences:ro`) written at issuance. No nonce, no live challenge.
+
+**Comparison with what shipped:**
+
+| | zt-https | our RA-TLS |
+|---|---|---|
+| Binding | `sha512("zt-cert:"‖pubkey)` | `nonce ‖ SHA-256(DOMAIN‖manifest)` — SPKI + signer set + boot session |
+| Freshness | none (static evidence) | per-request nonce |
+| Certificate | publicly trusted (Let's Encrypt) | self-signed, quote-verified |
+| Audit trail | CAA + CT logs | governance pins |
+
+Ours is stronger on binding and freshness. **zt-https is stronger on exactly one
+thing we lack: a publicly-trusted certificate**, which is why it matters for
+browsers and not for the daemon. A browser cannot accept our self-signed
+enclave certificate; a Node client verifies SPKI-against-quote instead of a CA
+chain and does not care.
+
+**This strengthens B2 rather than reopening B1** — the browser half still needs
+either a public certificate (blocked, above) or the quote-bound HPKE
+application channel already chosen.
+
+**Worth borrowing regardless, for Phase 4 / T-03B:** CAA pinning once the
+browser trader has a real domain (it is the control that stops someone with DNS
+access minting a valid certificate), and CT-log monitoring of any
+browser-facing domain, for which `ct_monitor` is a working reference.
+
+## 5.5 The gateway-terminated path is kept OPEN — decision, cost, and how to take it
+
+**Decision (2026-08-16, owner):** keep the legacy transport in the code and in
+the enclave; do NOT delete it with the cutover. It is the revert path, not dead
+code. Its removal was deliberately deferred, and this section exists so that a
+future reader can take that revert — or decide against it — without redoing the
+analysis.
+
+### 5.5.1 Why it is kept, and what it buys
+
+Three reasons, in order of weight:
+
+1. **A move back to gateway TLS becomes a config flip, not a re-implementation.**
+   Everything needed already exists and is exercised by the type system.
+2. **It de-risked the cutover itself.** The two-deploy window (§6.2) was only
+   possible because both listeners can run at once; Deploy A turned RA-TLS on
+   with `:8080` still up as an escape hatch, and it caught a real gate defect
+   before the irreversible step.
+3. **The throughput trade may genuinely invert one day.** See §5.5.3 — the
+   numbers are recorded so that decision can be made on evidence.
+
+### 5.5.2 The modularity claim, traced end to end
+
+The switch is **two coupled changes and nothing else**:
+
+1. `deploy/docker-compose.yaml` — `DARKNYX_TEE_TRANSPORT_MODE` default back to
+   `gateway-terminated`, AND restore the `"8080:8080"` publication.
+2. There is no step 2. `scripts/check-ratls-cutover.sh` FAILS the build unless
+   those two move together in either direction, so the guard assists the revert
+   rather than obstructing it.
+
+**In the enclave** (`crates/darknyx-tee/src/main.rs:583`): `gateway-terminated`
+yields `transport_identity = None`, so only the plaintext listener runs,
+`/transport-attestation` disappears, and the `-8443s.` route goes dark. A clean
+total switch, not a half-state. Under `ra-tls` BOTH listeners bind — the
+security boundary is the port *publication*, not the binding.
+
+**Every consumer falls back with no code change:**
+
+| Consumer | Mechanism | Result |
+|---|---|---|
+| daemon | `transportMode: "gateway-terminated"` | `buildDaemonTransport` returns global fetch, no WS gate |
+| trader-host | `DARKNYX_TRADER_CVM_TRANSPORT` unset or `gateway-terminated` | `buildCvmFetch` returns `undefined` → legacy |
+| `cvm-*` suites | `DARKNYX_CVM_TRANSPORT` unset | `gwFetch`/`gwWebSocket` select plain fetch / raw `ws` |
+| SDK entry points | callers pass `globalThis.fetch` explicitly | the designed legacy path after the required-`fetchImpl` change |
+| `check-cvm-suites-use-transport.sh` | rejects a HARDCODED `gateway-terminated`, not an env-selected one | still passes |
+
+### 5.5.3 What the revert costs and buys, measured
+
+| | RA-TLS (shipped) | gateway-terminated |
+|---|---|---|
+| Connection establishment | **1349 / 1413 / 1517 ms** median across three live windows (includes a real TDX `get_quote`) | ~50 ms, ordinary TLS |
+| Per-client concurrency | **1** — `connections: 1, pipelining: 1`; 300 "concurrent" requests observed serialising live | pooled, unrestricted |
+| Settle path | `prove_ms=3395`, `settle_ms=5140`, `total_ms=10383` — **in line with the pre-RA-TLS baseline** | identical |
+| Client memory | −25/−27 MB RSS over 25 sequential transports (no leak) | n/a |
+| Who sees plaintext order intent | **nobody** between client and enclave | **Phala's gateway TEE** |
+
+The last row is the whole trade. Reverting **reopens T-03P**.
+
+**Why the latency costs nothing today:** settle is proving-bound, and the
+daemon's hot path is the multiplexed `/v1/stream` WebSocket — one long-lived
+connection carrying fills, order updates and acks, so the ~1.4 s is paid once
+per session and `connections: 1` never binds. Streaming is the BEST case for
+this design, not the worst. It would bind on many short-lived REST calls from
+one client, or many simultaneous browser clients (each verified connection
+costs one TDX quote, which is why `/transport-attestation` is priced at 10.0 in
+the public rate limiter).
+
+**If the motivation to revert is throughput, revert is the wrong lever.**
+`connections: 1` is an implementation choice — undici exposes no per-response
+socket attribution, so pinning to one socket is how "the socket that was
+verified is the socket carrying the request" is currently guaranteed. Verifying
+EACH socket in a pool at connect time restores parallelism at ~1.4 s per socket
+while keeping the plaintext hop closed. See `throughput-roadmap.md` item 8.
+
+### 5.5.4 Two caveats that make the revert less free than it looks
+
+**It is CODE-clean but not EVIDENCE-clean.** After the cutover nothing exercises
+the legacy path in CI, so "it works" rests on the code paths existing rather
+than on a green run. `cvm-daemon-lifecycle` was structurally unrunnable for
+weeks in exactly this way while CI stayed green. An unexercised revert path
+degrades into a hope; if it is to remain trustworthy, something must run it
+periodically.
+
+**One suite goes dark, and silently.** `cvm-ratls-transport` needs the
+`-8443s.` route and is env-gated, so under a revert it self-skips — the same
+"skipped reads as green" pattern. A reverted deployment would show a green
+suite that tested nothing about transport.
+
+### 5.5.5 Operational consequence of the CURRENT (post-cutover) state
+
+**`trader-host` must be reconfigured or it cannot reach the CVM at all.** This
+is a deployment task that the cutover created and that no code change covers:
+
+* `DARKNYX_TRADER_CVM_TRANSPORT` unset → legacy global fetch;
+* pointed at `-8080.` → **HTTP 000**, the port is unpublished;
+* pointed at `-8443s.` on global fetch → **self-signed certificate failure**.
+
+It needs `DARKNYX_TRADER_CVM_TRANSPORT=ra-tls`, the three governance pins
+(`_CVM_GATEWAY_UPSTREAM`, `_EXPECT_COMPOSE_HASH`, `_EXPECT_SIGNER_SET`) and the
+`-8443s.` upstream. The wiring is shipped and unit-tested (13 tests, both
+guards mutation-proven) but **has not been exercised live**, so its first run
+deserves attention.
+
+## 5.6 Rejected: make `:8080` the default again with RA-TLS opt-in **[DECISION]**
+
+Considered 2026-08-16 and rejected. Recorded so it is not re-litigated from
+scratch.
+
+**The proposal:** republish `:8080` as the default and enable RA-TLS only when a
+flag is set, on the grounds that the browser client needs the gateway route.
+
+**Why the premise does not hold.** The browser never talks to the CVM directly.
+`release.json` points it at trader-host's OWN origin
+(`${ORIGIN}/api/darknyx/venue/`), and trader-host proxies onward. There are two
+independent TLS legs, and only one is browser-facing:
+
+```
+browser ──public cert──► trader-host ──RA-TLS──► enclave
+         (trader-host's own TLS)      (a Node process; it verifies
+                                       SPKI-against-quote like the daemon)
+```
+
+trader-host is a Node process, so it can verify a self-signed enclave
+certificate exactly as the daemon does. That wiring is shipped. What was
+missing is three environment variables (§5.5.5) — a deployment gap, not a
+routing one.
+
+**Why opt-in specifically fails here.** Defaults are what get deployed. This
+repository has repeated, recent evidence that an optional safe path is simply
+not taken: seven components silently fell back to `globalThis.fetch` when not
+handed a transport (every call site read as correct); `cvm-daemon-lifecycle`
+was unrunnable for weeks while CI reported green; `cvm-e2e.yml` sat dark for
+over a month on a stale variable name. Making the transport opt-in would place
+the whole property in that category, and the breakage would surface in a
+billable live window rather than in CI.
+
+**When this decision SHOULD be revisited:** if browsers ever need to reach the
+enclave directly (that is T-03B/B2, not this), or if RA-TLS proves unstable in
+practice — it has not: eight suites green live, settle measured unchanged, no
+memory leak.
+
+**For local iteration friction**, the answer is the documented fast loop
+(`CLAUDE.md` §4: `dstack-simulator` + a local `darknyx-tee`, ~5–15 s/cycle), not
+reopening a public plaintext port on a shared devnet CVM.
+
 ## 6. Claims: what survived, what was disproved
 
 ### 6.1 Survived — gateway routing is attestation-bound **[CODE]**

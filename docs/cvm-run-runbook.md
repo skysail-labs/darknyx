@@ -551,6 +551,42 @@ warm-up rules, CPU/GPU matrices, and capacity thresholds are in
 
 ---
 
+## 5.2 If you are pointing `trader-host` (browser client) at this CVM
+
+**The cutover changed what trader-host needs, and no code change covers it.**
+Since T-03P the plaintext `:8080` route is unpublished, so a trader-host left on
+its old configuration cannot reach the CVM at all:
+
+| Configuration | Result |
+|---|---|
+| `DARKNYX_TRADER_CVM_TRANSPORT` unset | legacy global fetch |
+| …pointed at `-8080.` | **HTTP 000** — the port is unpublished |
+| …pointed at `-8443s.` on global fetch | **self-signed certificate failure** |
+
+Working configuration — the same three governance pins the `cvm-*` suites use
+(§5), read from the live enclave after every deploy because a compose edit of
+any kind moves `compose_hash`:
+
+```sh
+export DARKNYX_TRADER_CVM_TRANSPORT=ra-tls
+export DARKNYX_TRADER_CVM_GATEWAY_UPSTREAM="https://$CVM-8443s.dstack-pha-<node>.phala.network"
+export DARKNYX_TRADER_EXPECT_COMPOSE_HASH=<from /transport-attestation event log>
+export DARKNYX_TRADER_EXPECT_SIGNER_SET=<manifest.signer_set_sha256>
+```
+
+`bin.ts` fails closed: an unrecognised transport value, or `ra-tls` with any pin
+missing, refuses to start rather than proxying browser orders over an
+unverified upstream. Unset still means legacy, deliberately, so an existing
+deployment keeps booting.
+
+> This wiring is unit-tested (13 tests, both guards mutation-proven) but has
+> **not been exercised live**. Its first run deserves attention.
+>
+> Note the browser→trader-host leg is unaffected by any of this: it uses
+> trader-host's own public certificate, and it is still plaintext AT
+> trader-host. That is **T-03B**, deferred — see
+> [`transport-integrity-plan.md`](transport-integrity-plan.md) §5.6.
+
 ## 6. STOP THE CVM
 
 It bills while running.
