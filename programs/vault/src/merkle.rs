@@ -29,14 +29,14 @@ pub fn poseidon2(left: &[u8; 32], right: &[u8; 32]) -> Result<[u8; 32]> {
             &[left.as_slice(), right.as_slice()],
         )
         .map(|h| h.to_bytes())
-        .map_err(|_| error!(VaultError::InvalidProof));
+        .map_err(|_| Error::from(VaultError::InvalidProof));
     }
 
     #[cfg(not(target_os = "solana"))]
     {
-        let mut h = Poseidon::<Fr>::new_circom(2).map_err(|_| error!(VaultError::InvalidProof))?;
+        let mut h = Poseidon::<Fr>::new_circom(2).map_err(|_| Error::from(VaultError::InvalidProof))?;
         h.hash_bytes_be(&[left.as_slice(), right.as_slice()])
-            .map_err(|_| error!(VaultError::InvalidProof))
+            .map_err(|_| Error::from(VaultError::InvalidProof))
     }
 }
 
@@ -95,7 +95,7 @@ pub fn append_leaf(
 
     tree.leaf_count = leaf_index
         .checked_add(1)
-        .ok_or(error!(VaultError::ArithmeticOverflow))?;
+        .ok_or(Error::from(VaultError::ArithmeticOverflow))?;
     tree.push_root(current);
     Ok(current)
 }
@@ -158,7 +158,7 @@ pub fn append_leaves(
     // `start + k - 1` is the index of the last new leaf; it must fit the tree.
     let last_index = start
         .checked_add(k as u64 - 1)
-        .ok_or(error!(VaultError::ArithmeticOverflow))?;
+        .ok_or(Error::from(VaultError::ArithmeticOverflow))?;
     require!(
         last_index < (1u64 << MERKLE_DEPTH),
         VaultError::MerkleTreeFull
@@ -214,7 +214,7 @@ pub fn append_leaves(
     let new_root = cur[0].1;
     tree.leaf_count = start
         .checked_add(k as u64)
-        .ok_or(error!(VaultError::ArithmeticOverflow))?;
+        .ok_or(Error::from(VaultError::ArithmeticOverflow))?;
     tree.push_root(new_root);
     Ok(new_root)
 }

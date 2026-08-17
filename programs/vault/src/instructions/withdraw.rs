@@ -24,39 +24,39 @@ fn u64_be32(v: u64) -> [u8; 32] {
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8, note_use_tag: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
-pub struct Withdraw<'info> {
+pub struct Withdraw {
     /// Any signer may pay the rent. Authorization is via ZK proof.
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub payer: Signer,
 
     /// Global config — the SPL token authority (read-only; no tree state here).
     #[account(
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 
     /// The Merkle-tree shard the spent note lives in (read-only recency check).
     #[account(
         seeds = [MerkleTree::SEED, &[tree_id]],
-        bump = merkle_tree.load()?.bump,
+        bump = merkle_tree.bump,
     )]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    pub merkle_tree: Account<MerkleTree>,
 
-    pub token_mint: Account<'info, Mint>,
+    pub token_mint: Account<Mint>,
 
     #[account(
         mut,
-        seeds = [b"vault_token", token_mint.key().as_ref()],
+        seeds = [b"vault_token", token_mint.address().as_ref()],
         bump,
     )]
-    pub vault_token_account: Account<'info, TokenAccount>,
+    pub vault_token_account: Account<TokenAccount>,
 
     #[account(
         mut,
-        constraint = destination_token_account.mint == token_mint.key() @ VaultError::Unauthorized,
+        constraint = destination_token_account.mint == token_mint.address() @ VaultError::Unauthorized,
     )]
-    pub destination_token_account: Account<'info, TokenAccount>,
+    pub destination_token_account: Account<TokenAccount>,
 
     /// Consume-once guard. `init` makes the tag-keyed `ConsumedNoteEntry`
     /// the single trustless double-spend guard SHARED with TEE settle
@@ -75,7 +75,7 @@ pub struct Withdraw<'info> {
         seeds = [ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         bump,
     )]
-    pub consumed_note: AccountLoader<'info, ConsumedNoteEntry>,
+    pub consumed_note: Account<ConsumedNoteEntry>,
 
     /// Same pattern for note lock — must not be initialized.
     #[account(
@@ -83,25 +83,25 @@ pub struct Withdraw<'info> {
         bump,
     )]
     /// CHECK: validated manually in the handler.
-    pub note_lock_slot: UncheckedAccount<'info>,
+    pub note_lock_slot: UncheckedAccount,
 
     /// v2 — per-mint outstanding-notes counter for this token. MUST exist
     /// (i.e. deposit() must have been called for this mint at least once,
     /// or there's nothing to withdraw).
     #[account(
         mut,
-        seeds = [OutstandingMint::SEED, token_mint.key().as_ref()],
+        seeds = [OutstandingMint::SEED, token_mint.address().as_ref()],
         bump = outstanding_mint.bump,
     )]
-    pub outstanding_mint: Account<'info, OutstandingMint>,
+    pub outstanding_mint: Account<OutstandingMint>,
 
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
+    pub token_program: Program<Token>,
+    pub system_program: Program<System>,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn withdraw_handler(
-    ctx: Context<Withdraw>,
+    ctx: &mut Context<Withdraw>,
     _tree_id: u8,
     note_use_tag: [u8; 32],
     nullifier: [u8; 32],
@@ -131,7 +131,7 @@ pub fn withdraw_handler(
 
     // ----- Merkle root must be recent (in THIS shard's ring) -----
     require!(
-        ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
+        ctx.accounts.merkle_tree.contains_root(&merkle_root),
         VaultError::StaleMerkleRoot
     );
 
@@ -154,7 +154,7 @@ pub fn withdraw_handler(
     // a different, already-consumed note. The TAG rather than the commitment:
     // publishing the commitment here would relink this withdrawal to the note's
     // Merkle leaf, and thus to its deposit and every trade it passed through.
-    let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
+    let mint_bytes = ctx.accounts.token_mint.address().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
     // S-01: bind the DESTINATION into the proof. Without this the tuple
     // (note_use_tag, nullifier, merkle_root, amount, proof) was a bearer
@@ -167,7 +167,7 @@ pub fn withdraw_handler(
     //
     // A 256-bit pubkey does not fit one BN254 Fr element, so it splits into
     // lo/hi halves exactly like the mint — hence 8 public inputs, not 7.
-    let dest_bytes = ctx.accounts.destination_token_account.key().to_bytes();
+    let dest_bytes = ctx.accounts.destination_token_account.address().to_bytes();
     let [dest_lo, dest_hi] = pubkey_pair_be32(&dest_bytes);
     let public_inputs: [[u8; 32]; 8] = [
         note_use_tag,
@@ -208,7 +208,7 @@ pub fn withdraw_handler(
     let slot = Clock::get()?.slot;
     // The shared consume-once guard with TEE settle. `match_id` is the all-zero
     // sentinel — there is no match on the withdraw path.
-    let c = &mut ctx.accounts.consumed_note.load_init()?;
+    let c = &mut ctx.accounts.consumed_note;
     c.note_use_tag = note_use_tag;
     c.match_id = [0u8; 16];
     c.consumed_slot = slot;
@@ -224,36 +224,38 @@ pub fn withdraw_handler(
         .outstanding_mint
         .outstanding
         .checked_sub(amount)
-        .ok_or(error!(VaultError::InsufficientOutstanding))?;
+        .ok_or(Error::from(VaultError::InsufficientOutstanding))?;
 
     // ----- Transfer tokens out -----
-    let bump = ctx.accounts.vault_config.load()?.bump;
+    let bump = ctx.accounts.vault_config.bump;
     let cfg_seeds: &[&[u8]] = &[VaultConfig::SEED, &[bump]];
     let signer_seeds: &[&[&[u8]]] = &[cfg_seeds];
 
     let cpi_accounts = TransferChecked {
-        from: ctx.accounts.vault_token_account.to_account_info(),
-        to: ctx.accounts.destination_token_account.to_account_info(),
-        mint: ctx.accounts.token_mint.to_account_info(),
-        authority: ctx.accounts.vault_config.to_account_info(),
+        from: ctx.accounts.vault_token_account.cpi_handle_mut(),
+        to: ctx.accounts.destination_token_account.cpi_handle_mut(),
+        mint: ctx.accounts.token_mint.cpi_handle(),
+        authority: ctx.accounts.vault_config.cpi_handle(),
     };
     transfer_checked(
-        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer_seeds),
+        CpiContext::new_with_signer(ctx.accounts.token_program.address(), cpi_accounts, signer_seeds),
         amount,
-        ctx.accounts.token_mint.decimals,
+        ctx.accounts.token_mint.decimals(),
     )?;
 
-    // Solvency invariant check (both counters dropped by `amount`).
-    ctx.accounts.vault_token_account.reload()?;
+    // Solvency invariant check (both counters dropped by `amount`). No
+    // `reload()`: v2 `Account<T>` reads the live account buffer, so the
+    // post-CPI balance is already visible.
     require!(
-        ctx.accounts.outstanding_mint.outstanding <= ctx.accounts.vault_token_account.amount,
+        ctx.accounts.outstanding_mint.outstanding.get()
+            <= ctx.accounts.vault_token_account.amount(),
         VaultError::SolvencyInvariantViolated
     );
 
     emit!(Withdrawn {
         nullifier,
         note_use_tag,
-        token_mint: ctx.accounts.token_mint.key(),
+        token_mint: ctx.accounts.token_mint.address(),
         amount,
     });
 
@@ -264,6 +266,6 @@ pub fn withdraw_handler(
 pub struct Withdrawn {
     pub nullifier: [u8; 32],
     pub note_use_tag: [u8; 32],
-    pub token_mint: Pubkey,
+    pub token_mint: Address,
     pub amount: u64,
 }

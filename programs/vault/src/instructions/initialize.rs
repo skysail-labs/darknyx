@@ -21,10 +21,10 @@ use core::mem::size_of;
 /// the mainnet artifact carries the guard, the dev artifact stays testable.
 #[cfg(not(feature = "devnet-admin"))]
 #[derive(Accounts)]
-#[instruction(operations_admin: Pubkey, tee_pubkeys: Vec<Pubkey>, root_key: Pubkey, num_trees: u8)]
-pub struct Initialize<'info> {
+#[instruction(operations_admin: Address, tee_pubkeys: Vec<Address>, root_key: Address, num_trees: u8)]
+pub struct Initialize {
     #[account(mut)]
-    pub upgrade_authority: Signer<'info>,
+    pub upgrade_authority: Signer,
 
     #[account(
         init,
@@ -33,34 +33,34 @@ pub struct Initialize<'info> {
         seeds = [VaultConfig::SEED],
         bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 
     /// This program — used only to derive/verify its ProgramData address.
     #[account(
-        constraint = program.programdata_address()? == Some(program_data.key())
+        constraint = program.programdata_address()? == Some(program_data.address())
             @ VaultError::Unauthorized,
     )]
-    pub program: Program<'info, crate::program::Vault>,
+    pub program: Program<crate::program::Vault>,
 
     /// The upgradeable-loader ProgramData; its upgrade authority MUST match the
     /// `upgrade_authority` signer.
     #[account(
-        constraint = program_data.upgrade_authority_address == Some(upgrade_authority.key())
+        constraint = program_data.upgrade_authority_address == Some(upgrade_authority.address())
             @ VaultError::Unauthorized,
     )]
-    pub program_data: Account<'info, ProgramData>,
+    pub program_data: Account<ProgramData>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 /// Initialize accounts — dev/test/devnet build (`devnet-admin`). Plain
 /// initializer signer, no upgrade-authority binding (see mainnet above).
 #[cfg(feature = "devnet-admin")]
 #[derive(Accounts)]
-#[instruction(operations_admin: Pubkey, tee_pubkeys: Vec<Pubkey>, root_key: Pubkey, num_trees: u8)]
-pub struct Initialize<'info> {
+#[instruction(operations_admin: Address, tee_pubkeys: Vec<Address>, root_key: Address, num_trees: u8)]
+pub struct Initialize {
     #[account(mut)]
-    pub upgrade_authority: Signer<'info>,
+    pub upgrade_authority: Signer,
 
     #[account(
         init,
@@ -69,9 +69,9 @@ pub struct Initialize<'info> {
         seeds = [VaultConfig::SEED],
         bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 /// Initialize the GLOBAL vault config. The per-shard Merkle trees are created
@@ -79,10 +79,10 @@ pub struct Initialize<'info> {
 /// full one-key-per-shard TEE set atomically and records a possibly distinct
 /// operations admin; no default-key or partial-shard bootstrap is accepted.
 pub fn initialize_handler(
-    ctx: Context<Initialize>,
-    operations_admin: Pubkey,
-    tee_pubkeys: Vec<Pubkey>,
-    root_key: Pubkey,
+    ctx: &mut Context<Initialize>,
+    operations_admin: Address,
+    tee_pubkeys: Vec<Address>,
+    root_key: Address,
     num_trees: u8,
 ) -> Result<()> {
     require!(
@@ -90,14 +90,14 @@ pub fn initialize_handler(
         VaultError::InvalidTreeCount
     );
     require!(
-        operations_admin != Pubkey::default(),
+        operations_admin != Address::default(),
         VaultError::InvalidAdminKey
     );
-    require!(root_key != Pubkey::default(), VaultError::InvalidRootKey);
+    require!(root_key != Address::default(), VaultError::InvalidRootKey);
     require!(operations_admin != root_key, VaultError::InvalidAdminKey);
     #[cfg(not(feature = "devnet-admin"))]
     require!(
-        operations_admin != ctx.accounts.upgrade_authority.key(),
+        operations_admin != ctx.accounts.upgrade_authority.address(),
         VaultError::InvalidAdminKey
     );
     require!(
@@ -106,15 +106,15 @@ pub fn initialize_handler(
     );
     for (i, key) in tee_pubkeys.iter().enumerate() {
         require!(
-            *key != Pubkey::default() && *key != operations_admin && *key != root_key,
+            *key != Address::default() && *key != operations_admin && *key != root_key,
             VaultError::InvalidTeeKey
         );
         require!(!tee_pubkeys[..i].contains(key), VaultError::InvalidTeeKey);
     }
-    let cfg = &mut ctx.accounts.vault_config.load_init()?;
+    let cfg = &mut ctx.accounts.vault_config;
 
     cfg.admin = operations_admin;
-    cfg.tee_pubkeys = [Pubkey::default(); MAX_TEE_KEYS];
+    cfg.tee_pubkeys = [Address::default(); MAX_TEE_KEYS];
     for (slot, key) in cfg.tee_pubkeys.iter_mut().zip(tee_pubkeys.iter()) {
         *slot = *key;
     }

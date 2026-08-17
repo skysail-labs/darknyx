@@ -4,10 +4,10 @@ use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 #[instruction(note_use_tag: [u8; 32])]
-pub struct ReleaseLock<'info> {
+pub struct ReleaseLock {
     /// Any signer may trigger a release after expiry (rent refund goes to them).
     #[account(mut)]
-    pub rent_receiver: Signer<'info>,
+    pub rent_receiver: Signer,
 
     #[account(
         mut,
@@ -15,11 +15,11 @@ pub struct ReleaseLock<'info> {
         bump,
         close = rent_receiver,
     )]
-    pub note_lock: AccountLoader<'info, NoteLock>,
+    pub note_lock: Account<NoteLock>,
 }
 
-pub fn release_lock_handler(ctx: Context<ReleaseLock>, _note_use_tag: [u8; 32]) -> Result<()> {
-    let lock = ctx.accounts.note_lock.load()?;
+pub fn release_lock_handler(ctx: &mut Context<ReleaseLock>, _note_use_tag: [u8; 32]) -> Result<()> {
+    let lock = ctx.accounts.note_lock;
     let clock = Clock::get()?;
     require!(clock.slot >= lock.expiry_slot, VaultError::LockNotExpired);
 

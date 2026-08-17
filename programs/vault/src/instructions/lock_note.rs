@@ -21,12 +21,12 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
     note_use_tag: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
-    token_mint: Pubkey,
+    token_mint: Address,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
 )]
-pub struct LockNote<'info> {
-    /// The TEE-operated relayer. We enforce that `tee_authority.key()` is one of
+pub struct LockNote {
+    /// The TEE-operated relayer. We enforce that `tee_authority.address()` is one of
     /// `vault_config.tee_pubkeys` (the authorized shard fee-payer/signer set) so
     /// only a registered TEE key can lock notes.
     ///
@@ -38,7 +38,7 @@ pub struct LockNote<'info> {
     /// tag is derived from a commitment that exists in the tree with the
     /// declared mint and a private, positive, range-constrained amount.
     #[account(mut)]
-    pub tee_authority: Signer<'info>,
+    pub tee_authority: Signer,
 
     // PF-02: read the stored bump instead of re-deriving it. A bare `bump`
     // makes Anchor run `find_program_address`, which averages ~1.4 hash
@@ -47,17 +47,17 @@ pub struct LockNote<'info> {
     // single cheapest CU win in the audit.
     #[account(
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 
     /// The Merkle-tree shard the input note lives in. Read-only — we only check
     /// its recent-root ring.
     #[account(
         seeds = [MerkleTree::SEED, &[tree_id]],
-        bump = merkle_tree.load()?.bump,
+        bump = merkle_tree.bump,
     )]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    pub merkle_tree: Account<MerkleTree>,
 
     #[account(
         init,
@@ -66,7 +66,7 @@ pub struct LockNote<'info> {
         seeds = [NoteLock::SEED, note_use_tag.as_ref()],
         bump,
     )]
-    pub note_lock: AccountLoader<'info, NoteLock>,
+    pub note_lock: Account<NoteLock>,
 
     /// U-02 consume-once guard. The tag-keyed `ConsumedNoteEntry` for
     /// this note MUST be ABSENT: a note already settled
@@ -82,19 +82,19 @@ pub struct LockNote<'info> {
         seeds = [ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         bump,
     )]
-    pub consumed_note: UncheckedAccount<'info>,
+    pub consumed_note: UncheckedAccount,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn lock_note_handler(
-    ctx: Context<LockNote>,
+    ctx: &mut Context<LockNote>,
     _tree_id: u8,
     note_use_tag: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
-    token_mint: Pubkey,
+    token_mint: Address,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
 ) -> Result<()> {
@@ -102,15 +102,15 @@ pub fn lock_note_handler(
 
     // TEE-authority gate + Merkle-root recency check (against THIS shard).
     {
-        let cfg = ctx.accounts.vault_config.load()?;
+        let cfg = ctx.accounts.vault_config;
         require!(
-            cfg.is_authorized_tee(&ctx.accounts.tee_authority.key()),
+            cfg.is_authorized_tee(&ctx.accounts.tee_authority.address()),
             VaultError::Unauthorized
         );
         // The proof was generated against `merkle_root`; that root must still
         // be in this shard's recent-root ring. Same recency policy as `withdraw`.
         require!(
-            ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
+            ctx.accounts.merkle_tree.contains_root(&merkle_root),
             VaultError::StaleMerkleRoot
         );
     }
@@ -152,12 +152,12 @@ pub fn lock_note_handler(
 
     // Proof verified — every field of the lock is now cryptographically bound
     // to a real Merkle leaf owned by the proof generator. Write the lock.
-    let lock = &mut ctx.accounts.note_lock.load_init()?;
+    let lock = &mut ctx.accounts.note_lock;
     lock.note_use_tag = note_use_tag;
     lock.token_mint = token_mint;
     lock.order_id = order_id;
     lock.expiry_slot = expiry_slot;
-    lock.locked_by = ctx.accounts.tee_authority.key();
+    lock.locked_by = ctx.accounts.tee_authority.address();
     lock.bump = ctx.bumps.note_lock;
     lock._padding = [0u8; 7];
 
@@ -176,7 +176,7 @@ pub fn lock_note_handler(
 #[event]
 pub struct NoteLocked {
     pub note_use_tag: [u8; 32],
-    pub token_mint: Pubkey,
+    pub token_mint: Address,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
 }

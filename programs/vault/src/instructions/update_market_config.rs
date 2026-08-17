@@ -6,12 +6,12 @@ use crate::state::{MarketConfig, VaultConfig};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
-pub struct UpdateMarketConfig<'info> {
-    #[account(address = vault_config.load()?.admin @ VaultError::Unauthorized)]
-    pub admin: Signer<'info>,
+pub struct UpdateMarketConfig {
+    #[account(address = vault_config.admin @ VaultError::Unauthorized)]
+    pub admin: Signer,
 
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
 
     #[account(
         mut,
@@ -22,11 +22,11 @@ pub struct UpdateMarketConfig<'info> {
         ],
         bump = market_config.bump,
     )]
-    pub market_config: Account<'info, MarketConfig>,
+    pub market_config: Account<MarketConfig>,
 }
 
 pub fn update_market_config_handler(
-    ctx: Context<UpdateMarketConfig>,
+    ctx: &mut Context<UpdateMarketConfig>,
     enabled: bool,
     price_scale: u64,
     tick_size: u64,
@@ -43,8 +43,8 @@ pub fn update_market_config_handler(
     market.circuit_breaker_bps = circuit_breaker_bps;
 
     emit!(MarketConfigUpdated {
-        admin: ctx.accounts.admin.key(),
-        market: market.key(),
+        admin: ctx.accounts.admin.address(),
+        market: market.address(),
         enabled,
         price_scale,
         tick_size,
@@ -56,8 +56,8 @@ pub fn update_market_config_handler(
 
 #[event]
 pub struct MarketConfigUpdated {
-    pub admin: Pubkey,
-    pub market: Pubkey,
+    pub admin: Address,
+    pub market: Address,
     pub enabled: bool,
     pub price_scale: u64,
     pub tick_size: u64,

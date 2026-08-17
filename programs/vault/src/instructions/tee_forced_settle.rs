@@ -46,7 +46,7 @@ use anchor_lang::prelude::*;
 /// encoded as `[0u8; 32]` when the corresponding change is zero
 /// (exact-fill) to keep the payload fixed-size and Borsh-stable; the
 /// handler skips the tree insertion for zero commitments.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+#[derive(SchemaWrite, SchemaRead, Clone, Debug)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
     /// The CONSUMED inputs, as note-use TAGS rather than commitments. These key
@@ -156,11 +156,11 @@ pub struct MatchResultPayload {
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_relock_pda<'info>(
-    note_lock_ai: &UncheckedAccount<'info>,
-    payer: &Signer<'info>,
-    system_program: &Program<'info, System>,
+    note_lock_ai: &UncheckedAccount,
+    payer: &Signer,
+    system_program: &Program<System>,
     note_use_tag: &[u8; 32],
-    token_mint: &Pubkey,
+    token_mint: &Address,
     order_id: &[u8; 16],
     expiry_slot: u64,
 ) -> Result<()> {
@@ -168,8 +168,8 @@ pub(crate) fn create_relock_pda<'info>(
     use core::mem::size_of;
 
     let (expected_pda, bump) =
-        Pubkey::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
-    require_keys_eq!(note_lock_ai.key(), expected_pda, VaultError::Unauthorized);
+        Address::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
+    require_keys_eq!(note_lock_ai.address(), expected_pda, VaultError::Unauthorized);
     require!(
         note_lock_ai.data_is_empty() && note_lock_ai.lamports() == 0,
         VaultError::NoteAlreadyLocked
@@ -199,7 +199,7 @@ pub(crate) fn create_relock_pda<'info>(
     let signer_seeds = &[seeds];
 
     let cpi_ctx = CpiContext::new_with_signer(
-        system_program.key(),
+        system_program.address(),
         system_program::CreateAccount {
             from: payer.to_account_info(),
             to: note_lock_ai.to_account_info(),
@@ -226,7 +226,7 @@ pub(crate) fn create_relock_pda<'info>(
         lock.token_mint = *token_mint;
         lock.order_id = *order_id;
         lock.expiry_slot = expiry_slot;
-        lock.locked_by = payer.key();
+        lock.locked_by = payer.address();
         lock.bump = bump;
         lock._padding = [0u8; 7];
     }
@@ -303,7 +303,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
 }
 
 /// The Solana Ed25519Program precompile id.
-fn ed25519_program_id() -> Pubkey {
+fn ed25519_program_id() -> Address {
     solana_sdk_ids::ed25519_program::ID
 }
 
@@ -327,7 +327,7 @@ fn ed25519_program_id() -> Pubkey {
 /// complexity and a well-behaved relayer always inlines.
 pub fn verify_tee_signature(
     instructions_sysvar: &UncheckedAccount<'_>,
-    expected_pubkey: &Pubkey,
+    expected_pubkey: &Address,
     expected_msg: &[u8; 32],
 ) -> Result<()> {
     use solana_instructions_sysvar::load_instruction_at_checked;
@@ -341,9 +341,9 @@ pub fn verify_tee_signature(
     let total_ix_count: usize = {
         let data = ai
             .try_borrow_data()
-            .map_err(|_| error!(VaultError::InvalidTeeSignature))?;
+            .map_err(|_| Error::from(VaultError::InvalidTeeSignature))?;
         if data.len() < 2 {
-            return Err(error!(VaultError::InvalidTeeSignature));
+            return Err(Error::from(VaultError::InvalidTeeSignature));
         }
         u16::from_le_bytes([data[0], data[1]]) as usize
     };
@@ -389,7 +389,7 @@ pub fn verify_tee_signature(
         // (pk, msg) pair or the tx would have failed before reaching us.
         return Ok(());
     }
-    Err(error!(VaultError::InvalidTeeSignature))
+    Err(Error::from(VaultError::InvalidTeeSignature))
 }
 
 #[cfg(test)]
