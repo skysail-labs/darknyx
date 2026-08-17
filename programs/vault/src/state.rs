@@ -49,17 +49,17 @@ pub const MAX_CIRCUIT_BREAKER_BPS: u64 = 10_000;
 /// tree-independent config + the precomputed empty-subtree roots (identical for
 /// every shard, so stored once here). Read-only on the settle hot path → no
 /// write-contention.
-#[account(zero_copy)]
+#[account]
 pub struct VaultConfig {
     /// Admin authority (usually a multisig). Can rotate the TEE keys.
-    pub admin: Pubkey,
+    pub admin: Address,
     /// Authorized TEE Ed25519 signer pubkeys. Each is simultaneously a settle
     /// fee-payer + `tee_authority` + ed25519 settle-signer (one signer per tx,
     /// no extra signature). The first `num_tee_keys` are live.
-    pub tee_pubkeys: [Pubkey; MAX_TEE_KEYS],
+    pub tee_pubkeys: [Address; MAX_TEE_KEYS],
     /// Protocol "root key": a long-lived governance authority distinct from
     /// `admin`, rotatable only by a self-signed message (see `rotate_root_key`).
-    pub root_key: Pubkey,
+    pub root_key: Address,
     /// Precomputed empty-subtree roots at each level (0 = leaf, depth-1 = root's
     /// children). Tree-independent, so global; the per-tree append reads these.
     pub zero_subtree_roots: [[u8; 32]; MERKLE_DEPTH as usize],
@@ -68,7 +68,7 @@ pub struct VaultConfig {
     /// by the Tx D that consumes that match's inputs.
     pub protocol_owner_commitment: [u8; 32],
     /// Protocol fee rate in basis points of notional (e.g. `30 = 0.30 %`).
-    pub fee_rate_bps: u16,
+    pub fee_rate_bps: PodU16,
     /// Number of live entries in `tee_pubkeys`.
     pub num_tee_keys: u8,
     /// Number of Merkle-tree shards the matcher round-robins across.
@@ -82,7 +82,7 @@ impl VaultConfig {
     pub const SEED: &'static [u8] = b"vault_config";
 
     /// Is `key` one of the authorized TEE signer pubkeys?
-    pub fn is_authorized_tee(&self, key: &Pubkey) -> bool {
+    pub fn is_authorized_tee(&self, key: &Address) -> bool {
         let n = (self.num_tee_keys as usize).min(MAX_TEE_KEYS);
         self.tee_pubkeys[..n].contains(key)
     }
@@ -96,13 +96,13 @@ impl VaultConfig {
 #[account]
 #[derive(Default)]
 pub struct MarketConfig {
-    pub base_mint: Pubkey,
-    pub quote_mint: Pubkey,
+    pub base_mint: Address,
+    pub quote_mint: Address,
     /// Fixed-point denominator in
     /// `quote_amount = floor(base_amount * clearing_price / price_scale)`.
     /// `price_scale` (+ the mint pair) IS proof-bound: `verify_match_batch`
     /// fans it in as a public input, so every active slot is pinned to it.
-    pub price_scale: u64,
+    pub price_scale: PodU64,
     // ── U-01: TEE/matcher-enforced only, NOT proof-bound ────────────────────
     // The three fields below are governance-set market rules the in-TEE matcher
     // honours, but they are NOT public inputs to VALID_MATCH_BATCH and not
@@ -116,16 +116,16 @@ pub struct MarketConfig {
     // these as "on-chain-enforced market rules". Binding them would require a
     // lockstep circuit + VK + assembler change (deliberately not done).
     /// Smallest permitted price increment in scaled price units. TEE-enforced.
-    pub tick_size: u64,
+    pub tick_size: PodU64,
     /// Minimum order quantity in base-asset atomic units. TEE-enforced.
-    pub min_order_size: u64,
+    pub min_order_size: PodU64,
     /// Max `|clearing_price - oracle_twap| / oracle_twap`, in bps. TEE-enforced.
-    pub circuit_breaker_bps: u64,
+    pub circuit_breaker_bps: PodU64,
     /// Snapshotted from the SPL mint accounts at initialization.
     pub base_decimals: u8,
     pub quote_decimals: u8,
     /// Governance kill switch. A disabled market must not accept new trading.
-    pub enabled: bool,
+    pub enabled: PodBool,
     pub bump: u8,
 }
 
@@ -138,10 +138,10 @@ impl MarketConfig {
 /// ring. PDA seed `[b"merkle_tree", &[tree_id]]`. Sharding the tree across K of
 /// these is what lets settles to different shards avoid the single-account
 /// write-conflict that serialized them.
-#[account(zero_copy)]
+#[account]
 pub struct MerkleTree {
     /// Leaves inserted into THIS shard. Monotonic; the per-shard insertion index.
-    pub leaf_count: u64,
+    pub leaf_count: PodU64,
     /// Current Merkle root of this shard.
     pub current_root: [u8; 32],
     /// Ring buffer of the last `ROOT_HISTORY_SIZE` roots of this shard.
@@ -175,11 +175,11 @@ impl MerkleTree {
 }
 
 /// PDA marking a registered user commitment (wallet identity).
-#[account(zero_copy)]
+#[account]
 pub struct WalletEntry {
     pub commitment: [u8; 32],
-    pub owner: Pubkey, // the Root Key that signed `create_wallet`
-    pub created_slot: u64,
+    pub owner: Address, // the Root Key that signed `create_wallet`
+    pub created_slot: PodU64,
     pub bump: u8,
     pub _padding: [u8; 7],
 }
@@ -210,10 +210,10 @@ impl WalletEntry {
 /// impossible for free, but the leaf index is only known at execution time, so
 /// any concurrent deposit would invalidate the proof. This account is the
 /// version that does not trade liveness for it.
-#[account(zero_copy)]
+#[account]
 pub struct DepositedNoteEntry {
     pub note_commitment: [u8; 32],
-    pub deposited_slot: u64,
+    pub deposited_slot: PodU64,
     pub bump: u8,
     pub _padding: [u8; 7],
 }
@@ -233,11 +233,11 @@ impl DepositedNoteEntry {
 /// EVERY consume path must key on the same handle — settle, withdraw and merge.
 /// A path left on commitments would let one note be consumed once under each
 /// scheme, which is a double-spend; that is why the migration lands atomically.
-#[account(zero_copy)]
+#[account]
 pub struct ConsumedNoteEntry {
     pub note_use_tag: [u8; 32],
     pub match_id: [u8; 16],
-    pub consumed_slot: u64,
+    pub consumed_slot: PodU64,
     pub bump: u8,
     pub _padding: [u8; 7],
 }
@@ -260,15 +260,15 @@ impl ConsumedNoteEntry {
 ///     cryptographically bound to the on-chain Merkle leaf — a malicious TEE
 ///     cannot lie about the mint). The settle handler reads it back to
 ///     recompute the batch-binding leaf + to stamp continuation re-locks.
-#[account(zero_copy)]
+#[account]
 pub struct NoteLock {
     /// The note-use tag this lock pins. NOT the commitment — see
     /// `ConsumedNoteEntry` above for why the public handle moved.
     pub note_use_tag: [u8; 32],
-    pub token_mint: Pubkey,
+    pub token_mint: Address,
     pub order_id: [u8; 16],
-    pub expiry_slot: u64,
-    pub locked_by: Pubkey, // the TEE key that locked
+    pub expiry_slot: PodU64,
+    pub locked_by: Address, // the TEE key that locked
     pub bump: u8,
     pub _padding: [u8; 7],
 }
@@ -292,7 +292,7 @@ impl NoteLock {
 
 /// Compile-time drift guard for [`NoteLock::EXPIRY_SLOT_OFFSET`].
 ///
-/// `#[account(zero_copy)]` implies `#[repr(C)]`, so `offset_of!` reports the
+/// `#[account]` implies `#[repr(C)]`, so `offset_of!` reports the
 /// true in-memory (and therefore on-wire) position of the field. Adding the
 /// 8-byte Anchor discriminator gives the offset within the account data.
 const _: () = assert!(
@@ -320,11 +320,13 @@ const _: () = assert!(
 ///
 /// Fails CLOSED — an account that is program-owned but too short to parse is
 /// treated as live rather than assumed absent.
-pub fn note_lock_is_live(info: &AccountInfo<'_>, now_slot: u64) -> Result<bool> {
-    if info.owner != &crate::ID {
+pub fn note_lock_is_live(info: &AccountView, now_slot: u64) -> Result<bool> {
+    // v2: `owner` is a method on AccountView (not a field), and the raw data
+    // borrow is `try_borrow()` rather than `try_borrow_data()`.
+    if info.owner() != &crate::ID {
         return Ok(false); // no lock at all
     }
-    let data = info.try_borrow_data()?;
+    let data = info.try_borrow()?;
     let end = NoteLock::EXPIRY_SLOT_OFFSET + 8;
     if data.len() < end {
         // Program-owned but unparseable: refuse to treat it as absent.
@@ -359,8 +361,8 @@ pub fn note_lock_is_live(info: &AccountInfo<'_>, now_slot: u64) -> Result<bool> 
 #[account]
 #[derive(Default)]
 pub struct OutstandingMint {
-    pub mint: Pubkey,
-    pub outstanding: u64,
+    pub mint: Address,
+    pub outstanding: PodU64,
     pub bump: u8,
 }
 
@@ -392,9 +394,9 @@ impl OutstandingMint {
 #[derive(Default)]
 pub struct BatchValidityMarker {
     /// Refund target on close.
-    pub payer: Pubkey,
+    pub payer: Address,
     /// Slot past which this marker is stale and may be released.
-    pub expiry_slot: u64,
+    pub expiry_slot: PodU64,
     pub bump: u8,
 }
 
