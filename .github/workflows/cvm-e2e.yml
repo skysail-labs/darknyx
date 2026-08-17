@@ -544,6 +544,42 @@ jobs:
           done
           [ -z "$FAILED" ] || { echo "::error::CVM tests failed:$FAILED"; exit 1; }
 
+      # ── DAEMON LIFECYCLE ────────────────────────────────────────────────
+      # The daemon's integration contract with a live enclave — stream framing,
+      # auth, the fills channel, leaf resolution, cancel — plus the transport
+      # leak guard (ported here when cvm-daemon-smoke was retired into this
+      # suite, where it covers strictly more of the flow).
+      #
+      # The offline daemon suites cover this logic against mocks, which cannot
+      # catch wire drift. Nothing ran the live one, so the `leaf_count` →
+      # `total_leaf_count` rename broke it silently. That is the gap this step
+      # closes.
+      #
+      # Its settle assertion is RELATIVE (before+3), not an empty-tree check,
+      # so unlike the tree-consuming suites above it needs no reset + cold boot
+      # and can run straight after them.
+      - name: Daemon lifecycle against the live CVM
+        run: |
+          set -euo pipefail
+          # Re-pin: the loop above redeploys before every test, so pins read
+          # earlier in the job can describe a different enclave and the client
+          # correctly refuses with `compose_mismatch`.
+          NONCE=$(openssl rand -hex 32)
+          curl -fsSk --max-time 40 \
+            "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta-daemon.json
+          DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+                            | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta-daemon.json)
+          DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta-daemon.json)
+          export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
+          printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "::error::bad compose hash before the daemon run"; exit 1; }
+          ( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 \
+              DARKNYX_CVM_TRANSPORT=ra-tls \
+              DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+              ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+              FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
+              ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
+
       # ── LEGACY-PATH COVERAGE ────────────────────────────────────────────
       # The gateway-terminated transport is kept deliberately as the REVERT
       # path (transport-integrity-plan.md §5.5), not as dead code. §5.5.4

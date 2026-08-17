@@ -33,7 +33,7 @@
  *     ( cd packages/daemon && ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,7 +52,9 @@ import {
 import {
   Connection,
   Keypair,
+  LAMPORTS_PER_SOL,
   PublicKey,
+  SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
@@ -86,6 +88,36 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+/**
+ * Leak guard, ported from `cvm-daemon-smoke` when that suite was retired into
+ * this one. Under `ra-tls`, NOTHING may reach the CVM on global `fetch`.
+ *
+ * Every CVM-bound call is supposed to go through the verified transport, but
+ * "supposed to" is not a property — the SDK's client helpers each default to
+ * `globalThis.fetch` when no `fetchImpl` is supplied, so a single missing
+ * argument silently downgrades one call while the run still reports
+ * `transport: ra-tls`. That is exactly what happened to the order POST.
+ *
+ * Recording the URLs rather than throwing keeps the failure legible: the
+ * assertion runs at the end and names the exact endpoint that bypassed the
+ * transport, instead of surfacing as a TLS error from deep inside a library.
+ * Here it covers strictly more than it did in the smoke — the fills channel,
+ * leaf resolution, auto-merge, and cancel are all inside its window.
+ */
+const transportLeaks: string[] = [];
+{
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: never, init: never) => {
+    const url = String((input as { url?: string })?.url ?? input);
+    if (
+      process.env.DARKNYX_CVM_TRANSPORT === "ra-tls" &&
+      url.startsWith(process.env.DARKNYX_TEE_GATEWAY ?? "\u0000")
+    ) {
+      transportLeaks.push(url);
+    }
+    return original(input, init);
+  }) as typeof fetch;
+}
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 
 const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
@@ -147,11 +179,11 @@ const SOL_USD_FEED =
 /** The matcher clears at the oracle-anchored price, so orders must be priced
  *  near it (a far-off fixed price never crosses) — same anchor cvm-settle-e2e uses. */
 async function oracleAnchor(): Promise<bigint> {
-  if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
-  return (await fetchPythCorePushPrice(
-    new Connection(RPC, "finalized"),
-    SOL_USD_FEED,
-  )).emaPrice;
+  if (process.env.DARKNYX_CVM_PRICE)
+    return BigInt(process.env.DARKNYX_CVM_PRICE);
+  return (
+    await fetchPythCorePushPrice(new Connection(RPC, "finalized"), SOL_USD_FEED)
+  ).emaPrice;
 }
 const loadKp = (rel: string) =>
   Keypair.fromSecretKey(
@@ -159,6 +191,46 @@ const loadKp = (rel: string) =>
       JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8")) as number[],
     ),
   );
+
+/**
+ * The buyer/seller fee payers used to be `loadKp(...)` on two files nothing in
+ * the repo creates. They existed only on the machine of whoever last ran this
+ * by hand, so the suite threw in `beforeAll` anywhere else — which is a large
+ * part of why it sat unrunnable while CI stayed green. Generate and persist
+ * them on first use instead: they are throwaway devnet fee payers, not
+ * protocol identities.
+ */
+const loadOrCreateKp = (rel: string): Keypair => {
+  const abs = resolve(REPO_ROOT, rel);
+  if (existsSync(abs)) return loadKp(rel);
+  const kp = Keypair.generate();
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600 });
+  return kp;
+};
+
+/** Top a fee payer up from the funder. No airdrop: devnet faucets rate-limit. */
+async function ensureFunded(
+  conn: Connection,
+  funder: Keypair,
+  target: PublicKey,
+  minSol = 0.5,
+): Promise<void> {
+  const have = await conn.getBalance(target, "confirmed");
+  const need = minSol * LAMPORTS_PER_SOL;
+  if (have >= need) return;
+  await sendAndConfirmTransaction(
+    conn,
+    new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: funder.publicKey,
+        toPubkey: target,
+        lamports: need - have,
+      }),
+    ),
+    [funder],
+  );
+}
 
 interface E2EConfig {
   vaultProgramId: string;
@@ -217,202 +289,145 @@ async function waitForLeaf(commitment: string, token: string): Promise<void> {
   }
 }
 
-maybe(
-  "daemon full lifecycle (fill → leaf-resolve → merge → cancel)",
-  () => {
-    let cfg: E2EConfig;
-    let conn: Connection;
-    let admin: Keypair;
-    let buyerPayer: Keypair;
-    let sellerPayer: Keypair;
-    let quoteMint: PublicKey;
-    let baseMint: PublicKey;
-    let programId: PublicKey;
-    let token: string;
-    let buyer: Daemon;
-    let buyerStore: DaemonStore;
+maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () => {
+  let cfg: E2EConfig;
+  let conn: Connection;
+  let admin: Keypair;
+  let buyerPayer: Keypair;
+  let sellerPayer: Keypair;
+  let quoteMint: PublicKey;
+  let baseMint: PublicKey;
+  let programId: PublicKey;
+  let token: string;
+  let buyer: Daemon;
+  let buyerStore: DaemonStore;
 
-    // Orders need a FUTURE expiry_slot — the matcher sweeps expiry_slot=0
-    // (limitPolicy's "GTC" default) as already-expired — but the CVM also
-    // REJECTS an expiry beyond `MAX_LOCK_TTL_SLOTS` (4500, ~30 min) ahead,
-    // the F-05 cap on how long a note may sit locked.
+  // Orders need a FUTURE expiry_slot — the matcher sweeps expiry_slot=0
+  // (limitPolicy's "GTC" default) as already-expired — but the CVM also
+  // REJECTS an expiry beyond `MAX_LOCK_TTL_SLOTS` (4500, ~30 min) ahead,
+  // the F-05 cap on how long a note may sit locked.
+  //
+  // This used to ask for +100_000 and was rejected outright. The margin
+  // below the cap is deliberate: slots advance between reading `getSlot`
+  // and the CVM evaluating the order, so asking for exactly 4500 would be
+  // intermittently over.
+  async function futureExpiry(): Promise<bigint> {
+    return BigInt((await conn.getSlot("confirmed")) + 4_000);
+  }
+
+  // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──
+  async function sellerAsk(qty: bigint, price: bigint): Promise<void> {
+    const seed = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 11) & 0xff;
+    const ks = new Keystore(
+      deriveAccountIdentity(seed, sellerPayer.publicKey.toBytes()),
+    );
+    const noteAmt = withFee(qty);
+    const ata = await getAssociatedTokenAddress(
+      baseMint,
+      sellerPayer.publicKey,
+    );
+    await sendAndConfirmTransaction(
+      conn,
+      new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          admin.publicKey,
+          ata,
+          sellerPayer.publicKey,
+          baseMint,
+        ),
+        createMintToInstruction(baseMint, ata, admin.publicKey, noteAmt),
+      ),
+      [admin],
+    );
+    const receipt = await getDepositFunction({
+      client: createDaemonClient({
+        programId,
+        rpcUrl: RPC,
+        payer: sellerPayer,
+        keystore: ks,
+      }),
+    })({
+      depositor: sellerPayer.publicKey,
+      depositIndex: BigInt(Date.now()),
+      tokenMint: baseMint.toBytes(),
+      amount: noteAmt,
+      depositorTokenAccount: ata,
+    });
+    const note: StoredNote = depositNoteFromReceipt(receipt);
+    await waitForLeaf(note.commitment, token);
+    const req = await proveAndBuildOrder({
+      masterSeed: ks.masterSeed,
+      spendingKey: ks.spendingKey,
+      ownerCommitment: note.ownerCommitment,
+      sessionId: await bootSessionId(),
+      tradingKey: ks.tradingPublicKey(0),
+      sign: (d) => ks.signWithTradingKey(0, d),
+      note: {
+        commitment: Uint8Array.from(Buffer.from(note.commitment, "hex")),
+        innerHash: note.innerHash,
+        amount: note.amount,
+      },
+      symbol: SYMBOL,
+      side: OrderSide.Ask,
+      policy: limitPolicy({
+        priceLimit: price,
+        expirySlot: await futureExpiry(),
+      }),
+      amount: qty,
+      orderId: Uint8Array.from(
+        Buffer.from(`${Date.now()}`.padStart(32, "0").slice(0, 32), "hex"),
+      ),
+      baseUrl: GATEWAY,
+      token,
+      // Fetches /tree/inclusion internally; without this it does so on
+      // global fetch and cannot reach the enclave.
+      fetchImpl: tfetch,
+      prover: nodeValidInputProver(VI),
+      ownerCommitmentBlinding: ks.ownerBlinding,
+      tokenMint: baseMint.toBytes(),
+    });
+    const resp = await placeOrder(
+      { baseUrl: GATEWAY, token, fetchImpl: tfetch },
+      req,
+    );
+    expect(resp.status).toBeTruthy();
+  }
+
+  async function leafCount(): Promise<number> {
+    // `total_leaf_count`, NOT `leaf_count`.
     //
-    // This used to ask for +100_000 and was rejected outright. The margin
-    // below the cap is deliberate: slots advance between reading `getSlot`
-    // and the CVM evaluating the order, so asking for exactly 4500 would be
-    // intermittently over.
-    async function futureExpiry(): Promise<bigint> {
-      return BigInt((await conn.getSlot("confirmed")) + 4_000);
+    // SW-06 renamed this: the field used to be a bare `leaf_count` (the
+    // all-shard sum) sitting next to shard 0's `merkle_root`, which read as
+    // a matched pair and was not one. This test was never updated, and its
+    // `?? 0` turned the missing field into "the tree is empty" — so every
+    // run reported before=0, after=0 and failed with "settle did not land"
+    // whether or not the settle actually landed.
+    //
+    // No default here on purpose: a shape change must fail loudly rather
+    // than quietly reappear as an empty tree.
+    const r = await tfetch(`${GATEWAY}/transparency`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const j = (await r.json()) as {
+      reserves?: { total_leaf_count?: number };
+    };
+    const n = j.reserves?.total_leaf_count;
+    if (typeof n !== "number") {
+      throw new Error(
+        "/transparency did not return reserves.total_leaf_count " +
+          `(got ${JSON.stringify(j.reserves)}); the response shape changed`,
+      );
     }
+    return n;
+  }
 
-    // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──
-    async function sellerAsk(qty: bigint, price: bigint): Promise<void> {
-      const seed = new Uint8Array(64);
-      for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 11) & 0xff;
-      const ks = new Keystore(
-        deriveAccountIdentity(seed, sellerPayer.publicKey.toBytes()),
-      );
-      const noteAmt = withFee(qty);
-      const ata = await getAssociatedTokenAddress(
-        baseMint,
-        sellerPayer.publicKey,
-      );
-      await sendAndConfirmTransaction(
-        conn,
-        new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
-            ata,
-            sellerPayer.publicKey,
-            baseMint,
-          ),
-          createMintToInstruction(baseMint, ata, admin.publicKey, noteAmt),
-        ),
-        [admin],
-      );
-      const receipt = await getDepositFunction({
-        client: createDaemonClient({
-          programId,
-          rpcUrl: RPC,
-          payer: sellerPayer,
-          keystore: ks,
-        }),
-      })({
-        depositor: sellerPayer.publicKey,
-        depositIndex: BigInt(Date.now()),
-        tokenMint: baseMint.toBytes(),
-        amount: noteAmt,
-        depositorTokenAccount: ata,
-      });
-      const note: StoredNote = depositNoteFromReceipt(receipt);
-      await waitForLeaf(note.commitment, token);
-      const req = await proveAndBuildOrder({
-        masterSeed: ks.masterSeed,
-        spendingKey: ks.spendingKey,
-        ownerCommitment: note.ownerCommitment,
-        sessionId: await bootSessionId(),
-        tradingKey: ks.tradingPublicKey(0),
-        sign: (d) => ks.signWithTradingKey(0, d),
-        note: {
-          commitment: Uint8Array.from(Buffer.from(note.commitment, "hex")),
-          innerHash: note.innerHash,
-          amount: note.amount,
-        },
-        symbol: SYMBOL,
-        side: OrderSide.Ask,
-        policy: limitPolicy({
-          priceLimit: price,
-          expirySlot: await futureExpiry(),
-        }),
-        amount: qty,
-        orderId: Uint8Array.from(
-          Buffer.from(`${Date.now()}`.padStart(32, "0").slice(0, 32), "hex"),
-        ),
-        baseUrl: GATEWAY,
-        token,
-        // Fetches /tree/inclusion internally; without this it does so on
-        // global fetch and cannot reach the enclave.
-        fetchImpl: tfetch,
-        prover: nodeValidInputProver(VI),
-        ownerCommitmentBlinding: ks.ownerBlinding,
-        tokenMint: baseMint.toBytes(),
-      });
-      const resp = await placeOrder(
-        { baseUrl: GATEWAY, token, fetchImpl: tfetch },
-        req,
-      );
-      expect(resp.status).toBeTruthy();
-    }
-
-    async function leafCount(): Promise<number> {
-      // `total_leaf_count`, NOT `leaf_count`.
-      //
-      // SW-06 renamed this: the field used to be a bare `leaf_count` (the
-      // all-shard sum) sitting next to shard 0's `merkle_root`, which read as
-      // a matched pair and was not one. This test was never updated, and its
-      // `?? 0` turned the missing field into "the tree is empty" — so every
-      // run reported before=0, after=0 and failed with "settle did not land"
-      // whether or not the settle actually landed.
-      //
-      // No default here on purpose: a shape change must fail loudly rather
-      // than quietly reappear as an empty tree.
-      const r = await tfetch(`${GATEWAY}/transparency`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      const j = (await r.json()) as {
-        reserves?: { total_leaf_count?: number };
-      };
-      const n = j.reserves?.total_leaf_count;
-      if (typeof n !== "number") {
-        throw new Error(
-          "/transparency did not return reserves.total_leaf_count " +
-            `(got ${JSON.stringify(j.reserves)}); the response shape changed`,
-        );
-      }
-      return n;
-    }
-
-    beforeAll(async () => {
-      // Built before any gateway call: `/auth/token` below exchanges an API
-      // secret for a bearer token and must not travel on global fetch.
-      sharedTransport = await buildDaemonTransport(
-        {
-          gatewayUrl: GATEWAY,
-          transportMode: RATLS
-            ? ("ra-tls" as const)
-            : ("gateway-terminated" as const),
-          ...(RATLS
-            ? {
-                expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
-                attestation: {
-                  composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
-                },
-              }
-            : {}),
-        } as DaemonConfig,
-        {
-          verifierDeps: {
-            verifyQuote: (q: string) =>
-              createDcapQuoteVerifier({})(
-                Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
-              ),
-            parseEventLog,
-            randomNonce: () => new Uint8Array(randomBytes(32)),
-          },
-          ...(RATLS
-            ? {
-                createWebSocket: (u: string) =>
-                  new WebSocket(u, {
-                    rejectUnauthorized: false,
-                  }) as unknown as NodeWebSocketLike,
-              }
-            : {}),
-        },
-      );
-      cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
-      conn = new Connection(RPC, "confirmed");
-      admin = loadKp(
-        process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
-      );
-      buyerPayer = loadKp(".devnet/keypairs/cvm-buyer-payer.json");
-      sellerPayer = loadKp(".devnet/keypairs/cvm-seller-payer.json");
-      quoteMint = new PublicKey(cfg.quoteMint.pubkey);
-      baseMint = new PublicKey(cfg.baseMint.pubkey);
-      programId = new PublicKey(cfg.vaultProgramId);
-      token = await authToken();
-
-      const seed = new Uint8Array(64);
-      for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 7) & 0xff;
-      const keystore = new Keystore(
-        deriveAccountIdentity(seed, buyerPayer.publicKey.toBytes()),
-      );
-      buyerStore = new DaemonStore(":memory:");
-
-      const config: DaemonConfig = {
+  beforeAll(async () => {
+    // Built before any gateway call: `/auth/token` below exchanges an API
+    // secret for a bearer token and must not travel on global fetch.
+    sharedTransport = await buildDaemonTransport(
+      {
         gatewayUrl: GATEWAY,
-        // Selected, not hardcoded. Pinning this to "gateway-terminated" made
-        // the suite unrunnable after the cutover unpublished the plaintext
-        // route.
         transportMode: RATLS
           ? ("ra-tls" as const)
           : ("gateway-terminated" as const),
@@ -424,206 +439,272 @@ maybe(
               },
             }
           : {}),
-        gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
-        token,
-        rpcUrl: RPC,
-        dbPath: ":memory:",
-        controlPort: 0,
-        keystorePath: "",
-        orderSequencePath: "",
-        // tuned: merge at 2 residuals
-        thresholds: {
-          mergeThreshold: 2,
+      } as DaemonConfig,
+      {
+        verifierDeps: {
+          verifyQuote: (q: string) =>
+            createDcapQuoteVerifier({})(
+              Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+            ),
+          parseEventLog,
+          randomNonce: () => new Uint8Array(randomBytes(32)),
         },
-        // Functional lifecycle test — dev-partial attestation (not strict DCAP).
-        attestationStrict: false,
-        attestOnchainCheck: false,
-        programId: cfg.vaultProgramId,
-      };
-      const { client, merkleProvider } = createMergeClient({
-        programId,
-        rpcUrl: RPC,
-        payer: buyerPayer,
-        keystore,
-        artifacts: { k2: MERGE(2), k4: MERGE(4) },
-        leavesFetcher: httpLeavesFetcher({
-          gatewayUrl: GATEWAY,
-          token,
-          fetchImpl: tfetch,
-        }),
-      });
-      const rawMerge = getMergeFunction({ client });
-      buyer = new Daemon({
-        config,
-        // The shipped wiring: every CVM call and the /v1/stream session run
-        // over the selected transport. Omitting these left the daemon's own
-        // attestation fetch on global fetch, which fails closed against the
-        // enclave's self-signed certificate.
-        fetchImpl: sharedTransport.fetch,
-        ...(sharedTransport.webSocketFactory
+        ...(RATLS
           ? {
-              sendableWebSocketFactory:
-                sharedTransport.webSocketFactory as ConstructorParameters<
-                  typeof Daemon
-                >[0]["sendableWebSocketFactory"],
+              createWebSocket: (u: string) =>
+                new WebSocket(u, {
+                  rejectUnauthorized: false,
+                }) as unknown as NodeWebSocketLike,
             }
           : {}),
-        keystore,
-        store: buyerStore,
-        prover: nodeValidInputProver(VI),
-        depositFn: getDepositFunction({
-          client: createDaemonClient({
-            programId,
-            rpcUrl: RPC,
-            payer: buyerPayer,
-            keystore,
-          }),
-        }),
-        depositor: buyerPayer.publicKey,
-        mergeRunner: createMergeRunner({
-          store: buyerStore,
-          payer: buyerPayer.publicKey,
-          ownerCommitment: await keystore.ownerCommitment(),
-          mergeFn: async (p) => {
-            await merkleProvider.refresh();
-            return rawMerge(p);
-          },
-        }),
-        placer: new WsOrderPlacer({
-          gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
-          token,
-          cancelOnDisconnect: true,
-          // MUST carry the gated factory. Without it WsOrderPlacer builds a
-          // raw `ws` connection, which cannot complete a handshake against the
-          // enclave's self-signed certificate — and, if it could, would be
-          // placing orders over a peer nothing verified. This was the cause of
-          // the live "WebSocket transport error" on this suite: the injected
-          // placer bypassed the transport the rest of the daemon was using.
-          ...(sharedTransport.webSocketFactory
-            ? {
-                webSocketFactory:
-                  sharedTransport.webSocketFactory as ConstructorParameters<
-                    typeof WsOrderPlacer
-                  >[0]["webSocketFactory"],
-              }
-            : {}),
-        }),
-        settlementPollMs: 2000,
-      });
+      },
+    );
+    cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
+    conn = new Connection(RPC, "confirmed");
+    admin = loadKp(process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json");
+    buyerPayer = loadOrCreateKp(".devnet/keypairs/cvm-buyer-payer.json");
+    sellerPayer = loadOrCreateKp(".devnet/keypairs/cvm-seller-payer.json");
+    const funder = loadKp(
+      process.env.FUNDER_KEYPAIR ?? ".devnet/keypairs/funder.json",
+    );
+    await ensureFunded(conn, funder, buyerPayer.publicKey);
+    await ensureFunded(conn, funder, sellerPayer.publicKey);
+    quoteMint = new PublicKey(cfg.quoteMint.pubkey);
+    baseMint = new PublicKey(cfg.baseMint.pubkey);
+    programId = new PublicKey(cfg.vaultProgramId);
+    token = await authToken();
+
+    const seed = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 7) & 0xff;
+    const keystore = new Keystore(
+      deriveAccountIdentity(seed, buyerPayer.publicKey.toBytes()),
+    );
+    buyerStore = new DaemonStore(":memory:");
+
+    const config: DaemonConfig = {
+      gatewayUrl: GATEWAY,
+      // Selected, not hardcoded. Pinning this to "gateway-terminated" made
+      // the suite unrunnable after the cutover unpublished the plaintext
+      // route.
+      transportMode: RATLS
+        ? ("ra-tls" as const)
+        : ("gateway-terminated" as const),
+      ...(RATLS
+        ? {
+            expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+            attestation: {
+              composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+            },
+          }
+        : {}),
+      gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
+      token,
+      rpcUrl: RPC,
+      dbPath: ":memory:",
+      controlPort: 0,
+      keystorePath: "",
+      orderSequencePath: "",
+      // tuned: merge at 2 residuals
+      thresholds: {
+        mergeThreshold: 2,
+      },
+      // Functional lifecycle test — dev-partial attestation (not strict DCAP).
+      attestationStrict: false,
+      attestOnchainCheck: false,
+      programId: cfg.vaultProgramId,
+    };
+    const { client, merkleProvider } = createMergeClient({
+      programId,
+      rpcUrl: RPC,
+      payer: buyerPayer,
+      keystore,
+      artifacts: { k2: MERGE(2), k4: MERGE(4) },
+      leavesFetcher: httpLeavesFetcher({
+        gatewayUrl: GATEWAY,
+        token,
+        fetchImpl: tfetch,
+      }),
     });
-
-    it("drives fill → leaf-resolve → auto-merge → cancel + read-surface", async () => {
-      const events: DaemonEvent[] = [];
-      buyer.subscribe((e) => events.push(e));
-      await buyer.start();
-      expect(buyer.getAttestation(), "attested").toBeTruthy();
-
-      // read-surface sanity (utilizes /transparency, /instruments, /account).
-      expect(await buyer.tee.transparency()).toBeTruthy();
-      expect(await buyer.tee.instruments()).toBeTruthy();
-
-      const anchor = await oracleAnchor();
-      const bidPrice = (anchor * 12n) / 10n; // above clearing
-      const askPrice = (anchor * 8n) / 10n; // below → crosses
-      const SLICE = 1000n;
-      const buyQty = SLICE * 10n; // resting bid covers many asks
-      const collateral = withFee(buyQty * bidPrice);
-      console.log(
-        `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
-      );
-      const buyerAta = await getAssociatedTokenAddress(
-        quoteMint,
-        buyerPayer.publicKey,
-      );
-      await sendAndConfirmTransaction(
-        conn,
-        new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
-            buyerAta,
-            buyerPayer.publicKey,
-            quoteMint,
-          ),
-          createMintToInstruction(
-            quoteMint,
-            buyerAta,
-            admin.publicKey,
-            collateral,
-          ),
-        ),
-        [admin],
-      );
-      const dep = await buyer.deposit({
-        tokenMint: quoteMint.toBytes(),
-        amount: collateral,
-        depositorTokenAccount: buyerAta,
-      });
-      await waitForLeaf(dep.commitment, token);
-      const note = buyer.getNote(dep.commitment)!;
-
-      const before = await leafCount();
-      const { orderId } = await buyer.placeOrder(
-        {
-          symbol: SYMBOL,
-          side: OrderSide.Bid,
-          policy: limitPolicy({
-            priceLimit: bidPrice,
-            expirySlot: await futureExpiry(),
-          }),
-          amount: buyQty,
+    const rawMerge = getMergeFunction({ client });
+    buyer = new Daemon({
+      config,
+      // The shipped wiring: every CVM call and the /v1/stream session run
+      // over the selected transport. Omitting these left the daemon's own
+      // attestation fetch on global fetch, which fails closed against the
+      // enclave's self-signed certificate.
+      fetchImpl: sharedTransport.fetch,
+      ...(sharedTransport.webSocketFactory
+        ? {
+            sendableWebSocketFactory:
+              sharedTransport.webSocketFactory as ConstructorParameters<
+                typeof Daemon
+              >[0]["sendableWebSocketFactory"],
+          }
+        : {}),
+      keystore,
+      store: buyerStore,
+      prover: nodeValidInputProver(VI),
+      depositFn: getDepositFunction({
+        client: createDaemonClient({
+          programId,
+          rpcUrl: RPC,
+          payer: buyerPayer,
+          keystore,
+        }),
+      }),
+      depositor: buyerPayer.publicKey,
+      mergeRunner: createMergeRunner({
+        store: buyerStore,
+        payer: buyerPayer.publicKey,
+        ownerCommitment: await keystore.ownerCommitment(),
+        mergeFn: async (p) => {
+          await merkleProvider.refresh();
+          return rawMerge(p);
         },
-        note,
-      );
-      expect(buyer.getOrder(orderId)?.phase).toBe("open");
+      }),
+      placer: new WsOrderPlacer({
+        gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
+        token,
+        cancelOnDisconnect: true,
+        // MUST carry the gated factory. Without it WsOrderPlacer builds a
+        // raw `ws` connection, which cannot complete a handshake against the
+        // enclave's self-signed certificate — and, if it could, would be
+        // placing orders over a peer nothing verified. This was the cause of
+        // the live "WebSocket transport error" on this suite: the injected
+        // placer bypassed the transport the rest of the daemon was using.
+        ...(sharedTransport.webSocketFactory
+          ? {
+              webSocketFactory:
+                sharedTransport.webSocketFactory as ConstructorParameters<
+                  typeof WsOrderPlacer
+                >[0]["webSocketFactory"],
+            }
+          : {}),
+      }),
+      settlementPollMs: 2000,
+    });
+  });
 
-      // ── crossing ask → partial fill ──
-      await sellerAsk(SLICE, askPrice);
-      // poll for the settle to land on-chain. A deposit adds +1 leaf; a real
-      // settle appends note_c/d + the buyer change + fee notes (≥ +3 beyond the
-      // seller's deposit), so require before+3 to distinguish settle from deposit.
-      let after = before;
-      const deadline = Date.now() + 120_000;
-      while (Date.now() < deadline) {
-        after = await leafCount();
-        if (after >= before + 3) break;
-        await sleep(3000);
-      }
-      expect(after, "settle did not land").toBeGreaterThanOrEqual(before + 3);
-      await sleep(5000); // let the fills WS memo + the daemon dispatch settle
-      // ── diagnostics ──
-      console.log(
-        `  · leaf ${before}→${after} | events=${JSON.stringify(
-          events.map((e) =>
-            e.type === "error" ? `err:${e.context}:${e.message}` : e.type,
-          ),
-        )}`,
-      );
-      console.log(`  · daemon notes=${buyer.listNotes().length}`);
-      const cvmOrder = await tfetch(`${GATEWAY}/orders/${orderId}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      console.log(
-        `  · CVM order ${orderId.slice(0, 8)}: ${cvmOrder.status} ${(await cvmOrder.text()).slice(0, 240)}`,
-      );
-      const o = buyer.getOrder(orderId)!;
-      expect(
-        events.some((e) => e.type === "fill"),
-        "no fill event",
-      ).toBe(true);
-      console.log(`  · fill: pending residuals=${o.pendingChangeNotes}`);
+  it("drives fill → leaf-resolve → auto-merge → cancel + read-surface", async () => {
+    const events: DaemonEvent[] = [];
+    buyer.subscribe((e) => events.push(e));
+    await buyer.start();
+    expect(buyer.getAttestation(), "attested").toBeTruthy();
 
-      // ── cancel the resting order ──
-      await buyer.cancelOrder(orderId);
-      await sleep(4000);
-      expect(buyer.getOrder(orderId)?.phase).toBe("cancelled");
-      console.log("  · order cancelled");
+    // read-surface sanity (utilizes /transparency, /instruments, /account).
+    expect(await buyer.tee.transparency()).toBeTruthy();
+    expect(await buyer.tee.instruments()).toBeTruthy();
 
-      // NOTE: auto-merge needs ≥2 spendable same-mint residuals (terminal orders).
-      // Driving a 2nd order to completion + asserting VALID_MERGE lands is the
-      // next live-iteration step; the settlement-tracker + merge runner + client
-      // are wired here so it's a timing/assertion pass, not new plumbing.
+    const anchor = await oracleAnchor();
+    const bidPrice = (anchor * 12n) / 10n; // above clearing
+    const askPrice = (anchor * 8n) / 10n; // below → crosses
+    const SLICE = 1000n;
+    const buyQty = SLICE * 10n; // resting bid covers many asks
+    const collateral = withFee(buyQty * bidPrice);
+    console.log(
+      `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
+    );
+    const buyerAta = await getAssociatedTokenAddress(
+      quoteMint,
+      buyerPayer.publicKey,
+    );
+    await sendAndConfirmTransaction(
+      conn,
+      new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          admin.publicKey,
+          buyerAta,
+          buyerPayer.publicKey,
+          quoteMint,
+        ),
+        createMintToInstruction(
+          quoteMint,
+          buyerAta,
+          admin.publicKey,
+          collateral,
+        ),
+      ),
+      [admin],
+    );
+    const dep = await buyer.deposit({
+      tokenMint: quoteMint.toBytes(),
+      amount: collateral,
+      depositorTokenAccount: buyerAta,
+    });
+    await waitForLeaf(dep.commitment, token);
+    const note = buyer.getNote(dep.commitment)!;
 
-      buyer.stop();
-    }, 600_000);
-  },
-);
+    const before = await leafCount();
+    const { orderId } = await buyer.placeOrder(
+      {
+        symbol: SYMBOL,
+        side: OrderSide.Bid,
+        policy: limitPolicy({
+          priceLimit: bidPrice,
+          expirySlot: await futureExpiry(),
+        }),
+        amount: buyQty,
+      },
+      note,
+    );
+    expect(buyer.getOrder(orderId)?.phase).toBe("open");
+
+    // ── crossing ask → partial fill ──
+    await sellerAsk(SLICE, askPrice);
+    // poll for the settle to land on-chain. A deposit adds +1 leaf; a real
+    // settle appends note_c/d + the buyer change + fee notes (≥ +3 beyond the
+    // seller's deposit), so require before+3 to distinguish settle from deposit.
+    let after = before;
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      after = await leafCount();
+      if (after >= before + 3) break;
+      await sleep(3000);
+    }
+    expect(after, "settle did not land").toBeGreaterThanOrEqual(before + 3);
+    await sleep(5000); // let the fills WS memo + the daemon dispatch settle
+    // ── diagnostics ──
+    console.log(
+      `  · leaf ${before}→${after} | events=${JSON.stringify(
+        events.map((e) =>
+          e.type === "error" ? `err:${e.context}:${e.message}` : e.type,
+        ),
+      )}`,
+    );
+    console.log(`  · daemon notes=${buyer.listNotes().length}`);
+    const cvmOrder = await tfetch(`${GATEWAY}/orders/${orderId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    console.log(
+      `  · CVM order ${orderId.slice(0, 8)}: ${cvmOrder.status} ${(await cvmOrder.text()).slice(0, 240)}`,
+    );
+    const o = buyer.getOrder(orderId)!;
+    expect(
+      events.some((e) => e.type === "fill"),
+      "no fill event",
+    ).toBe(true);
+    console.log(`  · fill: pending residuals=${o.pendingChangeNotes}`);
+
+    // ── cancel the resting order ──
+    await buyer.cancelOrder(orderId);
+    await sleep(4000);
+    expect(buyer.getOrder(orderId)?.phase).toBe("cancelled");
+    console.log("  · order cancelled");
+
+    // NOTE: auto-merge needs ≥2 spendable same-mint residuals (terminal orders).
+    // Driving a 2nd order to completion + asserting VALID_MERGE lands is the
+    // next live-iteration step; the settlement-tracker + merge runner + client
+    // are wired here so it's a timing/assertion pass, not new plumbing.
+
+    // The leak guard, asserted last so it covers the WHOLE flow: attestation,
+    // deposit, place, the fills channel, leaf resolution, and cancel. Under
+    // ra-tls every one of those must have travelled on the verified transport.
+    expect(
+      transportLeaks,
+      `these CVM calls bypassed the verified transport and used global fetch:\n  ` +
+        transportLeaks.join("\n  "),
+    ).toEqual([]);
+
+    buyer.stop();
+  }, 600_000);
+});
