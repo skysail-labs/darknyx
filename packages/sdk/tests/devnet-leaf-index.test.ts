@@ -58,7 +58,9 @@ const DEPOSIT_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
-const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const VAULT_ID = new PublicKey(
+  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 const READY =
   process.env.RUN_DEVNET_LEAF === "1" &&
