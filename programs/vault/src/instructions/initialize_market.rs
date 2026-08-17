@@ -6,15 +6,15 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::Mint;
 
 #[derive(Accounts)]
-pub struct InitializeMarket<'info> {
-    #[account(mut, address = vault_config.load()?.admin @ VaultError::Unauthorized)]
-    pub admin: Signer<'info>,
+pub struct InitializeMarket {
+    #[account(mut, address = vault_config.admin @ VaultError::Unauthorized)]
+    pub admin: Signer,
 
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
 
-    pub base_mint: Account<'info, Mint>,
-    pub quote_mint: Account<'info, Mint>,
+    pub base_mint: Account<Mint>,
+    pub quote_mint: Account<Mint>,
 
     #[account(
         init,
@@ -22,14 +22,14 @@ pub struct InitializeMarket<'info> {
         space = MarketConfig::SPACE,
         seeds = [
             MarketConfig::SEED,
-            base_mint.key().as_ref(),
-            quote_mint.key().as_ref(),
+            base_mint.address().as_ref(),
+            quote_mint.address().as_ref(),
         ],
         bump,
     )]
-    pub market_config: Account<'info, MarketConfig>,
+    pub market_config: Account<MarketConfig>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 pub(crate) fn validate_market_parameters(
@@ -49,22 +49,22 @@ pub(crate) fn validate_market_parameters(
 }
 
 pub fn initialize_market_handler(
-    ctx: Context<InitializeMarket>,
+    ctx: &mut Context<InitializeMarket>,
     price_scale: u64,
     tick_size: u64,
     min_order_size: u64,
     circuit_breaker_bps: u64,
 ) -> Result<()> {
     require_keys_neq!(
-        ctx.accounts.base_mint.key(),
-        ctx.accounts.quote_mint.key(),
+        ctx.accounts.base_mint.address(),
+        ctx.accounts.quote_mint.address(),
         VaultError::InvalidMarketMints
     );
     validate_market_parameters(price_scale, tick_size, min_order_size, circuit_breaker_bps)?;
 
     let market = &mut ctx.accounts.market_config;
-    market.base_mint = ctx.accounts.base_mint.key();
-    market.quote_mint = ctx.accounts.quote_mint.key();
+    market.base_mint = ctx.accounts.base_mint.address();
+    market.quote_mint = ctx.accounts.quote_mint.address();
     market.price_scale = price_scale;
     market.tick_size = tick_size;
     market.min_order_size = min_order_size;
@@ -75,8 +75,8 @@ pub fn initialize_market_handler(
     market.bump = ctx.bumps.market_config;
 
     emit!(MarketInitialized {
-        admin: ctx.accounts.admin.key(),
-        market: market.key(),
+        admin: ctx.accounts.admin.address(),
+        market: market.address(),
         base_mint: market.base_mint,
         quote_mint: market.quote_mint,
         base_decimals: market.base_decimals,
@@ -91,10 +91,10 @@ pub fn initialize_market_handler(
 
 #[event]
 pub struct MarketInitialized {
-    pub admin: Pubkey,
-    pub market: Pubkey,
-    pub base_mint: Pubkey,
-    pub quote_mint: Pubkey,
+    pub admin: Address,
+    pub market: Address,
+    pub base_mint: Address,
+    pub quote_mint: Address,
     pub base_decimals: u8,
     pub quote_decimals: u8,
     pub price_scale: u64,

@@ -34,16 +34,16 @@ use darkpool_crypto::match_config_digest;
 
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32], proof: Groth16Proof)]
-pub struct VerifyMatchBatch<'info> {
+pub struct VerifyMatchBatch {
     /// Anyone can pay rent / submit the proof. Authorization is the proof itself —
     /// a forged proof simply fails Groth16 verification and no marker is created.
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub payer: Signer,
 
     /// Read-only — supplies the fee rate + protocol owner preimage for the
     /// circuit's public governed-config digest.
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
 
     /// Governed market identity and fixed-point scale. These join the vault
     /// fields in the public config digest, pinning every slot to this market.
@@ -55,7 +55,7 @@ pub struct VerifyMatchBatch<'info> {
         ],
         bump = market_config.bump,
     )]
-    pub market_config: Account<'info, MarketConfig>,
+    pub market_config: Account<MarketConfig>,
 
     /// Marker PDA. `init` ensures the same `merkle_root` can't be re-verified
     /// after the first call (a second `verify_match_batch` for the same batch
@@ -69,13 +69,13 @@ pub struct VerifyMatchBatch<'info> {
         seeds = [BatchValidityMarker::SEED, merkle_root.as_ref()],
         bump,
     )]
-    pub marker: Account<'info, BatchValidityMarker>,
+    pub marker: Account<BatchValidityMarker>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 pub fn verify_match_batch_handler(
-    ctx: Context<VerifyMatchBatch>,
+    ctx: &mut Context<VerifyMatchBatch>,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
 ) -> Result<()> {
@@ -104,7 +104,7 @@ pub fn verify_match_batch_handler(
     // Public inputs, in circuit order: [root, config_digest]. The digest is
     // recomputed from authoritative accounts, never accepted from the prover.
     let (fee_rate_bps, protocol_owner) = {
-        let cfg = ctx.accounts.vault_config.load()?;
+        let cfg = ctx.accounts.vault_config;
         (cfg.fee_rate_bps as u64, cfg.protocol_owner_commitment)
     };
     let market = &ctx.accounts.market_config;
@@ -117,7 +117,7 @@ pub fn verify_match_batch_handler(
         &market.quote_mint.to_bytes(),
         market.price_scale,
     )
-    .map_err(|_| error!(VaultError::InvalidProof))?;
+    .map_err(|_| Error::from(VaultError::InvalidProof))?;
     let public_inputs: [[u8; 32]; 2] = [merkle_root, config_digest];
 
     let vk = make_vk(
@@ -130,7 +130,7 @@ pub fn verify_match_batch_handler(
     verify_groth16_proof::<2>(&vk, &proof, &public_inputs)?;
 
     let marker = &mut ctx.accounts.marker;
-    marker.payer = ctx.accounts.payer.key();
+    marker.payer = ctx.accounts.payer.address();
     marker.expiry_slot = expiry_slot;
     marker.bump = ctx.bumps.marker;
 

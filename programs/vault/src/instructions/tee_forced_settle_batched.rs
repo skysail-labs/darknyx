@@ -66,15 +66,15 @@ fn poseidon_n(inputs: &[&[u8]]) -> Result<[u8; 32]> {
     {
         return solana_poseidon_hashv(Parameters::Bn254X5, Endianness::BigEndian, inputs)
             .map(|h| h.to_bytes())
-            .map_err(|_| error!(VaultError::InvalidBatchBinding));
+            .map_err(|_| Error::from(VaultError::InvalidBatchBinding));
     }
     #[cfg(not(target_os = "solana"))]
     {
         let mut hasher = Poseidon::<Fr>::new_circom(inputs.len())
-            .map_err(|_| error!(VaultError::InvalidBatchBinding))?;
+            .map_err(|_| Error::from(VaultError::InvalidBatchBinding))?;
         hasher
             .hash_bytes_be(inputs)
-            .map_err(|_| error!(VaultError::InvalidBatchBinding))
+            .map_err(|_| Error::from(VaultError::InvalidBatchBinding))
     }
 }
 
@@ -157,7 +157,7 @@ pub fn walk_merkle_path_n16(
     proof: &[[u8; 32]; 4],
 ) -> Result<[u8; 32]> {
     if match_index >= 16 {
-        return err!(VaultError::InvalidBatchBinding);
+        return Err(Error::from(VaultError::InvalidBatchBinding));
     }
     let domain = u64_be32(22); // DOMAIN_BATCH_ROOT
     let mut current = *leaf;
@@ -181,9 +181,9 @@ pub fn walk_merkle_path_n16(
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8, payload: MatchResultPayload, match_index: u8, merkle_proof: [[u8; 32]; 4])]
-pub struct TeeForcedSettleBatched<'info> {
+pub struct TeeForcedSettleBatched {
     #[account(mut)]
-    pub tee_authority: Signer<'info>,
+    pub tee_authority: Signer,
 
     /// Global config — READ-ONLY on the settle hot path (authorized-key check +
     /// protocol_owner_commitment + zero_subtree_roots). Read-only is the whole
@@ -191,9 +191,9 @@ pub struct TeeForcedSettleBatched<'info> {
     /// settles on different shards share no writable account.
     #[account(
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 
     /// The Merkle-tree shard this settle appends its output notes to. Different
     /// matches round-robin across shards → no write-conflict → the leader can
@@ -201,9 +201,9 @@ pub struct TeeForcedSettleBatched<'info> {
     #[account(
         mut,
         seeds = [MerkleTree::SEED, &[tree_id]],
-        bump = merkle_tree.load()?.bump,
+        bump = merkle_tree.bump,
     )]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    pub merkle_tree: Account<MerkleTree>,
 
     // PF-01: both locks store their own bump (`state.rs::NoteLock.bump`,
     // written by `lock_note` and `create_relock_pda`), so read it rather than
@@ -213,18 +213,18 @@ pub struct TeeForcedSettleBatched<'info> {
     #[account(
         mut,
         seeds = [NoteLock::SEED, payload.note_a_use_tag.as_ref()],
-        bump = note_lock_a.load()?.bump,
+        bump = note_lock_a.bump,
         close = tee_authority,
     )]
-    pub note_lock_a: AccountLoader<'info, NoteLock>,
+    pub note_lock_a: Account<NoteLock>,
 
     #[account(
         mut,
         seeds = [NoteLock::SEED, payload.note_b_use_tag.as_ref()],
-        bump = note_lock_b.load()?.bump,
+        bump = note_lock_b.bump,
         close = tee_authority,
     )]
-    pub note_lock_b: AccountLoader<'info, NoteLock>,
+    pub note_lock_b: Account<NoteLock>,
 
     #[account(
         init,
@@ -233,7 +233,7 @@ pub struct TeeForcedSettleBatched<'info> {
         seeds = [ConsumedNoteEntry::SEED, payload.note_a_use_tag.as_ref()],
         bump,
     )]
-    pub consumed_a: AccountLoader<'info, ConsumedNoteEntry>,
+    pub consumed_a: Account<ConsumedNoteEntry>,
 
     #[account(
         init,
@@ -242,7 +242,7 @@ pub struct TeeForcedSettleBatched<'info> {
         seeds = [ConsumedNoteEntry::SEED, payload.note_b_use_tag.as_ref()],
         bump,
     )]
-    pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
+    pub consumed_b: Account<ConsumedNoteEntry>,
 
     // NOTE: the two per-match nullifier-keyed inits were removed here. The
     // TEE-supplied nullifiers were unconstrained (no nullifier signal in
@@ -258,19 +258,19 @@ pub struct TeeForcedSettleBatched<'info> {
     /// CHECK: Seeds validated in handler when re-lock is requested. The account
     /// is writable only when the instruction builder sees a non-zero buyer
     /// relock order id; exact-fill/dummy destinations stay read-only.
-    pub note_lock_e: UncheckedAccount<'info>,
+    pub note_lock_e: UncheckedAccount,
 
     /// CHECK: Seeds validated in handler when re-lock is requested.
     /// `dup`: on an exact-fill settle, note_lock_e/f both derive from the
     /// `[0;32]` sentinel. Both are read-only in that case; the attribute keeps
     /// the duplicate-account intent explicit for Anchor 1.0.
     #[account(dup)]
-    pub note_lock_f: UncheckedAccount<'info>,
+    pub note_lock_f: UncheckedAccount,
 
     /// Instructions sysvar — for Ed25519 precompile inspection.
     /// CHECK: Address validated via `address = sysvar_id()`.
     #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
-    pub instructions_sysvar: UncheckedAccount<'info>,
+    pub instructions_sysvar: UncheckedAccount,
 
     /// v3.5 — single batch-validity marker. PDA seed = the Merkle root
     /// computed in the handler from (leaf, merkle_proof, match_index).
@@ -287,13 +287,13 @@ pub struct TeeForcedSettleBatched<'info> {
     /// CHECK: Validated via the binding check in the handler (PDA
     /// address recomputed from `[SEED, merkle_root]`; existence +
     /// expiry asserted before any state mutation).
-    pub batch_validity_marker: UncheckedAccount<'info>,
+    pub batch_validity_marker: UncheckedAccount,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 pub fn tee_forced_settle_batched_handler(
-    ctx: Context<TeeForcedSettleBatched>,
+    ctx: &mut Context<TeeForcedSettleBatched>,
     _tree_id: u8,
     payload: MatchResultPayload,
     match_index: u8,
@@ -302,13 +302,13 @@ pub fn tee_forced_settle_batched_handler(
     let clock = Clock::get()?;
     // The signer must be one of the authorized TEE keys (the shard
     // fee-payer/authority set); the ed25519 sig is bound to THAT key.
-    let tee_pubkey = ctx.accounts.tee_authority.key();
+    let tee_pubkey = ctx.accounts.tee_authority.address();
     // CU-2: one vault_config load yields everything the handler reads off it —
     // the authorized-key gate, the empty-subtree roots the appends need, and
     // whether a protocol owner is set (the fee-note gate) — instead of loading
     // it again near the appends.
     let (authorized, zsr, protocol_owner_set) = {
-        let cfg = ctx.accounts.vault_config.load()?;
+        let cfg = ctx.accounts.vault_config;
         (
             cfg.is_authorized_tee(&tee_pubkey),
             cfg.zero_subtree_roots,
@@ -343,8 +343,8 @@ pub fn tee_forced_settle_batched_handler(
     // mints for the leaf binding + relock stamping, AND the order_ids for the
     // lock-binding check below), instead of re-loading the locks twice.
     let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id, lock_a_expiry, lock_b_expiry) = {
-        let la = ctx.accounts.note_lock_a.load()?;
-        let lb = ctx.accounts.note_lock_b.load()?;
+        let la = ctx.accounts.note_lock_a;
+        let lb = ctx.accounts.note_lock_b;
         (
             la.token_mint,
             lb.token_mint,
@@ -374,12 +374,12 @@ pub fn tee_forced_settle_batched_handler(
         let leaf = compute_match_leaf(&payload)?;
         let computed_root = walk_merkle_path_n16(&leaf, match_index, &merkle_proof)?;
 
-        let (expected_marker_pda, _) = Pubkey::find_program_address(
+        let (expected_marker_pda, _) = Address::find_program_address(
             &[BatchValidityMarker::SEED, computed_root.as_ref()],
             &crate::ID,
         );
         require_keys_eq!(
-            ctx.accounts.batch_validity_marker.key(),
+            ctx.accounts.batch_validity_marker.address(),
             expected_marker_pda,
             VaultError::InvalidBatchBinding
         );
@@ -411,7 +411,7 @@ pub fn tee_forced_settle_batched_handler(
         let expiry_slot = u64::from_le_bytes(
             marker_data[8 + 32..8 + 32 + 8]
                 .try_into()
-                .map_err(|_| error!(VaultError::InvalidBatchBinding))?,
+                .map_err(|_| Error::from(VaultError::InvalidBatchBinding))?,
         );
         drop(marker_data);
         require!(
@@ -464,14 +464,14 @@ pub fn tee_forced_settle_batched_handler(
     }
 
     // Mark consumed notes.
-    let ca = &mut ctx.accounts.consumed_a.load_init()?;
+    let ca = &mut ctx.accounts.consumed_a;
     ca.note_use_tag = payload.note_a_use_tag;
     ca.match_id = payload.match_id;
     ca.consumed_slot = clock.slot;
     ca.bump = ctx.bumps.consumed_a;
     ca._padding = [0u8; 7];
 
-    let cb = &mut ctx.accounts.consumed_b.load_init()?;
+    let cb = &mut ctx.accounts.consumed_b;
     cb.note_use_tag = payload.note_b_use_tag;
     cb.match_id = payload.match_id;
     cb.consumed_slot = clock.slot;
@@ -510,7 +510,7 @@ pub fn tee_forced_settle_batched_handler(
     // overwrote. note_c + note_d always mint; the change + fee notes mint only
     // when non-zero. Each leaf lands at a consecutive index, so its leaf index
     // is `start + its slot in the run`.
-    let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
+    let tree = &mut ctx.accounts.merkle_tree;
     let start = tree.leaf_count;
     let mut leaves = [[0u8; 32]; 6];
     let mut n = 0usize;

@@ -16,28 +16,28 @@ use anchor_lang::prelude::*;
 pub const MAX_FEE_RATE_BPS: u16 = 10_000;
 
 #[derive(Accounts)]
-pub struct SetProtocolConfig<'info> {
+pub struct SetProtocolConfig {
     /// Admin signer — must equal `vault_config.admin`.
-    pub admin: Signer<'info>,
+    pub admin: Signer,
 
     #[account(
         mut,
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 }
 
 pub fn set_protocol_config_handler(
-    ctx: Context<SetProtocolConfig>,
+    ctx: &mut Context<SetProtocolConfig>,
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
 ) -> Result<()> {
     require!(fee_rate_bps <= MAX_FEE_RATE_BPS, VaultError::InvalidFeeRate);
 
-    let mut cfg = ctx.accounts.vault_config.load_mut()?;
+    let mut cfg = ctx.accounts.vault_config;
     require!(
-        ctx.accounts.admin.key() == cfg.admin,
+        ctx.accounts.admin.address() == cfg.admin,
         VaultError::Unauthorized
     );
 
@@ -47,7 +47,7 @@ pub fn set_protocol_config_handler(
     cfg.fee_rate_bps = fee_rate_bps;
 
     emit!(ProtocolConfigUpdated {
-        admin: ctx.accounts.admin.key(),
+        admin: ctx.accounts.admin.address(),
         old_protocol_owner_commitment: old_commitment,
         new_protocol_owner_commitment: protocol_owner_commitment,
         old_fee_rate_bps: old_rate,
@@ -58,7 +58,7 @@ pub fn set_protocol_config_handler(
 
 #[event]
 pub struct ProtocolConfigUpdated {
-    pub admin: Pubkey,
+    pub admin: Address,
     pub old_protocol_owner_commitment: [u8; 32],
     pub new_protocol_owner_commitment: [u8; 32],
     pub old_fee_rate_bps: u16,

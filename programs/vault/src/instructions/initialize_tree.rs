@@ -6,12 +6,12 @@ use core::mem::size_of;
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8)]
-pub struct InitializeTree<'info> {
-    #[account(mut, address = vault_config.load()?.admin @ VaultError::Unauthorized)]
-    pub admin: Signer<'info>,
+pub struct InitializeTree {
+    #[account(mut, address = vault_config.admin @ VaultError::Unauthorized)]
+    pub admin: Signer,
 
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
 
     #[account(
         init,
@@ -20,20 +20,20 @@ pub struct InitializeTree<'info> {
         seeds = [MerkleTree::SEED, &[tree_id]],
         bump,
     )]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    pub merkle_tree: Account<MerkleTree>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
 }
 
 /// Create one Merkle-tree shard account (`tree_id < num_trees`). Empty root is
 /// derived from the global `zero_subtree_roots` in `VaultConfig`. Admin-gated.
-pub fn initialize_tree_handler(ctx: Context<InitializeTree>, tree_id: u8) -> Result<()> {
-    let cfg = ctx.accounts.vault_config.load()?;
+pub fn initialize_tree_handler(ctx: &mut Context<InitializeTree>, tree_id: u8) -> Result<()> {
+    let cfg = ctx.accounts.vault_config;
     require!(tree_id < cfg.num_trees, VaultError::InvalidProof);
     let empty = empty_root(&cfg.zero_subtree_roots)?;
     drop(cfg);
 
-    let tree = &mut ctx.accounts.merkle_tree.load_init()?;
+    let tree = &mut ctx.accounts.merkle_tree;
     tree.leaf_count = 0;
     tree.current_root = empty;
     tree.roots = [[0u8; 32]; ROOT_HISTORY_SIZE];
