@@ -401,9 +401,27 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       sawPendingSettlement,
       "matched order never exposed the finality-gated pending state",
     ).toBe(true);
-    const finalizedOrder = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+    // POLL for the sweep; do not sample it once.
+    //
+    // The loop above waits on `leaf_count`, which tells us the settle
+    // transaction landed on-chain. Removing the filled order from the live
+    // book is a SEPARATE asynchronous step in the CVM, so a single fetch taken
+    // the instant the leaves appear races it — this assertion passed twice and
+    // failed once in CI on exactly that gap, reporting 200 instead of 404.
+    //
+    // Bounded, so a book that genuinely never sweeps still fails rather than
+    // hanging, and the final assertion still asserts 404 rather than "any
+    // eventual value".
+    const sweepDeadline = Date.now() + 60_000;
+    let finalizedOrder = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
       headers: { authorization: `Bearer ${token}` },
     });
+    while (finalizedOrder.status !== 404 && Date.now() < sweepDeadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      finalizedOrder = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
     expect(
       finalizedOrder.status,
       "confirmed exact-fill order should leave the live book",
