@@ -179,6 +179,24 @@ impl Harness {
         }
 
         let mut svm = LiteSVM::new();
+        // Pin the clock to a known LOW slot.
+        //
+        // litesvm 0.13 started near slot 0, and the fixtures across this suite
+        // encode that: absolute expiries like `1_000_000` (note locks) and
+        // `4_000` (relocks, which must land inside MAX_LOCK_TTL_SLOTS = 4_500)
+        // are only "in the future" if the chain starts low. litesvm 0.15 starts
+        // far higher, which silently turned those into PAST slots — locks read
+        // as expired and relock expiries were rejected. The failures pointed at
+        // the vault (InvalidExpirySlot, NoteLockExpired) rather than at the
+        // harness, which is what made it slow to spot.
+        //
+        // Anchoring the clock here keeps every fixture honest in one place
+        // instead of scattering `now + delta` arithmetic across ~12 call sites.
+        {
+            let mut clock: solana_clock::Clock = svm.get_sysvar();
+            clock.slot = 1;
+            svm.set_sysvar(&clock);
+        }
         let vault_id: Pubkey = vault_program_id();
         svm.add_program_from_file(vault_id, &vault_so).unwrap();
 
@@ -1090,12 +1108,12 @@ pub fn seed_marker_and_build_settle_batched_ix(
 }
 
 /// Build a `close_batch_validity_marker` ix.
-/// Any authority may sweep at or after expiry; rent always flows to payer.
+/// v2: `authority` is both signer and refund target, and must equal
+/// `marker.payer`. The separate payer slot is gone.
 pub fn build_close_batch_validity_marker_ix(
     h: &Harness,
     merkle_root: &[u8; 32],
     authority: &Pubkey,
-    payer: &Pubkey,
 ) -> Instruction {
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
     let mut data = anchor_disc("close_batch_validity_marker").to_vec();
@@ -1104,8 +1122,9 @@ pub fn build_close_batch_validity_marker_ix(
     Instruction {
         program_id: h.vault_id,
         accounts: vec![
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new(*payer, false),
+            // v2: authority IS the refund target; the separate payer slot is
+            // gone (it aliased and tripped the duplicate-mutable check).
+            AccountMeta::new(*authority, true),
             AccountMeta::new(marker_pda, false),
         ],
         data,
