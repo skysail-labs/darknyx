@@ -92,7 +92,7 @@ fn withdraw_is_rejected_while_the_lock_is_live() {
     // test cannot keep passing for the wrong reason once the guard is gone.
     let log = format!("{:?}", err.meta.logs);
     assert!(
-        log.contains("NoteAlreadyLocked"),
+        logs_have_error_code(&log, E_NOTE_ALREADY_LOCKED),
         "expected the live-lock guard to reject, got: {log}"
     );
     assert!(
@@ -163,7 +163,7 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
         .expect_err("release_lock before expiry must fail");
     let early_log = format!("{:?}", early_err.meta.logs);
     assert!(
-        early_log.contains("LockNotExpired"),
+        logs_have_error_code(&early_log, E_LOCK_NOT_EXPIRED),
         "expected LockNotExpired, got: {early_log}"
     );
 
