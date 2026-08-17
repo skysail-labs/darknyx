@@ -25,7 +25,9 @@ import { PublicKey } from "@solana/web3.js";
 import { onchainRootVerifier } from "../src/zk/valid-input-prover.js";
 import { MERKLE_TREE_ACCOUNT_LEN } from "../src/zk/merkle-root-ring.js";
 
-const PROGRAM = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const PROGRAM = new PublicKey(
+  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 const DISCRIMINATOR = Uint8Array.from([98, 51, 51, 226, 162, 20, 73, 212]);
 
 const ROOT = new Uint8Array(32).fill(3);
