@@ -123,7 +123,7 @@ pub fn withdraw_handler(
     // — so one failed settle made a note permanently unwithdrawable.
     require!(
         !crate::state::note_lock_is_live(
-            &ctx.accounts.note_lock_slot.account(),
+            ctx.accounts.note_lock_slot.account(),
             Clock::get()?.slot
         )?,
         VaultError::NoteAlreadyLocked
