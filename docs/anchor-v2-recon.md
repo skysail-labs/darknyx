@@ -1,6 +1,7 @@
 # Anchor v2-rc.1 migration — Step 0 recon inventory
 
-Branch `experiment/anchor-v2-rc1`, worktree `../nyx-anchor-v2`.
+Branch `experiment/anchor-v2-rc1`, developed in a separate git worktree so the
+port never disturbs the main checkout.
 Written before any edit, per the migration guide §12 Step 0.
 
 Baseline: **anchor-lang / anchor-spl 1.1.2**, solana-program 3, one program crate.
