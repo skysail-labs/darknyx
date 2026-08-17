@@ -237,6 +237,14 @@ jobs:
       - name: cvm-* suites reach the CVM through the verified transport
         run: bash scripts/check-cvm-suites-use-transport.sh
 
+      # The nightly builds the encrypted `-e` env in three places. When two of
+      # them diverged, the redeployed CVM fell back to the compose's public
+      # test credentials AND the differing env-key set moved compose_hash,
+      # failing every tree-consuming test with `compose_mismatch`. One diff
+      # would have shown it; two CI runs found it instead.
+      - name: CVM env builders stay in sync
+        run: bash scripts/check-cvm-workflow-env-parity.sh
+
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)

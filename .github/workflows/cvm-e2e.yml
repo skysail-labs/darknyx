@@ -544,6 +544,88 @@ jobs:
           done
           [ -z "$FAILED" ] || { echo "::error::CVM tests failed:$FAILED"; exit 1; }
 
+      # ── LEGACY-PATH COVERAGE ────────────────────────────────────────────
+      # The gateway-terminated transport is kept deliberately as the REVERT
+      # path (transport-integrity-plan.md §5.5), not as dead code. §5.5.4
+      # flags the cost of that: after the cutover nothing exercised it, so
+      # "it works" rested on the code paths existing rather than on a green
+      # run — and an unexercised revert path degrades into a hope.
+      # `cvm-daemon-lifecycle` was structurally unrunnable for weeks in
+      # exactly that way while CI stayed green.
+      #
+      # So the revert gets exercised once per nightly. That is what makes the
+      # keep-decision durable rather than nominal.
+      #
+      # Runs LAST: it deploys a different compose, and every step above must
+      # see the RA-TLS one.
+      - name: Legacy (gateway-terminated) path still works
+        run: |
+          set -euo pipefail
+          # DERIVED from the committed compose, never a second checked-in
+          # file. Two env builders drifting is what produced a
+          # compose_mismatch earlier in this workflow; a second compose would
+          # drift the same way. A mechanical transform cannot.
+          sed -e 's/DARKNYX_TEE_TRANSPORT_MODE:-ra-tls/DARKNYX_TEE_TRANSPORT_MODE:-gateway-terminated/' \
+              -e 's|^      - "8443:8443"|      - "8080:8080"\n      - "8443:8443"|' \
+              deploy/docker-compose.yaml > /tmp/compose-legacy.yaml
+          # Assert the transform actually fired. A silent no-op would redeploy
+          # RA-TLS and let this step "pass" while testing nothing — the exact
+          # failure mode this job keeps producing.
+          grep -q 'DARKNYX_TEE_TRANSPORT_MODE:-gateway-terminated' /tmp/compose-legacy.yaml \
+            || { echo "::error::legacy transform did not set the transport mode"; exit 1; }
+          grep -q '"8080:8080"' /tmp/compose-legacy.yaml \
+            || { echo "::error::legacy transform did not publish :8080"; exit 1; }
+
+          umask 077
+          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          {
+            echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
+            echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
+            echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
+            echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
+            echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
+            echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+            echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
+          } > /tmp/darknyx-legacy.env
+
+          for d in $(seq 1 6); do
+            OUT=$(phala deploy --cvm-id "$CVM" -c /tmp/compose-legacy.yaml -e /tmp/darknyx-legacy.env --wait 2>&1)
+            echo "$OUT" | grep -q "already in progress" || break
+            echo "deploy busy — retry $d in 20s"; sleep 20
+          done
+          shred -u /tmp/darknyx-legacy.env 2>/dev/null || rm -f /tmp/darknyx-legacy.env
+
+          LEGACY_GW="${GATEWAY/-8443s./-8080.}"
+          READY=0
+          for i in $(seq 1 90); do
+            # NO -k: on this path the GATEWAY terminates TLS with its own
+            # publicly-trusted certificate, so ordinary validation must pass.
+            # Needing -k here would mean we had not actually switched.
+            curl -fsS "$LEGACY_GW/info" -o /tmp/info-legacy.json 2>/dev/null && { READY=1; break; }
+            sleep 10
+          done
+          [ "$READY" = 1 ] || { echo "::error::legacy route never came up at $LEGACY_GW"; exit 1; }
+
+          # The INVERSE assertion. Without it this step would pass on a
+          # deployment that never left ra-tls at all.
+          RATLS_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$GATEWAY/info" || true)
+          [ "$RATLS_CODE" != "200" ] \
+            || { echo "::error::RA-TLS route still serving under gateway-terminated ($RATLS_CODE)"; exit 1; }
+          echo "legacy up at :8080; ra-tls route now $RATLS_CODE"
+
+          # A real suite over the legacy transport. DARKNYX_CVM_TRANSPORT is
+          # deliberately UNSET so the harness selects plain fetch — the code
+          # path a revert would actually take.
+          ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$LEGACY_GW" \
+              SOLANA_RPC_URL="$HELIUS_RPC" \
+              env -u DARKNYX_CVM_TRANSPORT -u DARKNYX_EXPECT_COMPOSE_HASH -u DARKNYX_EXPECT_SIGNER_SET \
+              ../../node_modules/.bin/vitest run --project cvm tests/cvm-api-surface.test.ts )
       # ═══════════════════════════════════════════════════════════════════════
       # TEARDOWN — ALWAYS. Stops CVM billing whether the tests passed, failed,
       # or errored. `if: always()` + the queue-don't-cancel concurrency policy
