@@ -38,8 +38,24 @@ fn parse_id(b58: &str) -> Address {
     b58.parse().expect("hardcoded base58 program id is valid")
 }
 
+/// Same `DARKNYX_TEE_VAULT_PROGRAM_ID` override the enclave honours, so the
+/// loadgen can be pointed at the same vault as the CVM it is driving. Empty
+/// falls back to the default; malformed fails fast.
 pub fn vault_program_id() -> Address {
-    parse_id(VAULT_PROGRAM_ID_BASE58)
+    static RESOLVED: std::sync::OnceLock<Address> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        let raw = std::env::var("DARKNYX_TEE_VAULT_PROGRAM_ID").unwrap_or_default();
+        if raw.trim().is_empty() {
+            parse_id(VAULT_PROGRAM_ID_BASE58)
+        } else {
+            raw.trim().parse().unwrap_or_else(|_| {
+                panic!(
+                    "DARKNYX_TEE_VAULT_PROGRAM_ID is not valid base58: {:?}",
+                    raw.trim()
+                )
+            })
+        }
+    })
 }
 pub fn token_program_id() -> Address {
     parse_id(TOKEN_PROGRAM_ID_BASE58)

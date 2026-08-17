@@ -424,7 +424,13 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
     // expired and merge is (correctly) allowed, making this test pass its own
     // setup while silently not testing the guard.
     let now_slot = locked.svm.get_sysvar::<solana_clock::Clock>().slot;
-    seed_note_lock(&mut locked, &tags[0], &[0x44u8; 16], now_slot + 1_000_000, 0);
+    seed_note_lock(
+        &mut locked,
+        &tags[0],
+        &[0x44u8; 16],
+        now_slot + 1_000_000,
+        0,
+    );
     let locked_ix = build_merge_ix(&locked, &proof, &tags, output, root);
     let locked_tx = Transaction::new(
         &[&locked.trader],

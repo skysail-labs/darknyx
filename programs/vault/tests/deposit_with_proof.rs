@@ -180,7 +180,9 @@ fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
             .unwrap_or_else(|| fr_to_be_bytes(&args.opening.recovery_nonce)),
     );
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
-    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap());
+    data.extend_from_slice(
+        &anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap(),
+    );
 
     let deposit = Instruction {
         program_id: args.h.vault_id,
