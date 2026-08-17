@@ -5,7 +5,6 @@ mod settle_harness;
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
-use borsh::BorshSerialize;
 use darkpool_crypto::field::{fr_from_uniform_bytes, fr_to_be_bytes, pubkey_to_fr_pair};
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_crypto::poseidon::poseidon_hash;
