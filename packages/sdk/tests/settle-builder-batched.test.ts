@@ -468,33 +468,31 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     ).toThrow(/merkleRoot.*32 bytes/);
   });
 
-  it("[close_marker_accounts_layout] account ordering: authority, payer, marker", () => {
+  it("[close_marker_accounts_layout] account ordering: authority, marker", () => {
     const tee = Keypair.generate();
     const merkleRoot = filled(32, 0x55);
     const ix = buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
       authority: tee.publicKey,
-      payer: tee.publicKey,
       merkleRoot,
     });
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
-    expect(ix.keys.length).toBe(3);
+    // v2 collapsed the separate `payer` slot into `authority`: passing one
+    // address in both (which every caller did) trips the duplicate-mutable
+    // check on chain. Two accounts now, not three.
+    expect(ix.keys.length).toBe(2);
 
-    // 0: authority — signer, non-writable (no rent flows here).
+    // 0: authority — signer AND refund recipient, so writable. Must equal
+    //    marker.payer; an on-chain constraint enforces it.
     expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
-    expect(ix.keys[0].isWritable).toBe(false);
+    expect(ix.keys[0].isWritable).toBe(true);
 
-    // 1: payer — refund recipient (mut). Marker's `has_one = payer`
-    // enforces `payer == marker.payer`.
-    expect(ix.keys[1].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
-    expect(ix.keys[1].isSigner).toBe(false);
-    expect(ix.keys[1].isWritable).toBe(true);
 
     // 2: marker PDA, derived from [b"batch_validity", merkleRoot].
     const [expectedMarker] = batchValidityMarkerPda(PROGRAM_ID, merkleRoot);
-    expect(ix.keys[2].pubkey.toBase58()).toBe(expectedMarker.toBase58());
-    expect(ix.keys[2].isWritable).toBe(true);
+    expect(ix.keys[1].pubkey.toBase58()).toBe(expectedMarker.toBase58());
+    expect(ix.keys[1].isWritable).toBe(true);
   });
 
   it("[close_marker_discriminator_and_data_size] disc + 32-byte merkle_root arg", () => {
@@ -503,7 +501,6 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix = buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
       authority: tee.publicKey,
-      payer: tee.publicKey,
       merkleRoot,
     });
     const expectedDisc = new Uint8Array(
@@ -538,25 +535,32 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     ).toThrow(/merkleRoot.*32 bytes/);
   });
 
-  it("[close_marker_authority_distinct_from_payer] expiry-GC path: third-party authority sweeps to payer", () => {
-    // When the matcher's marker has expired without being closed, any
-    // signer may sweep the rent — but the refund still flows to
-    // `marker.payer` (enforced via Anchor `has_one`). The builder
-    // simply lays out the accounts; the on-chain handler checks
-    // `clock.slot >= marker.expiry_slot` for every authority.
-    const payer = Keypair.generate();
+  it("[close_marker_authority_is_the_only_slot] a third-party sweeper can no longer be expressed", () => {
+    // BEHAVIOUR CHANGE, pinned deliberately. v1 took a separate `payer` refund
+    // slot bound by `has_one = payer`, so any signer could sweep an expired
+    // marker while the rent still reached the recorded payer. v2 rejects that
+    // shape: the sweeper always passes authority == payer, and one address in
+    // two slots (one `mut`) trips the duplicate-mutable check before the
+    // handler runs.
+    //
+    // The builder now has ONE slot, so "sweeper distinct from payer" is not
+    // representable at all — the on-chain constraint pins authority to
+    // marker.payer. This test exists so the property is not quietly restored.
     const sweeper = Keypair.generate();
     const merkleRoot = filled(32, 0x99);
     const ix = buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
       authority: sweeper.publicKey,
-      payer: payer.publicKey,
       merkleRoot,
     });
+    expect(ix.keys.length).toBe(2);
     expect(ix.keys[0].pubkey.toBase58()).toBe(sweeper.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
-    expect(ix.keys[1].pubkey.toBase58()).toBe(payer.publicKey.toBase58());
-    expect(ix.keys[1].isWritable).toBe(true);
+    // Writable, because the marker now closes into this account.
+    expect(ix.keys[0].isWritable).toBe(true);
+    // Slot 1 is the marker PDA, not a payer.
+    const [expected] = batchValidityMarkerPda(PROGRAM_ID, merkleRoot);
+    expect(ix.keys[1].pubkey.toBase58()).toBe(expected.toBase58());
   });
 
   it("[settle_batched_payload_relock_passthrough] relock fields survive the Borsh serialisation", () => {

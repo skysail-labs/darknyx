@@ -181,7 +181,7 @@ async fn sweep(
     for chunk in expired.chunks(MARKER_SWEEP_MAX_PER_TX) {
         let ixs: Vec<_> = chunk
             .iter()
-            .map(|r| build_close_marker_ix(&primary, &primary, r))
+            .map(|r| build_close_marker_ix(&primary, r))
             .collect();
         match submit_ixs(rpc, keypair, &ixs).await {
             Ok(sig) => {
@@ -272,7 +272,7 @@ mod tests {
         let primary = batch_validity_marker_pda(&[0u8; 32]).0; // any address
         let total: usize = (0..MARKER_SWEEP_MAX_PER_TX)
             .map(|i| {
-                let ix = build_close_marker_ix(&primary, &primary, &[i as u8; 32]);
+                let ix = build_close_marker_ix(&primary, &[i as u8; 32]);
                 // accounts (32 B each) + ix data (8 disc + 32 root) — a generous
                 // per-ix upper bound ignoring shared-account dedup.
                 ix.accounts.len() * 32 + ix.data.len()
