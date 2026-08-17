@@ -46,6 +46,12 @@ darknyx-seed-backup.json
 circuits/build/**/*.r1cs
 circuits/build/**/*.sym
 circuits/build/**/*_js/
+# ALSO match the non-directory form. The rule above ends in `/`, so it matches
+# directories only — a SYMLINK named `circuit_js` slips straight past it. That
+# is not hypothetical: nine absolute symlinks into a developer's home directory
+# were committed that way during the Anchor v2 port and broke CI, because the
+# circuits job compiles into a path that was a dangling link on the runner.
+circuits/build/**/*_js
 circuits/build/**/circuit_cpp/
 circuits/build/**/*.zkey
 !circuits/build/**/circuit_final.zkey
