@@ -16,11 +16,6 @@
 use crate::errors::VaultError;
 use crate::state::*;
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 
 #[derive(Accounts)]
 pub struct SetTeeAddress {
@@ -68,7 +63,7 @@ pub fn set_tee_pubkey_handler(ctx: &mut Context<SetTeeAddress>, keys: Vec<Addres
     cfg.num_tee_keys = keys.len() as u8;
 
     emit!(TeeAddressRotated {
-        admin: ctx.accounts.admin.address(),
+        admin: *ctx.accounts.admin.address(),
         old_tee_pubkey: old,
         new_tee_pubkey: keys[0],
         num_keys: keys.len() as u8,

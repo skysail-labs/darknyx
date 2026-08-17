@@ -25,11 +25,6 @@
 use crate::errors::VaultError;
 use crate::state::*;
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 
 /// Phase-5 MatchResultPayload — carries the commitments + relock plumbing
 /// the on-chain settle handler needs.
@@ -230,8 +225,8 @@ pub(crate) fn create_relock_pda<'info>(
         // settle reads back.
         lock.token_mint = *token_mint;
         lock.order_id = *order_id;
-        lock.expiry_slot = expiry_slot;
-        lock.locked_by = payer.address();
+        lock.expiry_slot = (expiry_slot).into();
+        lock.locked_by = *payer.address();
         lock.bump = bump;
         lock._padding = [0u8; 7];
     }

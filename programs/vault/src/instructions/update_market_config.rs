@@ -4,11 +4,6 @@ use crate::errors::VaultError;
 use crate::instructions::initialize_market::validate_market_parameters;
 use crate::state::{MarketConfig, VaultConfig};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 
 #[derive(Accounts)]
 pub struct UpdateMarketConfig {
@@ -42,14 +37,14 @@ pub fn update_market_config_handler(
 
     let market = &mut ctx.accounts.market_config;
     market.enabled = enabled;
-    market.price_scale = price_scale;
-    market.tick_size = tick_size;
-    market.min_order_size = min_order_size;
-    market.circuit_breaker_bps = circuit_breaker_bps;
+    market.price_scale = (price_scale).into();
+    market.tick_size = (tick_size).into();
+    market.min_order_size = (min_order_size).into();
+    market.circuit_breaker_bps = (circuit_breaker_bps).into();
 
     emit!(MarketConfigUpdated {
-        admin: ctx.accounts.admin.address(),
-        market: market.address(),
+        admin: *ctx.accounts.admin.address(),
+        market: *market.address(),
         enabled,
         price_scale,
         tick_size,

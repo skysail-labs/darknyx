@@ -3,11 +3,6 @@ use crate::merkle::append_leaf;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_deposit::*, Groth16Proof};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 use std::mem::size_of;
 
@@ -153,7 +148,7 @@ pub fn deposit_handler(
     // just freshly created the account (mint == Address::default()), so set
     // the descriptor fields idempotently before incrementing.
     let om = &mut ctx.accounts.outstanding_mint;
-    om.mint = ctx.accounts.token_mint.address();
+    om.mint = *ctx.accounts.token_mint.address();
     om.bump = ctx.bumps.outstanding_mint;
     // Arithmetic goes through the native type so the v1 CHECKED overflow
     // semantics are preserved exactly (guide §5.2 warns against silently
@@ -181,7 +176,7 @@ pub fn deposit_handler(
         tree_id: _tree_id,
         leaf_index,
         commitment: note_commitment,
-        token_mint: ctx.accounts.token_mint.address(),
+        token_mint: *ctx.accounts.token_mint.address(),
         amount,
         new_root,
     });

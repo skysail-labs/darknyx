@@ -1,11 +1,6 @@
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_wallet_create::*, Groth16Proof};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use core::mem::size_of;
 
 #[derive(Accounts)]
@@ -50,15 +45,15 @@ pub fn create_wallet_handler(
 
     let w = &mut ctx.accounts.wallet_entry;
     w.commitment = commitment;
-    w.owner = ctx.accounts.owner.address();
-    w.created_slot = Clock::get()?.slot;
+    w.owner = *ctx.accounts.owner.address();
+    w.created_slot = (Clock::get()?.slot).into();
     w.bump = ctx.bumps.wallet_entry;
     w._padding = [0u8; 7];
 
     emit!(WalletCreated {
         commitment,
-        owner: ctx.accounts.owner.address(),
-        slot: w.created_slot,
+        owner: *ctx.accounts.owner.address(),
+        slot: w.created_slot.get(),
     });
 
     Ok(())

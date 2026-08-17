@@ -36,6 +36,11 @@ authors = ["Darknyx Darkpool"]
 # the monolithic `solana-program`. See docs/anchor-v2-recon.md.
 anchor-lang = "2.0.0-rc.1"
 anchor-spl  = "2.0.0-rc.1"
+# DIRECT dep required: anchor's re-exported derives emit ABSOLUTE `::wincode`
+# paths, which resolve only from the extern prelude. Must match the version
+# anchor and solana-address 2.6.1 both use (^0.5) or Address implements the
+# Schema traits from a different wincode than the derive requires.
+wincode = "0.5"
 
 # Solana — monolithic facade (3.x re-exports the modular crates). Only
 # darkpool-matcher's change-note parity test still pulls this directly for
