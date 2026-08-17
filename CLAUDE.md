@@ -661,9 +661,9 @@ export DARKNYX_TEE_API_KEY=... DARKNYX_TEE_API_SECRET=... DARKNYX_TEE_PASSPHRASE
 ( cd packages/sdk && RUN_CVM_ATTEST=1 DARKNYX_CVM_TRANSPORT=ra-tls \
     DARKNYX_TEE_GATEWAY="$GW" ../../node_modules/.bin/vitest run --project cvm \
     tests/cvm-attestation-e2e.test.ts )
-( cd packages/daemon && RUN_CVM_DAEMON=1 DARKNYX_CVM_TRANSPORT=ra-tls \
-    DARKNYX_TEE_GATEWAY="$GW" ../../node_modules/.bin/vitest run \
-    tests/cvm-daemon-smoke.test.ts )
+( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 DARKNYX_CVM_TRANSPORT=ra-tls \
+    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+    ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
 ```
 
 > **The `cvm-*` suites do NOT run in `pr-checks`** — they self-skip without
