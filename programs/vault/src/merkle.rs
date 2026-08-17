@@ -169,7 +169,7 @@ pub fn append_leaves(
     let mut cur: [(u64, [u8; 32]); MAX_BATCH_APPEND] = [(0, [0u8; 32]); MAX_BATCH_APPEND];
     let mut nxt: [(u64, [u8; 32]); MAX_BATCH_APPEND] = [(0, [0u8; 32]); MAX_BATCH_APPEND];
     for j in 0..k {
-        cur[j] = (start + j as u64, leaves[j]);
+        cur[j] = (start.get() + j as u64, leaves[j]);
     }
     let mut cur_len = k;
 

@@ -3,11 +3,6 @@
 use crate::errors::VaultError;
 use crate::state::{MarketConfig, VaultConfig, MAX_CIRCUIT_BREAKER_BPS};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use anchor_spl::token::Mint;
 
 #[derive(Accounts)]
@@ -68,20 +63,20 @@ pub fn initialize_market_handler(
     validate_market_parameters(price_scale, tick_size, min_order_size, circuit_breaker_bps)?;
 
     let market = &mut ctx.accounts.market_config;
-    market.base_mint = ctx.accounts.base_mint.address();
-    market.quote_mint = ctx.accounts.quote_mint.address();
-    market.price_scale = price_scale;
-    market.tick_size = tick_size;
-    market.min_order_size = min_order_size;
-    market.circuit_breaker_bps = circuit_breaker_bps;
+    market.base_mint = *ctx.accounts.base_mint.address();
+    market.quote_mint = *ctx.accounts.quote_mint.address();
+    market.price_scale = (price_scale).into();
+    market.tick_size = (tick_size).into();
+    market.min_order_size = (min_order_size).into();
+    market.circuit_breaker_bps = (circuit_breaker_bps).into();
     market.base_decimals = ctx.accounts.base_mint.decimals;
     market.quote_decimals = ctx.accounts.quote_mint.decimals;
     market.enabled = true;
     market.bump = ctx.bumps.market_config;
 
     emit!(MarketInitialized {
-        admin: ctx.accounts.admin.address(),
-        market: market.address(),
+        admin: *ctx.accounts.admin.address(),
+        market: *market.address(),
         base_mint: market.base_mint,
         quote_mint: market.quote_mint,
         base_decimals: market.base_decimals,

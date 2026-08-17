@@ -30,11 +30,6 @@ use crate::state::{
 };
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_match_batch_n16::*, Groth16Proof};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use darkpool_crypto::match_config_digest;
 
 #[derive(Accounts)]
@@ -120,7 +115,7 @@ pub fn verify_match_batch_handler(
         &protocol_owner,
         &market.base_mint.to_bytes(),
         &market.quote_mint.to_bytes(),
-        market.price_scale,
+        market.price_scale.get(),
     )
     .map_err(|_| Error::from(VaultError::InvalidProof))?;
     let public_inputs: [[u8; 32]; 2] = [merkle_root, config_digest];
@@ -135,8 +130,8 @@ pub fn verify_match_batch_handler(
     verify_groth16_proof::<2>(&vk, &proof, &public_inputs)?;
 
     let marker = &mut ctx.accounts.marker;
-    marker.payer = ctx.accounts.payer.address();
-    marker.expiry_slot = expiry_slot;
+    marker.payer = *ctx.accounts.payer.address();
+    marker.expiry_slot = (expiry_slot).into();
     marker.bump = ctx.bumps.marker;
 
     emit!(MatchBatchVerified {

@@ -36,6 +36,7 @@ devnet-admin = []
 # OutstandingMint + vault ATA on the first deposit of each mint.
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
+wincode = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-sha256-hasher = { workspace = true }
 solana-instructions-sysvar = { workspace = true }

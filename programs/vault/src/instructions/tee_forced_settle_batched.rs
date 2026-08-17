@@ -40,11 +40,6 @@ use crate::instructions::tee_forced_settle::{
 use crate::merkle::append_leaves;
 use crate::state::*;
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use core::mem::size_of;
 
 // Target-gated Poseidon imports — `programs/vault/Cargo.toml` makes
@@ -268,8 +263,16 @@ pub struct TeeForcedSettleBatched {
     /// CHECK: Seeds validated in handler when re-lock is requested.
     /// `dup`: on an exact-fill settle, note_lock_e/f both derive from the
     /// `[0;32]` sentinel. Both are read-only in that case; the attribute keeps
-    /// the duplicate-account intent explicit for Anchor 1.0.
-    #[account(dup)]
+    /// the duplicate-account intent explicit.
+    ///
+    /// v2 requires the `unsafe(...)` spelling because it rejects aliased
+    /// mutable accounts by default (guide §7.3). The safety condition it asks
+    /// for holds here and is checkable by inspection: NEITHER `note_lock_e` nor
+    /// `note_lock_f` carries `mut`, so the handler cannot hold two conflicting
+    /// mutable references to the aliased account. Restructuring to avoid the
+    /// alias would cost transaction bytes on a path with ~59 B of headroom
+    /// (CLAUDE.md §6), so the dedup stays deliberate.
+    #[account(unsafe(dup))]
     pub note_lock_f: UncheckedAccount,
 
     /// Instructions sysvar — for Ed25519 precompile inspection.
@@ -307,7 +310,7 @@ pub fn tee_forced_settle_batched_handler(
     let clock = Clock::get()?;
     // The signer must be one of the authorized TEE keys (the shard
     // fee-payer/authority set); the ed25519 sig is bound to THAT key.
-    let tee_pubkey = ctx.accounts.tee_authority.address();
+    let tee_pubkey = *ctx.accounts.tee_authority.address();
     // CU-2: one vault_config load yields everything the handler reads off it —
     // the authorized-key gate, the empty-subtree roots the appends need, and
     // whether a protocol owner is set (the fee-note gate) — instead of loading
@@ -363,7 +366,7 @@ pub fn tee_forced_settle_batched_handler(
     // invalid at E too. Check both inputs before any consumed-note allocation,
     // Merkle append, or relock CPI.
     require!(
-        clock.slot < lock_a_expiry && clock.slot < lock_b_expiry,
+        clock.slot < lock_a_expiry.get() && clock.slot < lock_b_expiry.get(),
         VaultError::NoteLockExpired
     );
     // C-08: `payload.batch_slot` feeds the leaf hash, and VALID_MATCH_BATCH now
@@ -472,14 +475,14 @@ pub fn tee_forced_settle_batched_handler(
     let ca = &mut ctx.accounts.consumed_a;
     ca.note_use_tag = payload.note_a_use_tag;
     ca.match_id = payload.match_id;
-    ca.consumed_slot = clock.slot;
+    ca.consumed_slot = (clock.slot).into();
     ca.bump = ctx.bumps.consumed_a;
     ca._padding = [0u8; 7];
 
     let cb = &mut ctx.accounts.consumed_b;
     cb.note_use_tag = payload.note_b_use_tag;
     cb.match_id = payload.match_id;
-    cb.consumed_slot = clock.slot;
+    cb.consumed_slot = (clock.slot).into();
     cb.bump = ctx.bumps.consumed_b;
     cb._padding = [0u8; 7];
 
@@ -604,8 +607,8 @@ pub fn tee_forced_settle_batched_handler(
     emit!(TradeSettled {
         tree_id: _tree_id,
         match_id: payload.match_id,
-        note_c_leaf: leaf_c,
-        note_d_leaf: leaf_d,
+        note_c_leaf: leaf_c.get(),
+        note_d_leaf: leaf_d.get(),
         note_e_leaf: leaf_e,
         note_f_leaf: leaf_f,
         note_fee_base_leaf: leaf_fee_base,

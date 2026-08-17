@@ -24,11 +24,6 @@ use crate::zk::{
     Groth16Proof,
 };
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use anchor_lang::system_program;
 use core::mem::size_of;
 
@@ -97,11 +92,15 @@ pub fn merge_handler<'info>(
     // or a tree append. The circuit independently requires at least one active,
     // positive input and a positive output amount.
     require!(active_len > 0, VaultError::EmptyMerge);
+    // v2: `remaining_accounts` is a method returning an owned
+    // `Vec<AccountView>`, not a borrowed slice field. It must be bound before
+    // splitting — splitting a temporary would leave the halves dangling.
+    let remaining = ctx.remaining_accounts()?;
     require!(
-        ctx.remaining_accounts.len() == active_len.saturating_mul(2),
+        remaining.len() == active_len.saturating_mul(2),
         VaultError::MergeAccountMismatch
     );
-    let (consumed_accounts, note_lock_accounts) = ctx.remaining_accounts.split_at(active_len);
+    let (consumed_accounts, note_lock_accounts) = remaining.split_at(active_len);
     // S-11: active inputs must be pairwise DISTINCT. Two identical active
     // tags would make the circuit's `outputAmount` double-count one
     // note. That is currently unreachable — the second
@@ -220,7 +219,7 @@ pub fn merge_handler<'info>(
         output_commitment,
         token_mint,
         k,
-        leaf_index,
+        leaf_index: leaf_index.get(),
         new_root,
     });
     Ok(())
@@ -275,7 +274,7 @@ fn create_consumed_note_pda<'info>(
     let c: &mut ConsumedNoteEntry = bytemuck::from_bytes_mut(body);
     c.note_use_tag = *note_use_tag;
     c.match_id = [0u8; 16];
-    c.consumed_slot = consumed_slot;
+    c.consumed_slot = (consumed_slot).into();
     c.bump = bump;
     c._padding = [0u8; 7];
     Ok(())

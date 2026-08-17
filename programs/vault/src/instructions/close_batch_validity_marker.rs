@@ -19,11 +19,6 @@
 use crate::errors::VaultError;
 use crate::state::BatchValidityMarker;
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32])]
@@ -55,20 +50,20 @@ pub fn close_batch_validity_marker_handler(
     _merkle_root: [u8; 32],
 ) -> Result<()> {
     let marker = &ctx.accounts.marker;
-    let authority = ctx.accounts.authority.address();
+    let authority = *ctx.accounts.authority.address();
     let clock = Clock::get()?;
     // The marker is unusable by Tx D at E (`clock.slot < expiry_slot`), so it is
     // safe and unambiguous to reclaim at E. No signer, including the payer, has
     // an early-close path.
     require!(
-        clock.slot >= marker.expiry_slot,
+        clock.slot >= marker.expiry_slot.get(),
         VaultError::BatchValidityMarkerNotExpired,
     );
 
     emit!(BatchValidityMarkerClosed {
         payer: marker.payer,
         closed_by: authority,
-        expiry_slot: marker.expiry_slot,
+        expiry_slot: marker.expiry_slot.get(),
     });
     Ok(())
 }

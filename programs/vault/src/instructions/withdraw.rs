@@ -2,11 +2,6 @@ use crate::errors::VaultError;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_spend::*, Groth16Proof};
 use anchor_lang::prelude::*;
-// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
-// anchor's re-export (rather than taking a direct dep) guarantees they resolve
-// to the SAME wincode anchor was built against — a direct dep silently created
-// a second version in the graph and every Address failed its Schema bound.
-use anchor_lang::wincode;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 use core::mem::size_of;
 
@@ -216,7 +211,7 @@ pub fn withdraw_handler(
     let c = &mut ctx.accounts.consumed_note;
     c.note_use_tag = note_use_tag;
     c.match_id = [0u8; 16];
-    c.consumed_slot = slot;
+    c.consumed_slot = (slot).into();
     c.bump = ctx.bumps.consumed_note;
     c._padding = [0u8; 7];
 
@@ -260,7 +255,7 @@ pub fn withdraw_handler(
     emit!(Withdrawn {
         nullifier,
         note_use_tag,
-        token_mint: ctx.accounts.token_mint.address(),
+        token_mint: *ctx.accounts.token_mint.address(),
         amount,
     });
 
