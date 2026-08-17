@@ -74,7 +74,14 @@ const DEPOSIT_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
-const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+// Env-overridable, like devnet-setup.test.ts already is. Without this the test
+// silently runs against the PRODUCTION devnet vault regardless of which program
+// the caller meant to exercise. That is not hypothetical: during the Anchor v2
+// experiment this run looked like a no-op against the new program while
+// actually depositing and withdrawing on the old one.
+const VAULT_ID = new PublicKey(
+  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 const READY =
   process.env.RUN_DEVNET_DW === "1" &&

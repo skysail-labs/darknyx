@@ -3,10 +3,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
+vault = "DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7"
 
 [programs.devnet]
-vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
+vault = "DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7"
 
 [provider]
 cluster = "localnet"
