@@ -36,7 +36,7 @@ pub fn update_market_config_handler(
     validate_market_parameters(price_scale, tick_size, min_order_size, circuit_breaker_bps)?;
 
     let market = &mut ctx.accounts.market_config;
-    market.enabled = enabled;
+    market.enabled = enabled.into();
     market.price_scale = (price_scale).into();
     market.tick_size = (tick_size).into();
     market.min_order_size = (min_order_size).into();

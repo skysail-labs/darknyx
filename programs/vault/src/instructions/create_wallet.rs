@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 use core::mem::size_of;
 
 #[derive(Accounts)]
-#[instruction(commitment: [u8; 32], proof: Groth16Proof)]
+#[instruction(commitment: [u8; 32])]
 pub struct CreateWallet {
     /// Root Key signer.
     #[account(mut)]

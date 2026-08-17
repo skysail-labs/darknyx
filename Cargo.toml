@@ -41,6 +41,10 @@ anchor-spl  = "2.0.0-rc.1"
 # anchor and solana-address 2.6.1 both use (^0.5) or Address implements the
 # Schema traits from a different wincode than the derive requires.
 wincode = "0.5"
+# Same reason as wincode: v2 code paths reference `pinocchio::` by absolute
+# path (instruction-sysvar introspection). Version must unify with anchor's
+# ^0.11 or the types are distinct.
+pinocchio = "0.11"
 
 # Solana — monolithic facade (3.x re-exports the modular crates). Only
 # darkpool-matcher's change-note parity test still pulls this directly for

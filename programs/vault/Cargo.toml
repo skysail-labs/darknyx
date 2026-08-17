@@ -13,6 +13,7 @@ default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
+idl-build = ["anchor-lang/idl-build"]
 no-log-ix-name = []
 # v2: anchor-spl no longer exposes `idl-build`. This project generates and
 # consumes no IDL — the SDK hand-codes every discriminator and Borsh layout
@@ -37,9 +38,9 @@ devnet-admin = []
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 wincode = { workspace = true }
+pinocchio = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-sha256-hasher = { workspace = true }
-solana-instructions-sysvar = { workspace = true }
 groth16-solana = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ff = { workspace = true }

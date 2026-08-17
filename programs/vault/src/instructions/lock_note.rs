@@ -18,12 +18,7 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 #[derive(Accounts)]
 #[instruction(
     tree_id: u8,
-    note_use_tag: [u8; 32],
-    order_id: [u8; 16],
-    expiry_slot: u64,
-    token_mint: Address,
-    merkle_root: [u8; 32],
-    proof: Groth16Proof,
+    note_use_tag: [u8; 32]
 )]
 pub struct LockNote {
     /// The TEE-operated relayer. We enforce that `tee_authority.address()` is one of
@@ -102,7 +97,7 @@ pub fn lock_note_handler(
 
     // TEE-authority gate + Merkle-root recency check (against THIS shard).
     {
-        let cfg = ctx.accounts.vault_config;
+        let cfg = &ctx.accounts.vault_config;
         require!(
             cfg.is_authorized_tee(&ctx.accounts.tee_authority.address()),
             VaultError::Unauthorized
@@ -121,7 +116,7 @@ pub fn lock_note_handler(
     // would otherwise pass below. Cheap check first — mirror of the inverted
     // `withdraw` note-lock guard. A non-existent PDA is system-owned → allowed.
     require!(
-        ctx.accounts.consumed_note.owner != ctx.program_id,
+        ctx.accounts.consumed_note.account().owner() != ctx.program_id,
         VaultError::NoteAlreadyConsumed
     );
 

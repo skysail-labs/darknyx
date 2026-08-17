@@ -180,7 +180,7 @@ pub fn walk_merkle_path_n16(
 // ----------------------------------------------------------------------------
 
 #[derive(Accounts)]
-#[instruction(tree_id: u8, payload: MatchResultPayload, match_index: u8, merkle_proof: [[u8; 32]; 4])]
+#[instruction(tree_id: u8, payload: MatchResultPayload)]
 pub struct TeeForcedSettleBatched {
     #[account(mut)]
     pub tee_authority: Signer,
@@ -316,7 +316,7 @@ pub fn tee_forced_settle_batched_handler(
     // whether a protocol owner is set (the fee-note gate) — instead of loading
     // it again near the appends.
     let (authorized, zsr, protocol_owner_set) = {
-        let cfg = ctx.accounts.vault_config;
+        let cfg = &ctx.accounts.vault_config;
         (
             cfg.is_authorized_tee(&tee_pubkey),
             cfg.zero_subtree_roots,
@@ -351,8 +351,8 @@ pub fn tee_forced_settle_batched_handler(
     // mints for the leaf binding + relock stamping, AND the order_ids for the
     // lock-binding check below), instead of re-loading the locks twice.
     let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id, lock_a_expiry, lock_b_expiry) = {
-        let la = ctx.accounts.note_lock_a;
-        let lb = ctx.accounts.note_lock_b;
+        let la = &ctx.accounts.note_lock_a;
+        let lb = &ctx.accounts.note_lock_b;
         (
             la.token_mint,
             lb.token_mint,
@@ -387,17 +387,17 @@ pub fn tee_forced_settle_batched_handler(
             &crate::ID,
         );
         require_keys_eq!(
-            ctx.accounts.batch_validity_marker.address(),
+            *ctx.accounts.batch_validity_marker.address(),
             expected_marker_pda,
             VaultError::InvalidBatchBinding
         );
 
-        let marker_info = ctx.accounts.batch_validity_marker.to_account_info();
+        let marker_info = ctx.accounts.batch_validity_marker.account();
         require!(
-            marker_info.owner == &crate::ID,
+            marker_info.owner() == &crate::ID,
             VaultError::InvalidBatchBinding
         );
-        let marker_data = marker_info.try_borrow_data()?;
+        let marker_data = marker_info.try_borrow()?;
         require!(
             marker_data.len() >= 8 + 32 + 8,
             VaultError::InvalidBatchBinding
@@ -519,7 +519,7 @@ pub fn tee_forced_settle_batched_handler(
     // when non-zero. Each leaf lands at a consecutive index, so its leaf index
     // is `start + its slot in the run`.
     let tree = &mut ctx.accounts.merkle_tree;
-    let start = tree.leaf_count;
+    let start = tree.leaf_count.get();
     let mut leaves = [[0u8; 32]; 6];
     let mut n = 0usize;
 
@@ -569,8 +569,8 @@ pub fn tee_forced_settle_batched_handler(
     // state change.
     if payload.buyer_relock_order_id != [0u8; 16] {
         super::tee_forced_settle::create_relock_pda(
-            &ctx.accounts.note_lock_e,
-            &ctx.accounts.tee_authority,
+            &mut ctx.accounts.note_lock_e,
+            &mut ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             // The TAG, not the commitment. Both are 32 bytes so this compiles
             // either way — passing the commitment would silently create every
@@ -584,8 +584,8 @@ pub fn tee_forced_settle_batched_handler(
     }
     if payload.seller_relock_order_id != [0u8; 16] {
         super::tee_forced_settle::create_relock_pda(
-            &ctx.accounts.note_lock_f,
-            &ctx.accounts.tee_authority,
+            &mut ctx.accounts.note_lock_f,
+            &mut ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             &payload.note_f_use_tag,
             &lock_b_mint, // note_f is the seller's change → BASE
@@ -607,8 +607,8 @@ pub fn tee_forced_settle_batched_handler(
     emit!(TradeSettled {
         tree_id: _tree_id,
         match_id: payload.match_id,
-        note_c_leaf: leaf_c.get(),
-        note_d_leaf: leaf_d.get(),
+        note_c_leaf: leaf_c,
+        note_d_leaf: leaf_d,
         note_e_leaf: leaf_e,
         note_f_leaf: leaf_f,
         note_fee_base_leaf: leaf_fee_base,

@@ -69,9 +69,9 @@ pub fn initialize_market_handler(
     market.tick_size = (tick_size).into();
     market.min_order_size = (min_order_size).into();
     market.circuit_breaker_bps = (circuit_breaker_bps).into();
-    market.base_decimals = ctx.accounts.base_mint.decimals;
-    market.quote_decimals = ctx.accounts.quote_mint.decimals;
-    market.enabled = true;
+    market.base_decimals = ctx.accounts.base_mint.decimals();
+    market.quote_decimals = ctx.accounts.quote_mint.decimals();
+    market.enabled = true.into();
     market.bump = ctx.bumps.market_config;
 
     emit!(MarketInitialized {

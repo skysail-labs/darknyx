@@ -37,13 +37,15 @@ pub struct CloseVaultConfig {
 }
 
 pub fn close_vault_config_handler(ctx: &mut Context<CloseVaultConfig>) -> Result<()> {
-    let info = ctx.accounts.vault_config.to_account_info();
-    require!(info.owner == &crate::ID, VaultError::Unauthorized);
+    // v2: AccountView is Copy and mutations write through to the underlying
+    // buffer, which is how anchor's own Slab::close works. `owner` is a method.
+    let mut info = *ctx.accounts.vault_config.account();
+    require!(info.owner() == &crate::ID, VaultError::Unauthorized);
 
     // `admin` is the first field after the 8-byte discriminator in every
     // VaultConfig layout version → byte offset 8..40.
     {
-        let data = info.try_borrow_data()?;
+        let data = info.try_borrow()?;
         require!(data.len() >= 40, VaultError::Unauthorized);
         let mut stored_admin = [0u8; 32];
         stored_admin.copy_from_slice(&data[8..40]);
@@ -55,14 +57,18 @@ pub fn close_vault_config_handler(ctx: &mut Context<CloseVaultConfig>) -> Result
 
     // Drain lamports to admin + zero the data → the runtime reclaims the
     // 0-lamport account at tx end, so a follow-up `initialize` can recreate it.
-    let admin_info = ctx.accounts.admin.to_account_info();
+    let mut admin_info = *ctx.accounts.admin.account();
     let reclaimed = info.lamports();
-    **admin_info.try_borrow_mut_lamports()? = admin_info
-        .lamports()
-        .checked_add(reclaimed)
-        .ok_or(Error::from(VaultError::ArithmeticOverflow))?;
-    **info.try_borrow_mut_lamports()? = 0;
-    let mut data = info.try_borrow_mut_data()?;
+    // v2: `set_lamports` replaces the `**x.try_borrow_mut_lamports()? = ...`
+    // dance. The checked_add is preserved deliberately.
+    admin_info.set_lamports(
+        admin_info
+            .lamports()
+            .checked_add(reclaimed)
+            .ok_or(Error::from(VaultError::ArithmeticOverflow))?,
+    );
+    info.set_lamports(0);
+    let mut data = info.try_borrow_mut()?;
     for b in data.iter_mut() {
         *b = 0;
     }

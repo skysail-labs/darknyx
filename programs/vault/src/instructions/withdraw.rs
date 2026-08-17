@@ -23,7 +23,7 @@ fn u64_be32(v: u64) -> [u8; 32] {
 }
 
 #[derive(Accounts)]
-#[instruction(tree_id: u8, note_use_tag: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
+#[instruction(tree_id: u8, note_use_tag: [u8; 32])]
 pub struct Withdraw {
     /// Any signer may pay the rent. Authorization is via ZK proof.
     #[account(mut)]
@@ -54,7 +54,7 @@ pub struct Withdraw {
 
     #[account(
         mut,
-        constraint = destination_token_account.mint == token_mint.address() @ VaultError::Unauthorized,
+        constraint = destination_token_account.mint() == token_mint.address() @ VaultError::Unauthorized,
     )]
     pub destination_token_account: Account<TokenAccount>,
 
@@ -123,7 +123,7 @@ pub fn withdraw_handler(
     // — so one failed settle made a note permanently unwithdrawable.
     require!(
         !crate::state::note_lock_is_live(
-            &ctx.accounts.note_lock_slot.to_account_info(),
+            &ctx.accounts.note_lock_slot.account(),
             Clock::get()?.slot
         )?,
         VaultError::NoteAlreadyLocked
@@ -232,10 +232,10 @@ pub fn withdraw_handler(
     let signer_seeds: &[&[&[u8]]] = &[cfg_seeds];
 
     let cpi_accounts = TransferChecked {
-        from: ctx.accounts.vault_token_account.cpi_handle_mut(),
-        to: ctx.accounts.destination_token_account.cpi_handle_mut(),
-        mint: ctx.accounts.token_mint.cpi_handle(),
-        authority: ctx.accounts.vault_config.cpi_handle(),
+        from: ctx.accounts.vault_token_account.to_cpi_handle_mut(),
+        to: ctx.accounts.destination_token_account.to_cpi_handle_mut(),
+        mint: ctx.accounts.token_mint.to_cpi_handle(),
+        authority: ctx.accounts.vault_config.to_cpi_handle(),
     };
     transfer_checked(
         CpiContext::new_with_signer(ctx.accounts.token_program.address(), cpi_accounts, signer_seeds),

@@ -9,7 +9,6 @@ use crate::state::*;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
-#[instruction(new_root_key: Address)]
 pub struct RotateRootKey {
     /// Must equal `vault_config.root_key`. Verified in the handler.
     pub current_root_key: Signer,
@@ -23,9 +22,9 @@ pub struct RotateRootKey {
 }
 
 pub fn rotate_root_key_handler(ctx: &mut Context<RotateRootKey>, new_root_key: Address) -> Result<()> {
-    let mut cfg = ctx.accounts.vault_config;
+    let cfg = &mut ctx.accounts.vault_config;
     require!(
-        ctx.accounts.current_root_key.address() == cfg.root_key,
+        *ctx.accounts.current_root_key.address() == cfg.root_key,
         VaultError::Unauthorized
     );
     require!(

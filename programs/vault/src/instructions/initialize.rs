@@ -57,7 +57,6 @@ pub struct Initialize {
 /// initializer signer, no upgrade-authority binding (see mainnet above).
 #[cfg(feature = "devnet-admin")]
 #[derive(Accounts)]
-#[instruction(operations_admin: Address, tee_pubkeys: Vec<Address>, root_key: Address, num_trees: u8)]
 pub struct Initialize {
     #[account(mut)]
     pub upgrade_authority: Signer,
@@ -124,7 +123,7 @@ pub fn initialize_handler(
     cfg.zero_subtree_roots = compute_zero_subtree_roots()?;
     cfg.bump = ctx.bumps.vault_config;
     cfg.protocol_owner_commitment = [0u8; 32];
-    cfg.fee_rate_bps = 0;
+    cfg.fee_rate_bps = 0u16.into();
     cfg._padding = [0u8; 3];
     let _ = VaultError::ZeroAmount; // keep errors linked in
     Ok(())
