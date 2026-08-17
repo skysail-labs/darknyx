@@ -934,6 +934,15 @@ Merkle root) covering all N matches in the batch. `tee_forced_settle_batched`
 `close_batch_validity_marker` ix reclaims the rent once, only at or after
 expiry. No signer—including the recorded payer—has an early-close path.
 
+> **Anchor v2 narrowed who may close.** The ix took three accounts
+> (`authority`, a separate `mut` `payer`, `marker`) and any signer could sweep
+> an expired marker with the rent still flowing to `marker.payer`. v2 rejects
+> that: the sweeper passes `authority == payer`, and one address in two slots
+> (one `mut`) trips the duplicate-mutable check before the handler runs. The
+> slots are now collapsed to **two accounts** — `authority` is both signer and
+> refund target, pinned to `marker.payer` by an explicit constraint. Only the
+> payer can close now; the no-early-close property above is unchanged.
+
 If a Tx D builder marks `batch_validity_marker` writable, or you see
 `try_borrow_mut_lamports` against it in `tee_forced_settle_batched.rs`, you've
 re-introduced a cross-shard write conflict or the bug that bricks every match

@@ -265,14 +265,23 @@ pub struct TeeForcedSettleBatched {
     /// `[0;32]` sentinel. Both are read-only in that case; the attribute keeps
     /// the duplicate-account intent explicit.
     ///
-    /// v2 requires the `unsafe(...)` spelling because it rejects aliased
-    /// mutable accounts by default (guide §7.3). The safety condition it asks
-    /// for holds here and is checkable by inspection: NEITHER `note_lock_e` nor
-    /// `note_lock_f` carries `mut`, so the handler cannot hold two conflicting
-    /// mutable references to the aliased account. Restructuring to avoid the
-    /// alias would cost transaction bytes on a path with ~59 B of headroom
-    /// (CLAUDE.md §6), so the dedup stays deliberate.
-    #[account(unsafe(dup))]
+    /// NO `dup` attribute under v2, deliberately. v1 carried `#[account(dup)]`
+    /// to make the exact-fill aliasing explicit, and v2 demands the
+    /// `unsafe(dup)` spelling for it — but `unsafe(dup)` also marks the field
+    /// MUTABLE, because its entire purpose is waiving the duplicate-MUTABLE
+    /// check (guide §7.3). That has two costs here, neither of them wanted:
+    ///
+    ///   1. the account becomes required-writable, so every caller must mark it
+    ///      writable even on exact-fill paths that never touch it;
+    ///   2. on exact-fill `note_lock_e` and `note_lock_f` are both
+    ///      `PDA(["note_lock", [0;32]])` — the SAME account — so making it
+    ///      writable write-locks one shared PDA across every concurrent settle,
+    ///      serialising exactly the settles tree-sharding exists to run in
+    ///      parallel.
+    ///
+    /// Dropping the attribute is safe because the check it waives cannot fire:
+    /// neither field carries `mut`, so neither is in the derive's MUT_MASK and
+    /// an alias between them ANDs to zero.
     pub note_lock_f: UncheckedAccount,
 
     /// Instructions sysvar — for Ed25519 precompile inspection.

@@ -23,24 +23,40 @@ use anchor_lang::prelude::*;
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32])]
 pub struct CloseBatchValidityMarker {
-    /// Caller. Any signer may sweep once the marker has expired.
+    /// Caller AND refund target, collapsed into one slot.
+    ///
+    /// v2 CHANGE, and it deliberately narrows behaviour. This used to be two
+    /// slots — an `authority` signer plus a separate `mut` `payer` refund
+    /// target bound by `has_one = payer` — so ANY signer could sweep an expired
+    /// marker while the rent still went to the recorded payer.
+    ///
+    /// v2 rejects that shape in practice. The sweeper closes with
+    /// `authority == payer == the primary shard key`
+    /// (`darknyx-tee/src/settle/marker_sweep.rs`), so one address landed in two
+    /// slots, one of them `mut`, and v2's duplicate-mutable-account check
+    /// (guide §7.3) fails it BEFORE the handler runs with
+    /// `ConstraintDuplicateMutableAccount` (2040). Confirmed against a deployed
+    /// program on devnet, not only in litesvm.
+    ///
+    /// Collapsing the slots removes the alias structurally instead of waiving
+    /// the check with `unsafe(dup)`, and drops an account from the tx — welcome
+    /// on a path with ~59 B of headroom (CLAUDE.md §6).
+    ///
+    /// LOST: permissionless cleanup; only the recorded payer can close now.
+    /// KEPT: the property §8.2 actually rests on — nobody, payer included, can
+    /// close before expiry.
+    #[account(mut)]
     pub authority: Signer,
 
-    /// Refund target on close. MUST equal `marker.payer` (set by
-    /// `verify_match_batch`). The `has_one = payer` constraint on
-    /// the marker below enforces this.
-    ///
-    /// CHECK: Validated via Anchor's `has_one = payer` on `marker`.
-    #[account(mut)]
-    pub payer: UncheckedAccount,
-
-    /// Marker PDA — closed to `payer`.
+    /// Marker PDA — closed to `authority`, which the constraint pins to the
+    /// payer recorded by `verify_match_batch`. (`has_one` is deprecated in v2;
+    /// this is its explicit equivalent.)
     #[account(
         mut,
-        close = payer,
+        close = authority,
         seeds = [BatchValidityMarker::SEED, merkle_root.as_ref()],
         bump = marker.bump,
-        has_one = payer,
+        constraint = marker.payer == *authority.address() @ VaultError::Unauthorized,
     )]
     pub marker: Account<BatchValidityMarker>,
 }
