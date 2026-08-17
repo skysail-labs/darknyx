@@ -170,7 +170,9 @@ async function getJson<T>(
 export async function fetchInfo(
   gatewayUrl: string,
   token: string,
-  fetchImpl: typeof fetch = fetch,
+  /** REQUIRED — no global-fetch default. A direct caller could otherwise omit
+   *  the caller-selected CVM transport and bypass its verification. */
+  fetchImpl: typeof fetch,
 ): Promise<TeeInfo> {
   const b = await getJson<{
     app_id: string;
@@ -200,7 +202,9 @@ export async function fetchAttestation(
   gatewayUrl: string,
   token: string,
   nonce: Uint8Array,
-  fetchImpl: typeof fetch = fetch,
+  /** REQUIRED — no global-fetch default. A direct caller could otherwise omit
+   *  the caller-selected CVM transport and bypass its verification. */
+  fetchImpl: typeof fetch,
 ): Promise<AttestationQuote> {
   const url = new URL("/attestation", gatewayUrl);
   // The TEE query param is camelCase `reportData` (serde rename); the response
