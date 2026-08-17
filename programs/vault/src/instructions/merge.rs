@@ -24,6 +24,11 @@ use crate::zk::{
     Groth16Proof,
 };
 use anchor_lang::prelude::*;
+// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
+// anchor's re-export (rather than taking a direct dep) guarantees they resolve
+// to the SAME wincode anchor was built against — a direct dep silently created
+// a second version in the graph and every Address failed its Schema bound.
+use anchor_lang::wincode;
 use anchor_lang::system_program;
 use core::mem::size_of;
 

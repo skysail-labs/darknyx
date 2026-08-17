@@ -2,6 +2,11 @@ use crate::errors::VaultError;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_input::*, Groth16Proof};
 use anchor_lang::prelude::*;
+// v2: the re-exported wincode derives emit bare `wincode::` paths. Importing
+// anchor's re-export (rather than taking a direct dep) guarantees they resolve
+// to the SAME wincode anchor was built against — a direct dep silently created
+// a second version in the graph and every Address failed its Schema bound.
+use anchor_lang::wincode;
 use core::mem::size_of;
 
 /// Split a 32-byte Solana pubkey into [lo_u128_be32, hi_u128_be32] — each

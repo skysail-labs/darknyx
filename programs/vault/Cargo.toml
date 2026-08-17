@@ -36,7 +36,6 @@ devnet-admin = []
 # OutstandingMint + vault ATA on the first deposit of each mint.
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
-wincode = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-sha256-hasher = { workspace = true }
 solana-instructions-sysvar = { workspace = true }
@@ -59,10 +58,16 @@ serde_json = "1.0"
 # send the TEE Ed25519 signature-verify ix.
 litesvm = { workspace = true, features = ["precompiles"] }
 solana-account = "~3.4"
-solana-address = "=2.2.0"
-solana-instruction = "=3.2.0"
+# v2 EXPERIMENT: was "=2.2.0". anchor-lang 2.0.0-rc.1 declares solana-address
+# "^2.0" + wincode "^0.5", but solana-address only uses wincode 0.5 at 2.6.x
+# (2.2-2.5 -> 0.4.x, 2.7 -> 0.6). Any other choice makes Address implement
+# SchemaRead/SchemaWrite from a DIFFERENT wincode than the derive requires,
+# and the failure names neither crate. Upstream declares a range it does not
+# actually support.
+solana-address = { workspace = true }
+solana-instruction = "3"        # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-keypair = "~3.1"
-solana-message = "=3.1.0"
+solana-message = "3"            # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-signer = "~3.0"
 solana-transaction = "^3.1"
 solana-system-interface = "3.0.0"

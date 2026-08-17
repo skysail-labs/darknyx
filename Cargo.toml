@@ -36,11 +36,6 @@ authors = ["Darknyx Darkpool"]
 # the monolithic `solana-program`. See docs/anchor-v2-recon.md.
 anchor-lang = "2.0.0-rc.1"
 anchor-spl  = "2.0.0-rc.1"
-# Required as a DIRECT dependency: anchor's re-exported wincode derive macros
-# (SchemaRead/SchemaWrite, used by #[derive(Accounts)] and #[event]) emit bare
-# `wincode::` paths, so `anchor_lang::wincode` alone does not resolve them.
-# Not mentioned in the migration guide — an rc.1 rough edge.
-wincode = "0.5"
 
 # Solana — monolithic facade (3.x re-exports the modular crates). Only
 # darkpool-matcher's change-note parity test still pulls this directly for
@@ -104,7 +99,7 @@ bytemuck = { version = "1.16", features = ["derive"] }
 thiserror = "1.0"
 
 # Testing
-litesvm = "0.13.0"
+litesvm = "0.15.2"
 proptest = "1.4"
 hex = "0.4"
 
@@ -212,14 +207,20 @@ rand_distr = "0.4"
 # image's `cargo build -p darknyx-tee` (a narrow feature scope that doesn't pick up
 # the feature transitively the way a `--workspace` build does) fails with
 # "use of moved value: blockhash" in settle/worker.rs.
-solana-address           = { version = "=2.2.0", features = ["curve25519"] }
+# v2 EXPERIMENT: 2.2.0 -> 2.6.1. anchor-lang 2.0.0-rc.1 needs wincode ^0.5, and
+# solana-address only uses wincode 0.5 in the 2.6.x line (2.2-2.5 -> 0.4.x,
+# 2.7 -> 0.6). litesvm was bumped 0.13.0 -> 0.15.2 in the same move because
+# 0.13 demanded =2.2.0 and pinned the whole test graph to the wrong wincode.
+solana-address           = { version = "=2.6.1", features = ["curve25519"] }
 solana-hash              = { version = "4", features = ["copy"] }
 solana-keypair           = "~3.1"
 solana-signature         = "^3.3"
 solana-signer            = "~3.0"
 # PR 4g.3 — ix / message / transaction construction. Same modular family.
-solana-instruction       = "=3.2.0"
-solana-message           = "=3.1.0"
+# v2 EXPERIMENT: relaxed from "=3.2.0" — litesvm 0.15.2 needs a newer build.
+solana-instruction       = "3"
+# v2 EXPERIMENT: relaxed from "=3.1.0" for the same reason.
+solana-message           = "3"
 # `serde` feature gives us `Transaction: Serialize`; `bincode`
 # unlocks `Transaction::new_signed_with_payer` + tx serialise.
 solana-transaction       = { version = "^3.1", features = ["serde", "bincode"] }
@@ -229,7 +230,9 @@ solana-system-interface  = "3.0.0"
 # Pinned to =3.0.1: 3.1.0 requires solana-instruction ^3.4, which
 # conflicts with the workspace's `~3.1` pin (vault).
 # 3.0.1 needs only solana-instruction 3.0, compatible with ours.
-solana-address-lookup-table-interface = { version = "=3.0.1", features = ["bincode"] }
+# v2 EXPERIMENT: relaxed from "=3.0.1" so cargo can pick the build compatible
+# with solana-address 2.6.1.
+solana-address-lookup-table-interface = { version = "3", features = ["bincode"] }
 
 # bincode 1.x — Solana's tx wire format. Pinned at 1 because 2.x's
 # API broke the `bincode::serialize` global fn.
