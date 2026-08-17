@@ -34,7 +34,8 @@ pub fn poseidon2(left: &[u8; 32], right: &[u8; 32]) -> Result<[u8; 32]> {
 
     #[cfg(not(target_os = "solana"))]
     {
-        let mut h = Poseidon::<Fr>::new_circom(2).map_err(|_| Error::from(VaultError::InvalidProof))?;
+        let mut h =
+            Poseidon::<Fr>::new_circom(2).map_err(|_| Error::from(VaultError::InvalidProof))?;
         h.hash_bytes_be(&[left.as_slice(), right.as_slice()])
             .map_err(|_| Error::from(VaultError::InvalidProof))
     }

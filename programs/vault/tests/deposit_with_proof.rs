@@ -180,7 +180,9 @@ fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
             .unwrap_or_else(|| fr_to_be_bytes(&args.opening.recovery_nonce)),
     );
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
-    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap());
+    data.extend_from_slice(
+        &anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap(),
+    );
 
     let deposit = Instruction {
         program_id: args.h.vault_id,
@@ -255,7 +257,10 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
     );
     // Same `CU_PROFILE` marker the settle/verify tests already use, so the
     // Anchor v1→v2 comparison can scrape one convention across the suite.
-    eprintln!("CU_PROFILE deposit consumed={}", meta.compute_units_consumed);
+    eprintln!(
+        "CU_PROFILE deposit consumed={}",
+        meta.compute_units_consumed
+    );
     assert!(
         meta.compute_units_consumed <= DEPOSIT_CU_GATE,
         "proof deposit used {} CU; gate is {DEPOSIT_CU_GATE}",

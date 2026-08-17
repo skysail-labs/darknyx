@@ -171,7 +171,11 @@ pub(crate) fn create_relock_pda(
 
     let (expected_pda, bump) =
         Address::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
-    require_keys_eq!(*note_lock_ai.address(), expected_pda, VaultError::Unauthorized);
+    require_keys_eq!(
+        *note_lock_ai.address(),
+        expected_pda,
+        VaultError::Unauthorized
+    );
     require!(
         note_lock_ai.data_len() == 0 && note_lock_ai.lamports() == 0,
         VaultError::NoteAlreadyLocked
