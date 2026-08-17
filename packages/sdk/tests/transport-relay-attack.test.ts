@@ -87,6 +87,9 @@ async function serve(
   serving: { key: string; cert: string },
   manifestSpki: Uint8Array,
   bootSession: Uint8Array,
+  /** Close the connection immediately after responding, as a peer with a very
+   *  short keep-alive does. This is what broke `cvm-self-trade` in CI. */
+  closeAfterResponse = false,
 ): Promise<{ url: string; close: () => void }> {
   const appId = new Uint8Array(32).fill(0x01);
   const instanceId = new Uint8Array(32).fill(0x02);
@@ -111,6 +114,7 @@ async function serve(
       reportData.set(nonce, 0);
       reportData.set(digest, 32);
       res.setHeader("content-type", "application/json");
+      if (closeAfterResponse) res.setHeader("connection", "close");
       res.end(
         JSON.stringify({
           manifest: {
@@ -330,6 +334,98 @@ describe("old-boot evidence is rejected by the client", () => {
       s.close();
       rmSync(dir, { recursive: true, force: true });
       delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    }
+  });
+});
+
+describe("a peer that closes immediately after responding", () => {
+  // The CI failure this fixes. `currentSocket()` is cleared the moment the
+  // peer closes, so reading it AFTER the response made a perfectly valid
+  // exchange look like `socket_lost`. `cvm-self-trade` idles ~3 s between
+  // polls, so it took a fresh connection every time and hit this on every
+  // attempt — a retry could not help, because nothing about it was transient.
+  let honestC: ReturnType<typeof makeCert>;
+  let relayC: ReturnType<typeof makeCert>;
+
+  beforeAll(() => {
+    // Own temp dir: `dir` is module-level and each suite reassigns it, so
+    // borrowing another block's is order-dependent (flagged in review).
+    dir = mkdtempSync(join(tmpdir(), "darknyx-close-"));
+    honestC = makeCert("honest-closing");
+    relayC = makeCert("relay-closing");
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * A fetch that tears the socket down after the response, before the verifier
+   * reads it.
+   *
+   * `Connection: close` alone is NOT enough to reproduce this: Node emits the
+   * socket `close` event asynchronously, so locally it usually lands after the
+   * synchronous read and the test passes either way. An earlier version of
+   * this test did exactly that and was mutation-proven useless — reverting the
+   * fix left it green. This forces the exact ordering CI hit after a ~3 s idle.
+   */
+  const fetchThenDropSocket =
+    (agent: TransportAgent, sink: { hex?: string }): typeof fetch =>
+    (async (input: never, init: never) => {
+      const res = await capturingFetch(sink)(input, init);
+      const live = agent.currentSocket();
+      if (live) agent.destroySocket(live);
+      // Let the `close` handler run so `current` is genuinely cleared.
+      await new Promise((r) => setTimeout(r, 20));
+      return res;
+    }) as typeof fetch;
+
+  it("still verifies when the connection is gone by the time we bind", async () => {
+    const boot = new Uint8Array(32).fill(0x11);
+    const s = await serve(honestC, honestC.spki, boot, true);
+    const sink: { hex?: string } = {};
+    const agent = new TransportAgent();
+    try {
+      const result = await verifyTransportOnSocket({
+        baseUrl: s.url,
+        agent,
+        deps: deps(sink),
+        expectedComposeHash: COMPOSE,
+        expectedSignerSetSha256: SIGNERS,
+        fetchImpl: fetchThenDropSocket(agent, sink),
+      });
+      // Bound to the socket that actually served it, closed or not.
+      expect(toHex(result.spkiSha256)).toBe(toHex(honestC.spki));
+    } finally {
+      s.close();
+    }
+  });
+
+  it("STILL rejects a relay that closes immediately", async () => {
+    // The fallback must not become a hole: a closing peer presenting the
+    // wrong certificate is still a relay.
+    const boot = new Uint8Array(32).fill(0x11);
+    const s = await serve(relayC, honestC.spki, boot, true);
+    const sink: { hex?: string } = {};
+    const agent = new TransportAgent();
+    try {
+      const err = await verifyTransportOnSocket({
+        baseUrl: s.url,
+        agent,
+        deps: deps(sink),
+        expectedComposeHash: COMPOSE,
+        expectedSignerSetSha256: SIGNERS,
+        // Same teardown: the fallback must reject a relay even when the
+        // socket is gone, or it is a hole rather than a fix.
+        fetchImpl: fetchThenDropSocket(agent, sink),
+      }).then(
+        () => null,
+        (e: unknown) => e as { kind?: string },
+      );
+      expect(err, "the relay was accepted").not.toBeNull();
+      expect(err?.kind).toBe("spki_mismatch");
+    } finally {
+      s.close();
     }
   });
 });

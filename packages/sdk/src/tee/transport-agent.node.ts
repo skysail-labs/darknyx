@@ -99,6 +99,8 @@ export function socketSpkiSha256(socket: TLSSocket): Uint8Array {
  * tracks which sockets have completed transport verification.
  */
 export class TransportAgent extends Agent {
+  /** The most recently connected socket; never cleared on close. */
+  private lastConnected?: TLSSocket;
   /** SPKI hash per live socket. */
   private readonly spki = new WeakMap<object, Uint8Array>();
   /** Sockets that have passed verification. Never inherited across sockets. */
@@ -134,6 +136,13 @@ export class TransportAgent extends Agent {
             try {
               this.spki.set(tls, socketSpkiSha256(tls));
               this.current = tls;
+              // Also remembered SEPARATELY, and deliberately NOT cleared on
+              // close. `current` answers "is there a live connection"; this
+              // answers "which socket did the last exchange run on", which is
+              // what an attestation must bind to. A peer that closes promptly
+              // after responding would otherwise erase the only handle to the
+              // socket that just served a perfectly valid exchange.
+              this.lastConnected = tls;
               tls.once("close", () => {
                 if (this.current === tls) this.current = undefined;
               });
@@ -169,6 +178,17 @@ export class TransportAgent extends Agent {
   }
 
   /** The socket the next request will use, if one is live. */
+  /**
+   * The socket the most recent exchange ran on, alive or not.
+   *
+   * Distinct from {@link currentSocket}: that one is cleared when the socket
+   * closes. Binding an attestation needs the socket the evidence CAME from,
+   * and that fact does not stop being true when the connection ends.
+   */
+  lastConnectedSocket(): TLSSocket | undefined {
+    return this.lastConnected;
+  }
+
   currentSocket(): TLSSocket | undefined {
     return this.current;
   }
@@ -336,7 +356,25 @@ async function verifyOnce(
     // no per-response socket attribution, so the single-connection pin IS the
     // mechanism, not an optimisation. Raising `connections` above 1 would
     // silently invalidate this and must not be done.
-    const live = agent.currentSocket();
+    // Prefer the LIVE socket; fall back to the one this exchange ran on.
+    //
+    // `currentSocket()` is cleared the moment the peer closes, so reading it
+    // after the response made a valid exchange look like a failure whenever
+    // the server closed promptly — which is precisely what broke
+    // `cvm-self-trade` in CI, the one suite that idles ~3 s between polls and
+    // so gets a fresh connection each time.
+    //
+    // Falling back is sound: what must be bound is the SPKI of the peer that
+    // SERVED this attestation, and that does not stop being true when the
+    // connection ends. `lastConnected` only advances when the connector runs,
+    // so a reused-then-closed socket still resolves to the right one.
+    //
+    // The residual race is unchanged and still documented above: undici
+    // exposes no per-response socket attribution, so a concurrent request on
+    // the same agent could in principle open a newer connection between the
+    // response and this read. `connections: 1` plus the single-flight guard in
+    // `createVerifiedFetch` is what keeps that from happening in practice.
+    const live = agent.currentSocket() ?? agent.lastConnectedSocket();
     if (!live) {
       // The socket went away between the exchange and this read.
       //
