@@ -29,14 +29,18 @@
 # ─────────────────────────────────────────────────────────────────────
 
 # ─────────── Stage 1: builder ───────────
-# rust:1.91-slim-bookworm — matches rust-toolchain.toml's 1.91 floor
-# (the dstack-sdk → alloy → ruint chain requires rustc 1.91+).
+# rust:1.93-slim-bookworm — matches rust-toolchain.toml's floor, which the
+# Anchor v2 port raised 1.91 -> 1.93: litesvm 0.15.x pulls solana-syscalls
+# 4.2.x, which uses `maybe_uninit_write_slice` (stable only from 1.93), and
+# downgrading solana-syscalls is blocked by a solana-program-runtime conflict.
+# This base MUST move with rust-toolchain.toml — a 1.91 base would either fail
+# the build or silently re-download a second toolchain inside the image.
 #
 # PINNED BY DIGEST (the multi-arch index — `--platform linux/amd64` still
 # selects the amd64 variant). A floating tag would let the base drift on every
 # pull and silently shift `compose_hash` (the attestation-relevant artifact
 # baked into RTMR3). Re-resolve + bump deliberately with:
-#   docker buildx imagetools inspect rust:1.91-slim-bookworm --format '{{.Manifest.Digest}}'
+#   docker buildx imagetools inspect rust:1.93-slim-bookworm --format '{{.Manifest.Digest}}'
 #
 # ARCHITECTURE — build this for linux/amd64. Phala TDX CVMs are
 # x86_64; an arm64 image (the default on Apple Silicon) fails the CVM
@@ -45,7 +49,7 @@
 # `docker buildx build --platform linux/amd64 --push` — rather than
 # cross-building under QEMU on a Mac (slow, and emulated build cycles
 # are wasteful). See .github/workflows/tee-image.yml.
-FROM rust:1.91-slim-bookworm@sha256:8514999d4786ef12efe89239e86b3d0a021b94b9d35108c8efe6c79ca7dc1a65 AS builder
+FROM rust:1.93-slim-bookworm@sha256:5b9332190bb3b9ece73b810cd1f1e9f06343b294ce184bcb067f0747d7d333ea AS builder
 
 WORKDIR /build
 
