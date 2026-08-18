@@ -1,10 +1,17 @@
 [toolchain]
-# Bumped from 1.89 → 1.91 in TEE-v2 PR 4a (2026-05-27) because the
-# dstack-sdk we depend on pulls in alloy 1.8+, which requires
-# rustc 1.91+ via its ruint dependency. Rust is backwards-compatible
-# at the source level so this is a pure floor-raise — nothing in
-# the existing workspace depends on 1.89-specific behaviour.
-# CI will pull 1.91 automatically via this file.
-channel = "1.91.0"
+# 1.89 -> 1.91 (TEE-v2 PR 4a, 2026-05-27): dstack-sdk pulls alloy 1.8+, whose
+#   ruint dependency requires 1.91.
+# 1.91 -> 1.93 (Anchor v2 port): litesvm 0.15.x pulls solana-syscalls 4.2.x,
+#   which uses `maybe_uninit_write_slice` — stable only from 1.93. Downgrading
+#   solana-syscalls is blocked by a solana-program-runtime conflict, so the
+#   floor has to rise. Workspace-wide: darknyx-tee builds on this too.
+#
+# Rust is source-compatible across these, so each step is a pure floor-raise.
+#
+# The pinned dtolnay/rust-toolchain SHAs in .github/workflows/pr-checks.yml and
+# cvm-e2e.yml do NOT read this file — they install the toolchain their ref
+# names. Bump them in the same commit whenever `channel` changes here, or CI
+# builds on a different compiler than every developer.
+channel = "1.93.0"
 components = ["rustfmt", "clippy", "rust-analyzer"]
 profile = "minimal"
