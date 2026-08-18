@@ -48,6 +48,16 @@ worker leaks the wallet-wide `spendingKey` onto the page for proving
 The worst findings are not in the vault or the matcher. They are in the
 new client that talks to them.
 
+**Addendum 2026-08-17 (tutorial Waves 3–4).** Reading the remaining
+sources to write `tutorial/` turned up **R-21** (ICICLE prove still
+dumps `.wtns` on `temp_dir()`, missed the SW-14 tmpfs), **R-22**
+(GPU compose still publishes `:8080` after the CPU T-03P cutover),
+and more R-11 rows (match_batch pot18, deposit Poseidon3 in both
+the circuit header and `CRYPTOGRAPHY.md:331`, merkle comments,
+`run_batch` "single public entry point", `set_tee_pubkey` listing
+`verify_match_batch` as TEE-gated, `ROOT_HISTORY_SIZE` still on
+VaultConfig). No new High. No custody or double-spend path.
+
 | ID | Severity | One line |
 |---|---|---|
 | **R-01** | **High** | Unsigned `/release.json` is the whole venue TCB; T-03's trigger has fired |
@@ -70,6 +80,9 @@ new client that talks to them.
 | R-18 | Medium | Image default listen is `0.0.0.0` (SW-19-class default) |
 | R-19 | Low | Proxy forwards `Authorization` to the RPC upstream |
 | R-20 | Low | HTTP proxy omits the Origin check the session endpoints already do |
+| R-21 | Medium | ICICLE prove writes the private `.wtns` to `temp_dir()`, missing the SW-14 tmpfs |
+| R-22 | Low | GPU compose still publishes `:8080` and has no RA-TLS listener after the CPU T-03P cutover |
+| R-23 | Low | `initialize_tree` rejects `tree_id >= num_trees` as `InvalidProof` |
 | PF-28 | Perf-Nit | Encrypted inventory is rewritten in full on every mutation |
 | PF-29 | Perf-Nit | Browser recovery walks the vault's entire signature history |
 | PF-30 | Perf-Nit | Recovery does sequential `getAccountInfo` per note |
@@ -547,16 +560,35 @@ double-spend or leaf shape as current.
 |---|---|---|
 | `ConsumedNoteEntry` is "keyed on the note COMMITMENT" | seeds `[b"consumed_note", note_use_tag]` | `programs/vault/src/instructions/merge.rs:224-226` vs `:234` |
 | Leaf is `Poseidon11(DOMAIN_LEAF_V2=23, … note_a, note_b, …)` | v3 `Poseidon12(31, … tag_a, tag_b, … relock_digest)` | `crates/darknyx-tee/src/prover/leaf.rs:15-21` vs `:83-120`; same drift in `packages/sdk/tests/helpers/match-batch-prover.ts:17-28` |
-| `withdraw` "rejects while a NoteLock exists, even an expired one" | S-03: rejects only a **live** lock | `programs/vault/src/instructions/lock_note.rs:130-131` vs `withdraw.rs:121-128` |
+| `withdraw` "rejects while a NoteLock exists, even an expired one" | S-03: rejects only a **live** lock | `programs/vault/src/instructions/lock_note.rs:130-131` **and** `programs/vault/src/state.rs:20-21` vs `withdraw.rs:121-128` |
 | Recover "payload names the exact consumed commitment" | body: "The chain no longer publishes the consumed commitment" | `packages/sdk/src/fills/recover.ts:5-6` vs `:88-91` |
 | VALID_INPUT: withdraw via `NullifierEntry` | `NullifierEntry` removed; withdraw is tag-keyed `ConsumedNoteEntry` | `circuits/valid_input/circuit.circom:53-54` |
 | Batched settle "coexists with `tee_forced_settle`" | non-batched handler is gone from `lib.rs` | `tee_forced_settle_batched.rs:27-30` |
+| Matcher tick "log + skip" on stale oracle | body `pause_for(Oracle)` | `matcher/interval.rs:683-685` vs `:696-704` |
+| Scheduler jobs "accumulate forever in 4g.1" | `MAX_RETAINED_BATCHES = 64` (SW-08) | `settle/scheduler.rs:19-20` vs `:33-49` |
 | `bootSessionId` "bound by the verified TDX quote" | SW-18: `/info` only; `report_data` is full | `packages/browser-client/src/trader/intent-authorizer.ts:26-27` |
+| N=16 is 234,025 constraints / pot18 | note-use tags: 285,401 / **pot19** | `circuits/templates/match_batch.circom:16-31` vs `scripts/build-circuits.sh:111-119` |
+| VALID_DEPOSIT inner is `Poseidon3(27, owner, nonce)` | arity **4**, third private is `noteSecret` | `circuits/valid_deposit/circuit.circom:19-21` vs `:65-71` |
+| Merkle sync sources include `withdraw` | withdraw appends nothing | `crates/darknyx-tee/src/merkle/mod.rs:4` vs `events.rs:16-17` |
+| Mirror "until Phase 2b wires up it simply starts empty" | `MerkleSync` is spawned from `main.rs` | `merkle/mirror.rs:23-24` vs `sync.rs` + `main.rs:630-671` |
+| Sync floor filters `getSignaturesForAddress` | implementation is gTFA (`getTransactionsForAddress`) | `config.rs` ~181–183 and compose comment vs `merkle/sync.rs:3-14` |
+| `Prover` trait comment "the stub today" | three backends implement it | `prover/groth16.rs:86-89` |
+| Native witness iff `DARKNYX_TEE_WITNESS=native` | any value except `"wasm"` is native | `rapidsnark_prover.rs` field doc vs the `!= "wasm"` branch |
+| `Groth16ProofBytes.piA` "NOT yet negated — on-chain wrapper negates" | callers negate; `groth16-solana` does not | `packages/sdk/src/zk/prover-suite.ts:10` vs `groth16-format.ts:41-44` and `convert.rs:7-8` |
+| Daemon example gateway `…-8080.dstack-…` | T-03P cutover is `-8443s.` | `packages/daemon/bin/daemon.ts:9` |
+| `run_batch` is "the single public entry point" | production is `PreparedMatchTick::next_page` (`single_fill=true`) | `crates/darkpool-matcher/src/lib.rs:232-236` vs `:175` |
+| Deposit inner `Poseidon3(27, owner, nonce)` | arity **4** + `note_secret` | `CRYPTOGRAPHY.md:331` (same lie as the circuit header) |
+| `set_tee_pubkey` "every TEE ix (`lock_note`, `verify_match_batch`, …)" | `verify_match_batch` is anyone-can-pay | `set_tee_pubkey.rs:3-5` vs `verify_match_batch.rs:22-25` |
+| `ROOT_HISTORY_SIZE` "in the zero-copy VaultConfig" | post-sharding the ring is on each `MerkleTree` | `programs/vault/src/state.rs:13-14` |
+| Marker has "close-on-consume lifecycle" | Tx D must leave it open; close is a separate post-expiry ix | `state.rs:387-390` vs `tee_forced_settle_batched.rs:22-25` |
+| `create_relock_pda` mentions `cancel_order` | no such vault ix; release is `release_lock` | `tee_forced_settle.rs:154-156` |
 
 **Failure scenario.** A later edit "aligns" merge (or a new consume
 path) with the merge comment and re-keys `ConsumedNoteEntry` on the
 commitment. That reopens C-01: merge consumes `ConsumedNoteEntry[C]`,
-settle/withdraw consume `ConsumedNoteEntry[tag]`.
+settle/withdraw consume `ConsumedNoteEntry[tag]`. A later author
+trusting the match_batch header stays on pot18 and the N=16
+ceremony does not fit.
 
 **Fix.** One doc-accuracy pass *after* the code fixes in this
 engagement land, same as C6 last time. Rename the merge loop binding
@@ -802,6 +834,121 @@ would 403.
 
 **Fix.** Reuse the session Origin + optional `Sec-Fetch-Site` check
 on `handleHttp`. Cheap.
+
+---
+
+### R-21 — ICICLE prove writes the private `.wtns` to `temp_dir()`, missing the SW-14 tmpfs
+
+**Severity:** Medium
+**Category:** Security (C4 / SW-14 incomplete on the GPU path)
+**Lockstep:** yes — `icicle_prover.rs` ↔ `scratch.rs` ↔ compose `/witness`
+
+**Anchors:**
+`crates/darknyx-tee/src/prover/icicle_prover.rs:351-378`
+(`icicle_prove_wtns` does `std::env::temp_dir().join("darknyx-icicle-…")`,
+writes `witness.wtns` + `proof.json` + `public.json`, `Drop` unlinks),
+`crates/darknyx-tee/src/prover/scratch.rs:11-70`
+(`witness_scratch_base` prefers `DARKNYX_TEE_WITNESS_DIR` then `/dev/shm`),
+`deploy/docker-compose.yaml:54-82` (tmpfs `/witness`, uid 1100).
+
+**Problem.** SW-14 moved the *witness-gen* scratch (`input.json`) off
+the overlay and onto a RAM-backed dir because that file is the
+private match: per-slot amounts, both owner commitments, the
+clearing price. The ICICLE *prove* step takes paths, not buffers,
+and landed afterwards. It dumps the same `.wtns` (the full private
+witness, just in binary form) under `std::env::temp_dir()` —
+container overlay `/tmp`, not `/witness`.
+
+On dstack the overlay happens to sit on the LUKS data disk, which
+is why SW-14 itself was Medium not High. Unlink-after-write on a
+journaling FS is the theatre `scratch.rs` already refused to call
+a fix. A GPU CVM is the deployment that actually runs this
+function; that is also the deployment that most needs the
+private witness off disk (and off a non-CC GPU — SW-32 is a
+separate gate).
+
+Rapidsnark prove is in-memory (`groth16_prover_prove` takes a
+buffer). Only ICICLE misses the helper.
+
+**Failure scenario.** `DARKNYX_TEE_PROVER=icicle` on a GPU image.
+Every batch writes `witness.wtns` to `/tmp/darknyx-icicle-<pid>-…`.
+A crash between `write` and `Drop`, or a leftover after a hard
+kill, leaves the private match on the overlay. Compose's `/witness`
+tmpfs is unused by this path.
+
+**Fix.** Route `icicle_prove_wtns` through `witness_scratch_base()`
++ `create_private_dir` (0700 at creation). Do not add a second
+scratch policy. Add a unit test next to `scratch.rs` that the
+icicle helper's directory resolves to the same base.
+
+---
+
+### R-22 — GPU compose still publishes `:8080` after the CPU T-03P cutover
+
+**Severity:** Low
+**Category:** Transport / deploy lockstep
+**Lockstep:** yes — `deploy/docker-compose.yaml` ↔ `deploy/docker-compose.gpu.yaml`
+
+**Anchors:**
+`deploy/docker-compose.gpu.yaml:85` (`DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"`),
+`:130` (`ports: "8080:8080"`),
+no `DARKNYX_TEE_TLS_BIND` / `8443` / `TRANSPORT_MODE` block,
+contrast `deploy/docker-compose.yaml` (8080 unpublished, `8443:8443`,
+`DARKNYX_TEE_TRANSPORT_MODE:-ra-tls`, T-03P 2026-08-16).
+
+**Problem.** T-03P closed the programmatic cuckoo on the CPU
+image by unpublishing plaintext 8080 and terminating TLS in
+the enclave on the `-8443s.` passthrough. The GPU compose is a
+separate file (correct — nvidia `deploy.resources` breaks
+TDX-only hosts) and was not updated. A GPU CVM still offers
+gateway-terminated HTTP on a published port. Clients pointed
+at `https://<app>-8080.…` are on the pre-T-03P path even if
+the operator believes "we shipped RA-TLS."
+
+Not High: GPU is an opt-in prepaid window, not the default
+devnet path, and the binary still defaults
+`gateway-terminated` when the env is unset. It is the same
+class as a missed lockstep, not a new cuckoo in the CPU
+ceremony.
+
+**Failure scenario.** Operator deploys
+`docker-compose.gpu.yaml`, follows the CPU runbook's
+`-8443s.` URL, times out, falls back to `:8080`, and trades
+through the gateway. Compose hash of the GPU file never
+included a TLS listener, so attestation does not notice.
+
+**Fix.** Mirror the CPU transport block (bind 8443, publish
+only 8443, `TRANSPORT_MODE=ra-tls`) or document GPU as
+explicitly gateway-terminated in the GPU runbook and refuse
+`-8443s.` in that regime. Do not silently share one runbook.
+
+---
+
+### R-23 — `initialize_tree` rejects a bad `tree_id` as `InvalidProof`
+
+**Severity:** Low
+**Category:** Software engineering (C8 / SW-15 class — wrong
+attribution)
+**Lockstep:** no
+
+**Anchors:**
+`programs/vault/src/instructions/initialize_tree.rs:32`
+(`require!(tree_id < cfg.num_trees, VaultError::InvalidProof)`),
+`errors.rs:6-7` (`InvalidProof` = 6000, "Invalid Groth16 proof").
+
+**Problem.** A governance range check (shard id vs
+`num_trees`) shares the code CLAUDE.md §5 documents as
+"you forgot to regenerate the VK." The instruction does
+not verify a proof. An operator who mistypes `tree_id`
+on a foundation run is sent to `build-circuits.sh`.
+
+**Failure scenario.** `initialize_tree(tree_id=4)` on a
+K=4 vault (`valid ids 0..3`) → `InvalidProof (6000)`.
+No circuit was involved.
+
+**Fix.** A dedicated `InvalidTreeId` (or reuse
+`InvalidKeyCount` / a governance variant). Do not
+extend `InvalidProof`.
 
 ---
 

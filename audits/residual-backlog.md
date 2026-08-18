@@ -1,10 +1,11 @@
 # Darknyx residual audit and release backlog
 
-**As of:** 2026-08-15
+**As of:** 2026-08-17
 
-**Validated against:** `main` @ `fc88040` (PR #140 merged), plus the 2026-08-15
-`audit_8` review of the browser trader, the switchable Pyth producer, and the
-note-use-tag lockstep. Prior index was validated against `d69248b`.
+**Validated against:** `main` @ `d5e4656` (PR #159 merged), plus the 2026-08-17
+`audit_9` review of the RA-TLS transport stack (PRs #143–#152, #157–#159) and
+the `audit_7` §12 carry-forward settle/crypto files. Prior index was validated
+against `fc88040` with the 2026-08-15 `audit_8` review.
 
 This is the canonical entry point for work that remains after the Darknyx
 security, protocol, TEE, infrastructure, daemon, and performance reviews. It
@@ -50,6 +51,9 @@ ledgers are:
 - [`audit_8/audit_8_findings.md`](audit_8/audit_8_findings.md)
   for `R-` / `PF-28…` findings (browser trader, oracle source switch,
   note-use-tag lockstep);
+- [`audit_9/audit_9_findings.md`](audit_9/audit_9_findings.md)
+  for `TR-` / `PF-31…` findings (RA-TLS transport stack, carry-forward
+  settle/crypto files);
 - this document for the formerly orphaned `A-3` and `D-01…D-09`
   dispositions and for the cross-tracker residual view.
 
@@ -74,21 +78,52 @@ security backlog.
 
 ## Executive answer
 
-**`audit_8` (2026-08-15) is the current high-priority queue.** Four new High
-findings sit on the browser trader and the default Pyth producer: `R-01`
-(unsigned `/release.json` is the venue TCB; `T-03`'s re-entry condition has
-fired), `R-02` (push-oracle mode trusts RPC account bytes as a Pyth price),
-`R-03` (vault worker returns the wallet-wide `spendingKey` to page JS), and
-`R-04` (backup restore resets the HD order index — SW-10 on a new client).
-The note-use-tag cutover (PR #113) was re-read and is **clean**: one consume
-namespace, tag bound to a membership-proven commitment, consumed input
-commitments off Tx D.
+**`audit_9` (2026-08-17) adds one High on the new RA-TLS stack: `TR-01` —
+trader-host relays the browser `/v1/stream` upstream over a plain, ungated
+`ws` client that cannot even complete TLS against the enclave's self-signed
+certificate (mechanically verified), so the browser stream is either down
+against a cutover CVM or gets "fixed" with the accept-any-certificate bypass
+CLAUDE.md §3.4b forbids. `TR-02` (Medium) is a check-then-dispatch socket
+race in the verified fetch that an on-path actor can theoretically exploit to
+capture one authenticated request per won race. The rest is Low/Info
+(`TR-03…TR-09`, `PF-31`). The RA-TLS core itself — manifest, identity,
+verification core, WS gate, Rust↔TS lockstep — read **clean**; the
+T-03P closure's live evidence is corroborated by source. `audit_8`'s
+`R-01…R-04` High queue is unchanged and still open; `TR-01` belongs in the
+same browser/host slice as `R-01`/`R-18`.
 
-The previous executive answer, retained below as history of the `audit_7`
-close-out:
+**`audit_9` Part B (same day, owner-requested supplement on the funds /
+privacy / intent-leak lenses for the Solana program + TEE trust surfaces)
+adds a second High and two governance Mediums: `TR-10` — the GPU compose
+never got the RA-TLS cutover, so every GPU deployment carries all order
+bodies and fill memos plaintext through the dstack gateway, while the
+cutover guard checks only the CPU compose (run against the GPU file, it
+fails — CI just never points it there); `TR-11` — the icicle prover
+re-introduced SW-14's exact shape (full private witness to a 0755 `/tmp`
+dir, ignoring `DARKNYX_TEE_WITNESS_DIR`); `TR-12`/`TR-13` — fee/owner and
+TEE-key rotation are instant, un-timelocked admin powers (tax-to-100% +
+venue-wide settle halt; custody itself is circuit-safe). The supplement's
+most valuable negative results: the malicious-enclave capability matrix
+holds — output/fee owner commitments are `<==`-bound in
+`match_batch.circom`, the tag-keyed consume-once namespace is consistent
+across all three spend paths, the journal persists no
+amounts/inners/openings/viewing keys, and fills-channel isolation is
+JWT-account-keyed end to end.
 
-**Three unresolved high-priority code-remediation findings remain: `SW-07`
-(Critical), `CA-01` (Critical), and `SW-01` (High).**
+The previous executive answers, retained as history:
+
+**`audit_8` (2026-08-15).** Four High findings on the browser trader and the
+default Pyth producer: `R-01` (unsigned `/release.json` is the venue TCB;
+`T-03`'s re-entry condition has fired), `R-02` (push-oracle mode trusts RPC
+account bytes as a Pyth price), `R-03` (vault worker returns the wallet-wide
+`spendingKey` to page JS), and `R-04` (backup restore resets the HD order
+index — SW-10 on a new client). The note-use-tag cutover (PR #113) was
+re-read and is **clean**: one consume namespace, tag bound to a
+membership-proven commitment, consumed input commitments off Tx D.
+
+**`audit_7` close-out.** Three unresolved high-priority code-remediation
+findings remained: `SW-07` (Critical), `CA-01` (Critical), and `SW-01`
+(High).
 
 > **Update 2026-08-02 — both Criticals are CLOSED, and `SW-01` with them.** `SW-07` (with `SW-24`)
 > merged as PR #97 and was **validated on a real CVM**: after a live
@@ -273,7 +308,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | PF-27 (**recovery critical path**), PF-20, PF-14 |
+| **Members** | PF-27 (**recovery critical path**), PF-20, PF-14, PF-31 |
 | **Root cause** | An `await`ed single-account read inside a `for` loop, where `getMultipleAccounts` batches 100 per call. |
 | **Sites** | `settle/recover.rs:304-308,332` (boot, up to **3N** round-trips before the enclave resumes settling); `settle/lock_sweep.rs:229-231`; `daemon/settlement-tracker.ts:64-79`; `api/transparency.rs:167-172`. |
 | **Counter-example in repo** | `settle/submit.rs:408-425` already passes the whole slice to one `get_signature_statuses`. |
@@ -285,7 +320,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | **SW-01 (High)**, SW-20 (Low) |
+| **Members** | **SW-01 (High)**, SW-20 (Low), TR-15 (Low) |
 | **Root cause** | `api/error.rs` gives every constructor `m: impl Into<String>` rendered verbatim into `{code, message}`; the daemon's control API echoes `err.message` the same way. The `code` half is already a stable closed set. |
 | **Shared fix** | Keep the codes, close the messages: a fixed label plus a correlation id at both API boundaries, with detail going to logs. Add a redacted `Display` for the RPC endpoint so the credential cannot re-enter by another route. |
 | **Why together** | Same defect on both sides of the wire, and one regression test shape covers both: **no `api-key` substring may appear in any response body**. |
@@ -295,7 +330,11 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven more after the v11 / browser landing) |
+<<<<<<< Updated upstream
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven after v11 / browser, plus six more from the Wave 3 teaching pass) |
+=======
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven more after the v11 / browser landing); **TR-03, TR-09, TR-17** (five more after the RA-TLS landing, `audit_9`) |
+>>>>>>> Stashed changes
 | **Root cause** | Module docs describe intended, retired, or planned behaviour as current: a promised eviction never built, a "keys never leave here" getter used at five call sites, `interval.rs` naming a function the enclave does not call, `canonical_payload_hash` called "shared" when it has four implementations, a revocation denylist described as in-memory after persistence landed. |
 | **Shared fix** | One doc-accuracy pass over module headers, done *after* the code fixes land so the two are corrected together rather than twice. |
 | **Why together** | This is the single most reliable finding-generator in the sweep — several code findings were located *because* a comment claimed something the code did not do. Treat the docs as an audit surface. |
@@ -305,10 +344,14 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65) |
+<<<<<<< Updated upstream
+| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), **R-21** (Medium — ICICLE prove path never called the SW-14 helper) |
+=======
+| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), TR-11 (Medium — the icicle backend re-introduced SW-14's exact shape) |
+>>>>>>> Stashed changes
 | **Root cause** | The `.wtns`/`input.json` encodes the amounts and owner commitments that amount-privacy (P1b) removed from the leaf and payload — and it crosses two boundaries TDX does not cover: the container filesystem, and GPU device memory. |
 | **Shared fix** | A `tmpfs` mount plus `TMPDIR` covers **all three prover backends at once** (they share `snarkjs.rs::native_witness_wtns`). Require positive confidential-compute evidence before ICICLE accepts `CUDA`, failing closed. |
-| **Why together** | One witness, two escape routes, one owner. SW-32 is a merge condition on PR #65; landing SW-14's mount first means the GPU path inherits the fix. |
+| **Why together** | One witness, two escape routes, one owner. SW-32 is a merge condition on PR #65. The assumption that landing SW-14's mount would make the GPU path inherit the fix is how **R-21** happened: `icicle_prove_wtns` still uses `temp_dir()`. |
 | **Cost** | ~15 min (tmpfs) + ~0.5 day (CC gate). |
 
 ### C8 — Work not validated before it is paid for
@@ -360,15 +403,28 @@ Classes are ordered by the severity of their worst member.
 | **Shared fix** | One daemon performance slice: SQL-side predicates behind indexes, a prepared-statement cache, level-retaining Merkle build, keypair reuse, SSE backpressure. |
 | **Cost** | ~3 days as a slice; individually they will never be scheduled. |
 
+### C13 — The transport verification gate stops at a protocol boundary
+
+| | |
+|---|---|
+| **Members** | **TR-01 (High)**, **TR-10 (High)**, TR-04 (Low), TR-05 (Low), TR-02 (Medium, the temporal variant) |
+| **Root cause** | RA-TLS verification was built per-connection but adopted per-protocol and per-artifact: the HTTP leg of every consumer is gated while the WebSocket leg only where the consumer is the daemon (TR-01); the cutover was applied to the CPU compose while the GPU compose still publishes plaintext `:8080` and the guard only checks the file CI names (TR-10); the gate is checked before dispatch rather than at socket adoption, so a replacement connection can carry one request unverified (TR-02). The daemon's own transport module refuses the half-protected shape ("worse than unprotected, because it reads as protected") — trader-host's relay and the GPU compose were left in exactly that shape. |
+| **Sites** | `packages/trader-host/src/live-proxy.ts:382-388` (ungated upstream WS); `deploy/docker-compose.gpu.yaml:129-130` + `.github/workflows/pr-checks.yml:231` (guard scope); `packages/sdk/src/tee/transport-agent.node.ts:405-447` (check-then-dispatch); `packages/trader-host/src/cvm-transport.ts:73-90` (no boot pin / no staleness); `packages/daemon/bin/daemon.ts` (no `isStale` consumer). |
+| **Counter-example in repo** | `packages/sdk/src/tee/transport-ws.node.ts` — the per-upgrade SPKI gate the relay needs, already live-tested over the passthrough route; and `daemon/src/transport.ts:95-102`, which throws rather than verify HTTP while streaming unverified. |
+| **Shared fix** | Adopt the SDK's gated factory in trader-host's relay (copy the neighbour), pin the boot session on every reconnect, and consume `isStale` in the daemon lifecycle. For TR-02, move verification to socket-adoption time so no dispatch can precede it. |
+| **Why together** | One property — *no credential-bearing byte leaves on a connection whose peer identity was not verified on that connection* — four sites where it currently has an exception. |
+| **Cost** | ~2 days for the class (TR-01 ~1 d; TR-04+TR-05 ~1 d; TR-02's tripwire ~0.5 d, its structural fix ~2–3 d more). |
+
 ### How to sequence the classes
 
 1. **C1** — removes both open Criticals and ships the fuzz property with them.
 2. **C5** — the High, plus rotate the Helius key *today*, independently.
 3. **C7** — 15 minutes of it (the `tmpfs`) is the best value in the whole list.
 4. **C9**, **C2** — cheap, and C2 has a fix that costs less than the finding suggested.
-5. **C3**, **C4** — retention and RPC batching; C4 shortens crash recovery.
-6. **C8**, **C10**, **C11**, **C12** — hygiene slices, each self-contained.
-7. **C6 last**, deliberately: correct the docs *after* the code moves, so both are fixed once.
+5. **C13** — the browser stream is either down or unverified against a cutover CVM today (`TR-01`); schedule with the `audit_8` browser/host slice so the same files move once. **`TR-10` is the one-hour exception inside C13** — the GPU compose fix + widening the guard loop does not touch product code and should land immediately, before any GPU window is next opened.
+6. **C3**, **C4** — retention and RPC batching; C4 shortens crash recovery.
+7. **C8**, **C10**, **C11**, **C12** — hygiene slices, each self-contained.
+8. **C6 last**, deliberately: correct the docs *after* the code moves, so both are fixed once.
 
 **Two items sit outside the classes and must not be lost in them:** the external
 circuit audit (**F-04**) — a clean generalist read is not an assurance artifact —
@@ -405,7 +461,7 @@ and
 | SW-03 | Medium | TEE settlement | Bound the settle round loop. `settle/worker.rs:973-984` `continue`s without draining `unresolved` when `get_latest_blockhash` fails, and the `settlement_deadline` bound is evaluated from that same call — so it is unreachable exactly when RPC is failing. A sustained outage yields a non-terminating batch holding a `settle_batch_concurrency` slot with no terminal outcome. Restart recovery is unaffected; a running enclave does not self-heal. | **Code complete 2026-08-02** on `remediation/rpc-amplification-and-settle-bound`. Option A: an absolute `Instant` deadline (`REDRIVE_WALL_CLOCK_BUDGET`, 250 slots x 400 ms = 100 s) is computed at loop entry and checked each round, so the bound no longer depends on the `get_latest_blockhash` whose failure is what makes the slot-based bound unreachable. On expiry the remaining matches are marked **Ambiguous**, not Rejected: we could not read the chain, so a send may well have landed, and Ambiguous is the honest state the journal reconciles on restart while the lock sweeper reclaims collateral at expiry. **A second unbounded loop the finding did not name:** the nested `reconcile_consumed_pdas` retry inside the expired-window branch had NO bound of any kind — not even an unreachable one — and it is the path taken precisely once things have gone wrong; the same deadline now bounds it. The budget is a `SettleWorkerCtx` field rather than a bare constant because the loop uses `std::time::Instant` (the Solana clients are not on tokio's clock), so `tokio::time::pause` cannot advance it and a test would otherwise have to wait 100 s. Test: a mock RPC that cuts out exactly when the settle tx enters flight (keyed on the tx being v0 — the settle Tx D's are the only v0 transactions), asserting the batch RETURNS rather than hanging, and that elapsed >= the budget so the outage path was genuinely exercised. That second assertion earned its keep: an earlier version flipped the switch from a watcher task and, under nextest, the settle confirmed in 21 ms — the test passed while testing nothing. Mutation-tested: without the bound it hangs to the 60 s timeout. |
 | SW-08 | Medium | TEE settlement | Implement the settle-job eviction the module doc has promised since "PR 4g.6" and never delivered. `SettleSchedulerState.jobs`/`by_batch` (`settle/scheduler.rs:43-57`) retain every match ever settled for the process lifetime — no prune, retain, or cap exists anywhere; `update`'s "evicted" return path is dead. Each job holds a full `MatchPair` (6 × 32-byte commitments/keys + amounts) plus five base58 signatures, ~800 B, so ~70 MB/day at 1 match/s and ~550 MB/day at 8. The adjacent `metrics` field's own doc (`:53-56`) states the contrast explicitly: it is capped and "never retains order ids, commitments, amounts, prices or proof witnesses" — unlike `jobs`. | **Code complete 2026-08-02** on `remediation/tee-api-bounds`. `MAX_RETAINED_BATCHES = 64`, pruned on insert. A **batch count rather than a wall-clock window**: it is deterministic, needs no timer, and bounds memory directly (which is what was unbounded). Critically, only a **fully-terminal** batch is evictable — a batch with any job still in flight is kept regardless of age, because `update` returns `false` for a missing job and a stage worker that lost its record mid-settle would silently stop recording signatures for a live settlement. Retention is a memory bound, not a deadline. `update`'s formerly-dead "evicted" path is now reachable and documented as such. The endpoint's 404 already documented eviction as expected. Both guards mutation-tested. |
 | SW-11 | Medium | Daemon (client) | Give the daemon a reconciliation path. `daemon.ts:454-476` constructs both stream listeners **without** `onResync`, so the SDK's 1011 "lagged past the buffer" signal (`sdk/orders/trading-ws-client.ts:324,363`) is raised and discarded — even though `fills-listener.ts:51-53` and `orders-listener.ts:27-28` both document re-backfill as the orchestrator's duty. A `FillMemo` is the only in-band delivery of a change note's opening, so notes minted during a gap never enter the store: `balances()` under-reports, and an order that filled inside the gap stays `open` so `lockedCommitments()` keeps excluding its collateral. Restart is not recovery either — `start():450-451` restores only `nextIndex`; `store.ts:281-291` `listActiveOrders()` ("the set to resume after a restart") **has no production caller**, and its SQL terminal set omits `'expired'` present in `types.ts:36-42`. A crash mid-merge leaves `mergeInFlight = true` persisted, permanently disabling that order's auto-merge. | **Code complete 2026-08-02** on `remediation/daemon-recovery-and-control-plane`. Options A + B: `src/reconcile.ts` re-reads order phase from the CVM, re-derives missed note openings via recovery v3, and clears stranded merge latches — wired to `onResync` on BOTH listeners and to `start()`, since a gap and a restart leave the daemon in the same condition. Placement pauses on an INDEPENDENT flag, not `tradingPauseReason` (whose `resumeTrading()` clears unconditionally and would have silently cleared an outstanding TRUST pause); cancellation stays available throughout. An order the CVM has forgotten is NOT given a terminal phase — "forgotten" and "never landed" are indistinguishable here and guessing `cancelled` would release collateral still committed on-chain. Reconciliation is best-effort per item; concurrent calls share one run. The `listActiveOrders` defect the finding flagged is fixed by DERIVING the SQL terminal set from `TERMINAL_PHASES` so the two cannot drift, and the test that covered two of five phases is driven off the same constant (mutation-checked: the old hand-written list fails with `['expired','open','pending']`). |
-| SW-14 | Medium (**High** if the container overlay is unencrypted) | TEE prover / deploy | Stop writing the private match witness to unencrypted storage. `prover/snarkjs.rs:78-94` writes `input.json` to `std::env::temp_dir()` — `/tmp`, the container's writable layer — for the native circom witness generator, which `rapidsnark_prover.rs:68-93` makes the **default** (wasmer is only the fallback when the binary is missing). `ark_prover.rs:389-421` shows the contents: `a_owner_commit`, `b_owner_commit`, `a_amount`, `b_amount`, `a_inner`, `b_inner`, `clearing_price`, `price_remainder`, and every per-slot amount — the values amount-privacy P1b removed from the leaf and the settle payload. `deploy/docker-compose.yaml:41-49,177-182` provisions exactly one LUKS-encrypted volume (`darknyx_state:/var/lib/darknyx-tee`); there is no `tmpfs`, no `TMPDIR`, and no `VOLUME` anywhere. The `Cleanup` guard unlinks on every return path but not on SIGKILL/OOM/CVM crash — the case the recovery drill deliberately induces. | **Code complete 2026-08-02.** `witness_scratch_base()` prefers an explicit `DARKNYX_TEE_WITNESS_DIR`, then `/dev/shm` (tmpfs — the bytes stay in guest RAM, which TDX encrypts in hardware), and only then falls back to `temp_dir()` with a warning so that path is a choice rather than a default. Both compose files now mount `/witness` as `tmpfs` (`size=256m,mode=0700,noexec,nosuid`) and set the variable; the GPU compose matters more, since the same `input.json` is what SW-32 now refuses to copy into non-confidential GPU memory. **Confirmed the escalation condition does NOT hold:** `dstack/basefiles/dstack-prepare.sh` bind-mounts Docker's data-root onto the LUKS-encrypted data disk, so the overlay is encrypted at rest and this stays Medium. Note the helper deliberately lives in an always-compiled module: `snarkjs` is gated behind `rapidsnark`/`icicle`, neither of which builds without a native library, so tests placed there would never run in the standard gate. |
+| SW-14 | Medium (**High** if the container overlay is unencrypted) | TEE prover / deploy | Stop writing the private match witness to unencrypted storage. `prover/snarkjs.rs:78-94` writes `input.json` to `std::env::temp_dir()` — `/tmp`, the container's writable layer — for the native circom witness generator, which `rapidsnark_prover.rs:68-93` makes the **default** (wasmer is only the fallback when the binary is missing). `ark_prover.rs:389-421` shows the contents: `a_owner_commit`, `b_owner_commit`, `a_amount`, `b_amount`, `a_inner`, `b_inner`, `clearing_price`, `price_remainder`, and every per-slot amount — the values amount-privacy P1b removed from the leaf and the settle payload. `deploy/docker-compose.yaml:41-49,177-182` provisions exactly one LUKS-encrypted volume (`darknyx_state:/var/lib/darknyx-tee`); there is no `tmpfs`, no `TMPDIR`, and no `VOLUME` anywhere. The `Cleanup` guard unlinks on every return path but not on SIGKILL/OOM/CVM crash — the case the recovery drill deliberately induces. | **Code complete 2026-08-02.** `witness_scratch_base()` prefers an explicit `DARKNYX_TEE_WITNESS_DIR`, then `/dev/shm` (tmpfs — the bytes stay in guest RAM, which TDX encrypts in hardware), and only then falls back to `temp_dir()` with a warning so that path is a choice rather than a default. Both compose files now mount `/witness` as `tmpfs` (`size=256m,mode=0700,noexec,nosuid`) and set the variable; the GPU compose matters more, since the same `input.json` is what SW-32 now refuses to copy into non-confidential GPU memory. **Confirmed the escalation condition does NOT hold:** `dstack/basefiles/dstack-prepare.sh` bind-mounts Docker's data-root onto the LUKS-encrypted data disk, so the overlay is encrypted at rest and this stays Medium. Note the helper deliberately lives in an always-compiled module: `snarkjs` is gated behind `rapidsnark`/`icicle`, neither of which builds without a native library, so tests placed there would never run in the standard gate. **Remainder: R-21.** The native-witness *generation* path uses the helper; ICICLE's *prove* path (`icicle_prove_wtns`) still writes `.wtns` under `temp_dir()`. |
 | SW-15 | Info | TEE prover | Validate prover-backend output locally. `prover/snarkjs.rs:52-58` builds `G1Affine`/`G2Affine` with `new_unchecked` (no on-curve, no subgroup check) and `fq_dec` uses `from_le_bytes_mod_order`, which reduces an out-of-range value instead of rejecting it. Not a soundness hole — the source is the enclave's own rapidsnark/icicle backend, the public inputs are separately guarded by `assert_public_inputs`, and a bad point fails closed on-chain. The cost is attribution: a backend defect surfaces as `InvalidProof (6000)` from Tx B after a ~2 s prove, blamed on the circuit. | **Code complete 2026-08-02.** `parse_snarkjs_proof` now checks each point is on-curve AND in the correct subgroup — the second matters because a point can satisfy the curve equation while living in a small-order subgroup. Still not a soundness hole (the source is the enclave's own backend and a bad point fails the on-chain pairing regardless); the value is that the failure now names the PROVER locally instead of arriving as `InvalidProof (6000)` from the vault after the settle transaction was built, signed and paid for. |
 | SW-19 | Medium | Daemon (client) | Make the daemon's control plane secure by default. `bin/daemon.ts:287` takes `controlToken` from `DARKNYX_DAEMON_CONTROL_TOKEN`, which is **unset by default with no warning**, and `control-api.ts:88-93` puts the entire auth check inside `if (controlToken)` — so the shipped default is an unauthenticated local server exposing `POST /orders` (spends a real note) and `POST /deposit` (moves funds on-chain). Loopback binding stops other hosts, not the operator's browser: `readJson:68-73` parses the body regardless of `Content-Type`, so a cross-origin `POST` with `text/plain` is a CORS *simple request* — no preflight, side effect lands. With no `Host`/`Origin`/`Sec-Fetch-Site` check (`:94-96`), DNS rebinding additionally makes every `GET` readable, including `/notes`, `/balances`, and the `/tee/*` proxy that the daemon services with the operator's own gateway bearer token. The module doc at `:18-19` ("set it whenever the host isn't single-tenant") frames the threat as other users on the box, steering operators away from the browser vector on exactly the machines where it applies. | **Code complete 2026-08-02.** Three layers, since each is bypassable alone: the bearer token is REQUIRED (`bin/daemon.ts` generates one at boot, 0600 beside the DB, and prints the path — a cross-origin page cannot read it, which is what defeats rebinding as well as CSRF); browser-originated requests are refused on Origin/Referer/Sec-Fetch-Site with Host forced to loopback, checked BEFORE auth so a probe cannot learn whether a token is valid; and mutations require `Content-Type: application/json`, which is not a simple content type and forces a preflight. The module doc that framed the threat as other USERS on the machine — steering workstation operators away from the token — is rewritten to name the browser vector. The existing suite ran token-less and therefore encoded the insecure default; it now authenticates. The rebound-Host test uses raw `node:http` because `Host` is a forbidden header for fetch/undici and a fetch-based version would pass against unfixed code. |
 | SW-20 | Low | Daemon (client) | Control-server input and error hygiene, four items. (1) `control-api.ts:68-73` `readJson` accumulates the body with **no size cap** — unauthenticated memory exhaustion under SW-19's default. (2) `:79-81` returns `err.message` verbatim to the caller; the daemon holds `DARKNYX_DAEMON_RPC_URL` with the Helius key in its query string, and transport-level Solana client failures typically embed the request URL — **SW-01's twin on the client side**, exiting through a server that by default has no auth. (3) `:90` compares the bearer token with `!==`, which short-circuits on first difference. (4) `tee-read.ts:60-62` interpolates `batchId` into the path unencoded while its sibling `instrument:54-58` uses `encodeURIComponent`; no exploit was constructible — `new URL()` normalizes `../` out of `pathname` before the `/tee/` test, and percent-encoded traversal stays encoded and matches no axum route — but the only thing separating the two is incidental normalization nothing documents as load-bearing. | **Code complete 2026-08-02.** All four: body capped at 256 KiB (413); a closed-set error label out with detail to the log — SW-01's twin, and the daemon holds `DARKNYX_DAEMON_RPC_URL` whose Helius key rides in the query string; `timingSafeEqual` for the bearer; and `settlementStatus` encodes its caller-controlled path segment like its `instrument` sibling already did. All six new control-plane guards mutation-tested. |
@@ -448,7 +504,7 @@ and
 | R-08 | Medium | Trader-host | Bind CVM-account provision to WebAuthn or a wallet signature. Origin is not identity. TEE has no account deletion. | **Open — `audit_8`.** |
 | R-09 | Medium | Browser wallet | Put `solana:devnet` \| `solana:mainnet` in the hashed release pins and pass it to `ExternalWalletController`. Default is hardcoded `solana:devnet`. | **Open — `audit_8`.** |
 | R-10 | Low | Compose | Default pair `mainnet` + push is internally illegal; the escape is `development`, which is how R-02 becomes the easy deploy. Same change as R-06. | **Open — `audit_8`.** |
-| R-11 | Info | Docs | Comment-vs-code cluster on merge / leaf headers / lock_note / recover.ts / valid_input / intent-authorizer. Do the C6 pass after the code fixes. | **Open — `audit_8`.** |
+| R-11 | Info | Docs | Comment-vs-code cluster on merge / leaf headers / lock_note / recover.ts / valid_input / intent-authorizer / match_batch pot18 / deposit Poseidon3 / merkle withdraw+Phase 2b+gTFA / Prover "stub" / `piA` negation layer / daemon `:8080` example. Do the C6 pass after the code fixes. | **Open — `audit_8`.** Wave 3 teaching pass added the extra rows. |
 | R-12 | Low | Public docs | GitBook instruments + system-status omit `source` / `oracle_mode` and call every venue "authenticated". Copy `docs/tee-architecture.md` §6. | **Open — `audit_8`.** |
 | R-13 | Info | Loadgen helper | `read-pyth-push-price.mjs` freshness is 90 s; TEE push is 420 s. | **Open — `audit_8`.** |
 | R-14 | Low | SDK attestation | Browser `getJson` (`packages/sdk/src/tee/attestation.ts:111-129`) has no abort and no body cap. Copy the daemon's SW-17 fix. | **Open — `audit_8`.** |
@@ -460,7 +516,28 @@ and
 | R-18 | Medium | Trader-host image | Dockerfile sets `DARKNYX_TRADER_LISTEN_HOST=0.0.0.0`; library default is loopback. SW-19-class. | **Open — `audit_8`.** |
 | R-19 | Low | Trader-host | `Authorization` is forwarded to the RPC upstream. Forward only on venue URLs. | **Open — `audit_8`.** |
 | R-20 | Low | Trader-host | HTTP proxy `admit()` is cookie-only; session and WS already check Origin. Copy the neighbour. | **Open — `audit_8`.** |
+| R-21 | Medium | TEE prover / SW-14 | `icicle_prove_wtns` writes `witness.wtns` under `temp_dir()`, not `witness_scratch_base()` / compose `/witness`. Route through the SW-14 helper. | **Open — `audit_8`.** Found in the Wave 3 teaching pass. |
+| R-22 | Low | GPU compose / T-03P | `docker-compose.gpu.yaml` still publishes `:8080` and has no RA-TLS listener. Mirror the CPU transport block or document GPU as gateway-terminated. | **Open — `audit_8`.** Found in the Wave 4 teaching pass. |
+| R-23 | Low | Vault governance | `initialize_tree` uses `VaultError::InvalidProof` for `tree_id >= num_trees`. New variant. | **Open — `audit_8`.** Found in the Wave 4 teaching pass. |
 | PF-30 | Perf-Nit | Browser recovery | Sequential `getAccountInfo` per recovered note. Batch via the host's existing `getMultipleAccounts` allowlist. | **Open — `audit_8`.** |
+| TR-01 | **High** | Trader-host + T-03P | Gate the browser stream relay's upstream WebSocket: wrap the relay's `new WebSocket(...)` (`live-proxy.ts:382-388`) in the SDK's `createVerifiedWebSocketFactory` after a `verifyTransportOnSocket` for the pins, refusing (and closing downstream) on SPKI mismatch. A stock `ws` client cannot handshake with the enclave's self-signed RA-TLS certificate at all (verified: default client → `REJECTED: self-signed certificate`), so today the browser stream is down against a cutover CVM or gets "fixed" with `NODE_TLS_REJECT_UNAUTHORIZED=0` — the §3.4b anti-pattern. Same shape `check-cvm-suites-use-transport.sh` already guards in test code. | **Open — `audit_9`.** Evidence: [`audit_9/audit_9_findings.md`](audit_9/audit_9_findings.md). |
+| TR-02 | Medium | SDK transport | Close the check-then-dispatch socket race in `createVerifiedFetch` (`transport-agent.node.ts:405-447`): a pooled-socket death between `ensureVerified` and undici's dispatch makes the replacement socket carry the request with no verification gate (the connector accepts any certificate). Strongest fix: verify at socket-adoption inside the custom connector; cheap tripwire: post-response socket-identity assertion + credential rotation. | **Open — `audit_9`.** Mechanism established from the adapter's own state model; practical exploitability needs an on-path lab PoC (§5 of the findings). |
+| TR-03 | Low | TEE API + clients | Ship the `transport_mode` field `config.rs:66-70` promises on `/info` (it is absent from `/info`, `/system/status`, and the OpenAPI), and have the daemon pin it at startup the way R-06 pins `oracle_mode`. | **Open — `audit_9`.** C6 drift + missing pinning surface. |
+| TR-04 | Low | Trader-host | Use `createVerifiedTransport` (or pass `expectedBootSessionId` on reconnect) in `cvm-transport.ts` so a restarted enclave fails re-verification instead of silently passing on compose+signers alone; surface `isStale()`. | **Open — `audit_9`.** |
+| TR-05 | Low | Daemon | Consume `isStale()` on the existing attestation-refresh cadence: pause placement, rebuild the transport, re-attest, resume. Today a CVM restart degrades every request with `boot_session_mismatch` and no lifecycle path trips. | **Open — `audit_9`.** |
+| TR-06 | Info | SDK transport | Make `verifyTransportOnSocket` destroy the socket on the three early failure paths (non-OK status, oversize/undecodable body, `parseObservedManifest` throw) its doc contract at `:287-289` claims to cover. Hygiene: no credential crosses on those paths. | **Open — `audit_9`.** |
+| TR-07 | Low | Public docs | Rewrite the programmatic half of `docs/gitbook/api/transport-and-attestation.md` around the RA-TLS route (`8443s`, `/transport-attestation`, boot-scoped cert); it still describes gateway-terminated TLS as current (0 hits for ra-tls/8443s). R-12 class. | **Open — `audit_9`.** |
+| TR-08 | Low | TEE settlement | Bound the marker-sweep ingress (`marker_sweep.rs:88` unbounded channel → `persistence/markers.rs:53-57` unbounded set); evict only expired roots past a cap. C3 class; growth bounded by close-path health, not by an attacker. | **Open — `audit_9`.** |
+| TR-09 | Info | Docs | Three C6 instances on the carry-forward files: `lock_note.rs:7` says 5 accounts (6), `lock_note.rs:24-28`/`submit_lock.rs:44-45` describe a "missing valid_input_proof" mode no code implements, `alt.rs:3-5`/`settle_batched.rs:171` say five per-batch ALT PDAs (seven). Fold into R-11's pass. | **Open — `audit_9`.** |
+| PF-31 | Perf-Nit | TEE settlement | Batch the marker sweep's per-root `get_account_info` (`marker_sweep.rs:156-175`) through the existing `get_multiple_accounts`; each pre-expiry root is polled every 5 s for its whole 300-slot TTL. C4 class, new site. | **Open — `audit_9`.** |
+| TR-10 | **High** | Deploy / GPU path + CI | Apply the RA-TLS cutover to `deploy/docker-compose.gpu.yaml` (mode `ra-tls`, publish 8443, unpublish 8080) and make `check-ratls-cutover.sh` loop over every `deploy/docker-compose*.yaml` — it currently checks only the CPU file CI names, and **fails on the GPU compose when pointed at it** (verified). Until closed, every GPU deployment carries all order bodies and fill memos plaintext through the dstack gateway. | **Open — `audit_9` Part B.** C13 class. |
+| TR-11 | Medium | TEE prover | Route `icicle_prove_wtns` through `scratch::witness_scratch_base()` + `create_private_dir` — it currently writes the full private witness to a 0755 `/tmp` dir (`icicle_prover.rs:361-378`), bypassing the SW-14 fix the rapidsnark path has and ignoring `DARKNYX_TEE_WITNESS_DIR`. | **Open — `audit_9` Part B.** C7 class. |
+| TR-12 | Medium | Vault governance | Put a brake on `set_protocol_config`: a timelock, a sub-100% on-chain fee ceiling, and/or root-key co-signature for fee + protocol-owner rotation. Today a captured ops admin sets itself the fee recipient at 10_000 bps in one tx (`set_protocol_config.rs:31-47`), read live by the config digest — a full trading-value drain with no delay window. | **Open — `audit_9` Part B.** Pairs with N-19. |
+| TR-13 | Medium | Vault governance | Same timelock mechanism for `set_tee_pubkey` (`set_tee_pubkey.rs:36-63`): a captured ops admin halts every settle and lock in one tx. Custody is safe (withdraw/merge permissionless, locks expire) — with TR-12 this is the complete tax+halt power, neither arm delayed. | **Open — `audit_9` Part B.** |
+| TR-14 | Low | Vault + circuit | Bind `create_wallet`'s registrant: add the owner pubkey as a second public input to VALID_WALLET_CREATE (**lockstep** circuit+VK+SDK change) or delete the unused `WalletEntry.owner` field. Front-runnable today (1 public input, `create_wallet.rs:34,44`); no current reader = no authority impact yet. | **Open — `audit_9` Part B.** |
+| TR-15 | Low | TEE API | Close the `SettlementFailed{reason}` set at the matcher boundary as `JobStatus` did — `scheduler.rs:577` forwards `{e:?}` diagnostics to the client orders channel, contradicting `worker.rs:626-628`'s "never served to a client". C5 class. | **Open — `audit_9` Part B.** |
+| TR-16 | Info | Vault privacy | Three emission notes: `NoteLocked` discloses the mint (tag is mint-independent), `Withdrawn` publishes an on-chain-unconsumed nullifier, settle txs pair order_ids (inherent). Also: `deposit` accepts any mint (dust only). | **Open — `audit_9` Part B.** |
+| TR-17 | Low | Docs | `CRYPTOGRAPHY.md:114` (the canonical threat table) still says the TEE "terminates no TLS" and defers T-03 wholesale — stale since the 2026-08-16 cutover; rewrite for the two-regime reality + T-03B. Same pass as TR-07. | **Open — `audit_9` Part B.** C6 class. |
 
 The code anchors are
 `crates/darknyx-tee/src/main.rs::spawn_governance_monitor`,
@@ -580,16 +657,29 @@ SW-11.
 
 0. **`audit_8` first, before any external browser user or real value.**
    Fix **R-01** (bake or sign `/release.json`) in the same slice as pulling
-   **T-03** off the deferred list. Fix **R-03** (stop `spendingKey` leaving
-   the worker) and **R-04** (restore must HD-gap-scan) before calling the
+   **T-03** off the deferred list. Fix **R-03** (stop `spendingKey` leaving the
+   worker) and **R-04** (restore must HD-gap-scan) before calling the
    browser non-custodial. Fix **R-02** / **R-06** / **R-10** together: default
    compose to router, pin `oracle_mode` in the daemon, and do not let push
    open a trading gate on a value-bearing boot. **R-05** is an hour
    (`redirect: "error"` in `fetchBounded`). **R-07** + **PF-29** are the
+<<<<<<< Updated upstream
    browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in
    the same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
-   each about an hour). **R-11** / **R-12** / **R-13** last, after the
+   each about an hour). **R-21** is the leftover SW-14 hole on the
+   ICICLE prove path (route through `witness_scratch_base`). **R-22**
+   when the next GPU compose is rebuilt (mirror CPU RA-TLS or
+   document the lag). **R-11** / **R-12** / **R-13** last, after the
    code moves.
+=======
+   browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in the
+   same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
+   each about an hour). **R-11** / **R-12** / **R-13** last, after the
+   code moves. **`audit_9`'s TR-01 joins this slice** — it is the same
+   trader-host/browser boundary, and the stream is ungated (and, against a
+   cutover CVM, simply down) until it lands; TR-04/TR-05 ride along, and
+   TR-02's tripwire is worth taking in the same pass.
+>>>>>>> Stashed changes
 1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
    in-band recovery. Ship the fail-closed half (divergence stops tree reads and
    pauses trading) even if the scope fix lands separately.
