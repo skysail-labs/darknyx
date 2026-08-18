@@ -53,7 +53,7 @@ use instructions::close_vault_config::*;
 use instructions::reset_merkle_tree::*;
 use zk::Groth16Proof;
 
-declare_id!("DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7"); // v2 EXPERIMENT id — NOT the production vault
+declare_id!("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 #[program]
 pub mod vault {
