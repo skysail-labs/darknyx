@@ -75,6 +75,13 @@ const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
+    // Second override so this can drive a non-default vault (the v2 experiment,
+    // a second foundation) without editing the script. This USED to repeat
+    // VAULT_PROGRAM_ID, which meant an operator who set only the enclave
+    // variable - which is exactly what the CVM deploy sets - silently got the
+    // compiled default and rotated the TEE signer set on the PRODUCTION vault.
+    // The admin keypair is shared, so it would have succeeded.
+    process.env.DARKNYX_TEE_VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 

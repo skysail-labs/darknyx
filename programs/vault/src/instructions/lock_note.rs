@@ -99,7 +99,7 @@ pub fn lock_note_handler(
     {
         let cfg = &ctx.accounts.vault_config;
         require!(
-            cfg.is_authorized_tee(&ctx.accounts.tee_authority.address()),
+            cfg.is_authorized_tee(ctx.accounts.tee_authority.address()),
             VaultError::Unauthorized
         );
         // The proof was generated against `merkle_root`; that root must still

@@ -49,10 +49,33 @@ pub const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
 /// decode — but no point doing it on every ix build. Callers go
 /// through this fn so the eventual `LazyLock` switch (if it pays
 /// off) is a one-spot change.
+/// The vault program this enclave talks to.
+///
+/// Overridable with `DARKNYX_TEE_VAULT_PROGRAM_ID`. Without it the id is a
+/// compile-time constant, which means pointing a CVM at a different vault
+/// (an Anchor v2 experiment, a second devnet foundation) requires rebuilding
+/// and re-attesting the image — the id is not a secret and does not belong in
+/// `compose_hash`-bound content for that reason.
+///
+/// Follows the same env contract as the rest of the enclave (CLAUDE.md §3.2):
+/// an EMPTY value falls back to the default; a MALFORMED non-empty value fails
+/// fast at first use rather than silently deriving PDAs for the wrong program,
+/// which would surface much later as `AccountNotFound` on a settle.
+///
+/// Resolved once — every PDA helper calls this, so it must stay cheap.
 pub fn vault_program_id() -> Address {
-    VAULT_PROGRAM_ID_BASE58
-        .parse()
-        .expect("VAULT_PROGRAM_ID_BASE58 is a valid base58 pubkey")
+    static RESOLVED: std::sync::OnceLock<Address> = std::sync::OnceLock::new();
+    *RESOLVED.get_or_init(|| {
+        let raw = std::env::var("DARKNYX_TEE_VAULT_PROGRAM_ID").unwrap_or_default();
+        let chosen = if raw.trim().is_empty() {
+            VAULT_PROGRAM_ID_BASE58
+        } else {
+            raw.trim()
+        };
+        chosen.parse().unwrap_or_else(|_| {
+            panic!("DARKNYX_TEE_VAULT_PROGRAM_ID is not a valid base58 address: {chosen:?}")
+        })
+    })
 }
 
 /// PDA: `vault_config`. Seeds = `[b"vault_config"]`. Returns
@@ -127,8 +150,41 @@ mod tests {
 
     #[test]
     fn vault_program_id_parses() {
-        let pid = vault_program_id();
+        // Asserts the COMPILED-IN DEFAULT parses, not what `vault_program_id()`
+        // resolves to. Those diverge the moment DARKNYX_TEE_VAULT_PROGRAM_ID is
+        // set, and the accessor memoises in a OnceLock shared across the test
+        // binary — so asserting through it made this test env-dependent and
+        // order-dependent at once. The override's own behaviour is covered
+        // below.
+        let pid: Address = VAULT_PROGRAM_ID_BASE58
+            .parse()
+            .expect("default program id is valid base58");
         assert_eq!(pid.to_string(), VAULT_PROGRAM_ID_BASE58);
+    }
+
+    #[test]
+    fn vault_program_id_honours_the_env_override() {
+        // Not exercised through `vault_program_id()`: its OnceLock resolves
+        // once per process, so a test that sets the env var would either race
+        // other tests or silently no-op depending on ordering. Pin the
+        // selection RULE instead — empty falls back, non-empty wins — which is
+        // the part that can regress.
+        fn pick(raw: &str) -> &str {
+            if raw.trim().is_empty() {
+                VAULT_PROGRAM_ID_BASE58
+            } else {
+                raw.trim()
+            }
+        }
+        assert_eq!(pick(""), VAULT_PROGRAM_ID_BASE58);
+        assert_eq!(pick("   "), VAULT_PROGRAM_ID_BASE58);
+        let other = "DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7";
+        assert_eq!(pick(other), other);
+        assert_eq!(pick(&format!("  {other}  ")), other);
+        // And the chosen value must still be parseable — a malformed override
+        // panics at first use rather than deriving PDAs for a bogus program.
+        assert!(other.parse::<Address>().is_ok());
+        assert!("not-base58!!".parse::<Address>().is_err());
     }
 
     #[test]

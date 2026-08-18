@@ -34,10 +34,10 @@ fn build_lock_note_ix(h: &Harness, note_commitment: &[u8; 32]) -> Instruction {
     data.push(0u8); // tree_id
     data.extend_from_slice(note_commitment);
     data.extend_from_slice(&[0x22u8; 16]); // order_id
-    // Relative to the CURRENT slot, not a hardcoded 1_000. litesvm 0.13 started
-    // at slot 0 so the literal happened to satisfy `expiry_slot > clock.slot`;
-    // 0.15 does not, and the ix then failed InvalidExpirySlot (6011) BEFORE
-    // reaching the proof check this test is actually about.
+                                           // Relative to the CURRENT slot, not a hardcoded 1_000. litesvm 0.13 started
+                                           // at slot 0 so the literal happened to satisfy `expiry_slot > clock.slot`;
+                                           // 0.15 does not, and the ix then failed InvalidExpirySlot (6011) BEFORE
+                                           // reaching the proof check this test is actually about.
     let now_slot = h.svm.get_sysvar::<solana_clock::Clock>().slot;
     data.extend_from_slice(&(now_slot + 1_000).to_le_bytes()); // expiry_slot (> slot, < slot + TTL)
     data.extend_from_slice(&h.test_mint.to_bytes()); // token_mint

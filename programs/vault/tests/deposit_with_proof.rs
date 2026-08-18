@@ -5,7 +5,6 @@ mod settle_harness;
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
-use borsh::BorshSerialize;
 use darkpool_crypto::field::{fr_from_uniform_bytes, fr_to_be_bytes, pubkey_to_fr_pair};
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_crypto::poseidon::poseidon_hash;
@@ -180,7 +179,9 @@ fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
             .unwrap_or_else(|| fr_to_be_bytes(&args.opening.recovery_nonce)),
     );
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
-    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap());
+    data.extend_from_slice(
+        &anchor_lang::wincode::config::serialize(&args.proof, anchor_lang::BORSH_CONFIG).unwrap(),
+    );
 
     let deposit = Instruction {
         program_id: args.h.vault_id,

@@ -197,7 +197,9 @@ pub(crate) fn create_relock_pda(
     );
 
     let space = 8 + size_of::<NoteLock>();
-    let lamports = Rent::get()?.minimum_balance(space);
+    // v2: `minimum_balance` is deprecated (it panics past MAX_PERMITTED_DATA_LENGTH);
+    // the fallible form returns InvalidArgument instead.
+    let lamports = Rent::get()?.try_minimum_balance(space)?;
     let bump_arr = [bump];
     let seeds: &[&[u8]] = &[NoteLock::SEED, note_use_tag.as_ref(), &bump_arr];
     let signer_seeds = &[seeds];

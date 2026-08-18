@@ -10,7 +10,8 @@
  *   DARKNYX_TEE_GATEWAY=https://<app>-8443s.dstack-...phala.network
  *   DARKNYX_TEE_TOKEN=<bearer>            (if the gateway requires auth on /info)
  *   SOLANA_RPC_URL=<helius>           (for the on-chain tee_pubkeys cross-check)
- *   DARKNYX_VAULT_PROGRAM_ID=<base58>     (default: devnet vault)
+ *   VAULT_PROGRAM_ID=<base58>             (default: devnet vault;
+ *                                          DARKNYX_VAULT_PROGRAM_ID also accepted)
  *
  * The compose_hash pin is BOOTSTRAPPED from the first verified quote (replay the
  * event log → read the compose-hash event), then re-asserted through the full
@@ -38,7 +39,15 @@ const RUN = process.env.RUN_CVM_ATTEST === "1";
 const GATEWAY = process.env.DARKNYX_TEE_GATEWAY ?? "";
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 const TOKEN = process.env.DARKNYX_TEE_TOKEN;
+// Accepts VAULT_PROGRAM_ID as well as the older DARKNYX_VAULT_PROGRAM_ID.
+// Every other devnet/cvm suite reads VAULT_PROGRAM_ID, and this file being the
+// lone exception cost a real debugging cycle: pointed at the v2 experiment it
+// silently kept reading the PRODUCTION vault, so the attested 1-key signer set
+// was compared against production's 4 keys and the failure read as
+// `pubkey_mismatch` — an attestation error for what was purely a wrong-program
+// lookup.
 const PROGRAM_ID =
+  process.env.VAULT_PROGRAM_ID ??
   process.env.DARKNYX_VAULT_PROGRAM_ID ??
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 

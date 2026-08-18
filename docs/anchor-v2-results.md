@@ -1,120 +1,225 @@
-# Anchor v1 → v2-rc.1: measured results
+# Anchor v1 → v2-rc.1: port completion record
 
-Branch `experiment/anchor-v2-rc1`. Program deployed to devnet as
-`DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7`, entirely separate from the
-production vault `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`.
+Branch `experiment/anchor-v2-rc1`, split into the stacked PRs
+`#169 → #170 → #171 → #172 → #174 → #175`.
 
-## Headline
+Validated on devnet under program
+`DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7`, deliberately separate from
+production `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` so nothing here
+touched live state.
 
-| Metric | v1 (anchor 1.1.2) | v2 (2.0.0-rc.1) | Δ |
+---
+
+## 1. Results
+
+### Binary
+
+| | v1 (anchor 1.1.2) | v2 (2.0.0-rc.1) | Δ |
 |---|---|---|---|
-| `vault.so` | 598,272 B | **278,504 B** | **−53.4%** |
+| `vault.so` (devnet-admin) | 598,272 B | **278,504 B** | **−53.4%** |
+| `vault.so` (mainnet shape) | — | 272,472 B | — |
 
-## Compute units — measured ON-CHAIN on devnet, not in litesvm
+### Compute units — measured ON-CHAIN, both arms
 
-Same SDK, same test files, same chain, same session. v1 numbers come from the
-production devnet program; v2 from the experimental deployment.
+Same SDK, same suites, same chain. v1 from the production program's history,
+v2 from the experimental deployment. Two capture sessions: the client-path
+instructions came from the Tier-3 devnet run, the settle-path instructions from
+the Tier-4 CVM run (they need a TEE to drive them).
 
-| Instruction | v1 CU | v2 CU | Δ | Δ% |
-|---|---|---|---|---|
-| `reset_merkle_tree` | 6,118 | 2,268 | −3,850 | **−62.9%** |
-| `deposit` (VALID_DEPOSIT) | 165,176 | 141,950 | −23,226 | **−14.1%** |
-| `withdraw` (VALID_SPEND) | 145,018 | 133,762 | −11,256 | **−7.8%** |
-| `merge` (VALID_MERGE k=2) | 151,877 | 144,403 | −7,474 | **−4.9%** |
+**Client path (Tier 3, matched v1/v2 pairs):**
 
-v2-only (no directly comparable v1 tx captured): `initialize` 19,999,
-`initialize_tree` 5,243, `initialize_market` 3,256, `set_protocol_config` 1,105.
+| Instruction | v1 CU | v2 CU | Δ |
+|---|---|---|---|
+| `reset_merkle_tree` | 6,118 | 2,268 | **−62.9%** |
+| `deposit` (VALID_DEPOSIT) | 165,176 | 141,950 | −14.1% |
+| `withdraw` (VALID_SPEND) | 145,018 | 133,762 | −7.8% |
+| `merge` (VALID_MERGE k=2) | 151,877 | 144,403 | −4.9% |
 
-### What the shape means
+**Settle path (Tier 4).** The v1 column is the on-chain reference range recorded
+in the baseline before the port; it is a *range* because these instructions vary
+with batch shape, so read these deltas as approximate, not as matched pairs the
+way the table above is.
 
-The spread is the whole result, and it is not noise:
+| Instruction | v1 CU (ref) | v2 CU | ≈Δ |
+|---|---|---|---|
+| `close_batch_validity_marker` | 4,260 | **1,264** | **−70%** |
+| `tee_forced_settle_batched` | 75,038–78,927 | **53,222** | **−29%** |
+| `lock_note` | 111,936–113,507 | 101,643 | −9% |
+| `verify_match_batch` (N=16) | 101,973 | 94,090 | −7.7% |
 
-- **`reset_merkle_tree` −62.9%.** Almost no program logic; the cost is account
-  validation and (de)serialization. This is the closest thing here to a
-  measurement of what v2's account model actually buys, and it matches the
-  guide's claimed range.
-- **`deposit` / `withdraw` / `merge`, −4.9% to −14.1%.** These are dominated by
-  Groth16 verification inside `groth16-solana`, which Anchor never touches. v2
-  can only shrink the wrapper around the pairing check, and it does — but the
-  pairing check is most of the bill.
+**Read the spread, not the average.** The saving tracks how much of an
+instruction is Anchor overhead:
 
-So the honest summary: **v2's savings are real and large in proportion to the
-Anchor overhead in an instruction, and this program has comparatively little of
-it on its hot paths.** The guide's headline "2.8×–50.4× compute" comes from
-bench programs that are mostly Anchor overhead. Applied here it would be
-misleading.
+- `close_batch_validity_marker` and `reset_merkle_tree` are almost pure account
+  validation — they show the guide's claimed magnitude.
+- `tee_forced_settle_batched` at ≈−29% is the one that matters commercially: it
+  is the settle hot path, it runs N=16 per batch, and it sits against a 1.4 M CU
+  ceiling.
+- `deposit` / `withdraw` / `merge` are dominated by Groth16 verification inside
+  `groth16-solana`, which Anchor never touches, so v2 can only shrink the
+  wrapper around the pairing check.
 
-**Settle-path instructions were NOT measured on v2.** `lock_note`,
-`verify_match_batch` and `tee_forced_settle_batched` need a TEE to drive them.
-v1 on-chain references for later comparison: `lock_note` 111,936–113,507,
-`verify_match_batch` 101,973, `tee_forced_settle_batched` 75,038–78,927,
-`close_batch_validity_marker` 4,260. `close_batch_validity_marker` is the one
-most likely to show a large win, being nearly pure Anchor overhead.
+The guide's headline "2.8×–50.4× compute" comes from bench programs that are
+mostly Anchor overhead. Quoting it for this program would be misleading.
 
-## What the migration costs
+**Caveat on `close_batch_validity_marker`:** part of that −70% is this port
+dropping an account from the instruction (3 → 2, §3.1), not v2 alone.
 
-This is the part that decides whether to adopt, and it is not small.
+v2-only, no comparable v1 tx captured: `initialize` 19,999, `initialize_tree`
+5,243, `initialize_market` 3,256, `set_protocol_config` 1,105.
 
-1. **A litesvm major bump, and it does not currently work.** anchor-lang
-   2.0.0-rc.1 needs wincode ^0.5 → solana-address 2.6.x → litesvm ≥ 0.15.
-   litesvm 0.15.2 requires `solana-message ^4.2.4` / `solana-transaction ^4.1.5`;
-   this workspace (and `darknyx-tee`'s settle path) is on the 3.x line. The vault
-   tests build a 3.x `Transaction`, litesvm wants a 4.x `VersionedTransaction`,
-   and there is no conversion. **Finishing the litesvm path means migrating the
-   transaction crates to 4.x across the workspace, including the enclave.**
-   That is a second migration.
-2. **Rust toolchain floor 1.91 → 1.93**, workspace-wide. `solana-syscalls 4.2.x`
-   uses `maybe_uninit_write_slice`, stable only from 1.93. Downgrading
-   solana-syscalls is blocked by a `solana-program-runtime` conflict.
-3. **Four pinned `solana-*` crates relaxed or re-pinned**, all shared with
-   `darknyx-tee` through `{ workspace = true }`.
+### Test coverage
 
-The CU numbers above were obtained by **bypassing litesvm entirely** and
-measuring on devnet, which is both cheaper and more authoritative.
+| Tier | Result |
+|---|---|
+| Offline (16 vault targets, 74 tests) | pass |
+| `darknyx-tee` lib (468 tests) | pass |
+| `clippy --workspace --all-targets -D warnings` | pass, both feature shapes |
+| Devnet round-trips (deposit/withdraw/merge) | pass |
+| `cvm-api-surface` | 10/10 over RA-TLS |
+| `cvm-settle-e2e` | pass (leaf_count 2→7 verified on-chain) |
+| `cvm-multimatch-settle` | pass |
+| `cvm-self-trade` | pass |
+| `cvm-merge-then-order` | pass |
+| `cvm-ratls-transport` | 6 pass, 1 skip |
+| `cvm-attestation-e2e` | 6/6, real DCAP |
+| `cvm-daemon-lifecycle` | pass — **first successful live run ever**, v1 included |
 
-## Upstream defects found (worth reporting)
+---
+
+## 2. Layout identity — proven, not assumed
+
+All nine `#[account]` structs became zero-copy `Account<T>`; none needed
+`BorshAccount`, because every field was already fixed-size. v2's compile-time
+no-padding assertion passed for all nine — `VaultConfig` already carried an
+explicit `_padding: [u8; 3]` tail for exactly that reason.
+
+The committed `programs/vault/account-layout.json` is **byte-identical to v1**
+and the fixture passes under v2: the repr(C) Pod layout reproduces the borsh
+field offsets exactly, which is what keeps the hand-rolled TS and Rust decoders
+valid. Independently corroborated by `MarketConfig::SPACE` (a v1-era borsh
+constant) still equalling `8 + size_of::<T>()`, and by `VaultConfig` reading
+1264 bytes on chain.
+
+The fixture covered only 5 of 9 structs before this port. The four it missed
+(`WalletEntry`, `DepositedNoteEntry`, `ConsumedNoteEntry`, `OutstandingMint`)
+are the ones where a shift is hardest to notice — nothing reads them
+field-by-field, so a shifted guard PDA still derives fine and decodes to
+garbage. All nine are covered now.
+
+---
+
+## 3. Behaviour changes — read before adopting
+
+### 3.1 `close_batch_validity_marker` lost permissionless cleanup
+
+v2 rejects a transaction that passes one account into two slots when either is
+`mut` (`ConstraintDuplicateMutableAccount`, 2040). The marker sweeper closes
+with `authority == payer == the primary shard key`, so **every marker close
+would have failed** — rent never reclaimed, sweeper retrying each tick and
+paying a fee each time, because the tx lands before failing.
+
+Reproduced against a deployed program, not only in litesvm.
+
+Fixed by collapsing the `payer` slot into `authority`, which removes the alias
+structurally rather than waiving the check with `unsafe(dup)`. **Cost: only the
+recorded payer can close now; any signer could previously sweep on the payer's
+behalf.** The property CLAUDE.md §8.2 actually rests on — nobody, payer
+included, can close before expiry — is unchanged.
+
+### 3.2 `unsafe(dup)` implies mutable
+
+Adding `unsafe(dup)` to satisfy the v2 compile silently makes a field
+**required-writable**, because waiving the duplicate-*mutable* check is its
+purpose. On `note_lock_f` that would have write-locked the shared
+`PDA(["note_lock", [0;32]])` sentinel across every concurrent exact-fill settle
+— serialising exactly what tree-sharding exists to parallelise. Removed; the
+check cannot fire anyway, since neither field carries `mut`.
+
+### 3.3 Mainnet artifact: absent → unreachable
+
+v2's `#[program]` emits `pub use super::__client_accounts_<name>` for every
+instruction **without propagating that instruction's `#[cfg]`**, so gating the
+devnet-admin modules broke the featureless build. Worked around by ungating the
+Accounts-struct modules while the `#[program]` fns stay gated.
+
+audit_1 F-01/F-02 previously guaranteed the dev instructions were **absent**
+from a mainnet artifact. What still holds is that they are **not dispatchable**
+— no `#[program]` fn, so no discriminator. Whether the linker strips the
+now-compiled handlers is **not verified**; the mainnet artifact being 5,120 B
+smaller is the only evidence, and two attempts to assert absence directly were
+vacuous (a discriminator scan reports `deposit` absent too; a symbol scan finds
+nothing because the binary is stripped).
+
+### 3.4 `ProgramData` is gone
+
+v2 removed both `Account<ProgramData>` and `programdata_address()`. The
+mainnet-only upgrade-authority guard on `initialize` is reimplemented against
+the raw account (PDA identity, loader ownership, enum tag, authority present,
+signer match). The byte parser is unit-tested and mutation-verified, but the
+**end-to-end guard is unexercised** — nothing in this repo deploys
+upgradeably-with-authority.
+
+### 3.5 No runtime error names
+
+`#[msg(...)]` is IDL-only in v2; on-chain you get `ProgramError::Custom(code)`.
+Any test matching an error NAME in logs can never pass regardless of behaviour.
+Error-code offsets and variant ORDER are now load-bearing for the client.
+
+---
+
+## 4. Upstream defects worth reporting
 
 1. **anchor-lang 2.0.0-rc.1 declares a dependency range it does not support.**
    `solana-address "^2.0"` + `wincode "^0.5"`, but solana-address only uses
-   wincode 0.5 at 2.6.x (2.2–2.5 → 0.4.x, 2.7 → 0.6). Any other pick puts two
-   wincodes in the graph and `Address` implements the Schema traits from the
-   wrong one. It surfaces as ~60 copies of "the trait `SchemaWrite` is not
-   implemented for `Pubkey`" — a type absent from the source — with the real
-   cause buried in a note.
+   wincode 0.5 in its **2.6.x** line (2.2–2.5 → 0.4.x, 2.7 → 0.6). Anything
+   else puts two wincodes in the graph and `Address` implements the Schema
+   traits from the wrong one. Surfaces as ~60 copies of "the trait `SchemaWrite`
+   is not implemented for `Pubkey`" — a type absent from the source — with the
+   real cause buried in a note.
 2. **anchor-spl 2.0.0-rc.1 does not build for SBF out of the box.** It depends
-   unconditionally (no feature gate) on `spl-token-2022-interface`, which pulls
+   unconditionally on `spl-token-2022-interface`, which pulls
    `solana-instructions-sysvar 3.0.0`, which fails to compile for the SBF
    target. Fixed by forcing the 3.0.1 patch.
-3. **agave 4.2.1 broke `ExecutionRecord`'s fields** and therefore litesvm 0.15.2,
-   despite litesvm requesting `^4.1.1` — a semver break inside a minor release.
-4. **`wincode` must be a DIRECT dependency.** Anchor re-exports the derive
-   macros, but they emit absolute `::wincode` paths that only resolve from the
-   extern prelude. Same for `pinocchio`. Not mentioned in the migration guide.
+3. **`#[program]` does not propagate `#[cfg]`** onto its generated
+   client-accounts re-exports (§3.3).
+4. **`wincode` and `pinocchio` must be DIRECT dependencies** — the re-exported
+   derives emit absolute paths that resolve only from the extern prelude. Not
+   in the migration guide.
+5. **agave 4.2.1 broke `ExecutionRecord`** and therefore litesvm 0.15.2, despite
+   litesvm requesting `^4.1.1` — a semver break inside a minor release.
 
-## Migration facts worth keeping
+---
 
-- **All nine `#[account]` structs became zero-copy `Account<T>`; none needed
-  `BorshAccount`.** Every field was already fixed-size. v2's compile-time
-  no-padding assertion passed for all nine, which `VaultConfig`'s pre-existing
-  explicit `_padding: [u8; 3]` tail made free.
-- **Layout is expected byte-identical** and the deployment is evidence for it:
-  the TS SDK hand-codes the v1 borsh layout, and it successfully drove
-  `initialize`, `deposit`, `merge` and `withdraw` against the v2 program on
-  chain. That is stronger than a unit fixture, though a fixture should still be
-  added (guide §13 — a Pod cast decodes wrong-but-well-formed bytes into a
-  valid-looking struct).
-- **Zero optional accounts**, so the known rc.1 duplicate-mutable defect
-  (guide §7.4) does not apply here.
-- **The `reload()` calls after the SPL CPIs in `deposit`/`withdraw` are now
-  meaningless**, not merely redundant: `Account<T>` reads the live buffer.
-- **`#[account(dup)]` → `#[account(unsafe(dup))]`** on `note_lock_f`. The safety
-  condition is met by inspection: neither `note_lock_e` nor `note_lock_f` carries
-  `mut`, and the alias only arises on exact-fill where both are read-only.
+## 5. What adoption costs beyond the program
 
-## Recommendation
+- **litesvm 0.13 → 0.15.2**, plus `solana-transaction`/`solana-message` 3.x → 4.x
+  workspace-wide. The 4.x move turned out to be a **one-line feature rename**
+  (`bincode` → `wincode`) and needed **no source changes in `darknyx-tee`.**
+- **Rust floor 1.91 → 1.93** (`solana-syscalls` uses `maybe_uninit_write_slice`),
+  which also required the TEE Dockerfile base to move in lockstep.
+- Several `solana-*` pins relaxed or re-pinned; `solana-address` fixed at 2.6.1.
 
-Adopt only if the binary-size halving is worth a transaction-crate migration of
-the enclave. The CU win on the paths that dominate settle cost is single-digit
-to low-teens percent, because those paths are Groth16-bound. If binary size is
-not currently a constraint, the cost/benefit does not favour rc.1 today —
-revisit at v2 stable, when litesvm and the solana 4.x line have settled.
+---
+
+## 6. Standing hazards this port surfaced
+
+Recorded because each cost real time and each will recur.
+
+- **`cargo build-sbf` exits 0 while producing no binary.** Only
+  `scripts/build-vault-sbf.sh` fails closed. A failed build also leaves the
+  PREVIOUS `.so` in place, so a size measurement reads plausibly while
+  describing the wrong artifact. This happened three times.
+- **A deployed program can be stale while the source is fixed.** The 2040 fix
+  looked validated until the deployed binary was probed with the new account
+  shape. Verify the artifact, not the deploy exit code.
+- **Wrong-program lookups surface as errors naming healthy subsystems.** Twice:
+  a missing compose passthrough became "MarketConfig missing/malformed", and a
+  test reading `DARKNYX_VAULT_PROGRAM_ID` instead of `VAULT_PROGRAM_ID` became
+  `AttestationError: pubkey_mismatch`.
+- **`.gitignore` rules ending in `/` match directories only.** Nine absolute
+  symlinks into a developer's home directory were committed past
+  `circuits/build/**/*_js/` and broke CI on five PRs.
+- **litesvm 0.15 no longer starts near slot 0.** Absolute expiries in fixtures
+  silently became past slots, and failed as vault errors
+  (`InvalidExpirySlot`, `NoteLockExpired`) rather than as harness drift.
