@@ -178,6 +178,11 @@ mod tests {
         }
         assert_eq!(pick(""), VAULT_PROGRAM_ID_BASE58);
         assert_eq!(pick("   "), VAULT_PROGRAM_ID_BASE58);
+        // Deliberately a DIFFERENT id from VAULT_PROGRAM_ID_BASE58 - it is the
+        // retired v2-experiment program. The test needs an override that is not
+        // the default; setting it to the production id would make `pick(other)`
+        // and the default identical and the assertion vacuous. Do not "fix" this
+        // to the production id when grepping for the experiment address.
         let other = "DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7";
         assert_eq!(pick(other), other);
         assert_eq!(pick(&format!("  {other}  ")), other);

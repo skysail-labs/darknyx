@@ -8,6 +8,13 @@ Validated on devnet under program
 production `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` so nothing here
 touched live state.
 
+> **That experiment id is historical.** Every measurement and every test result
+> below was gathered under it. The final layer of the stack cuts `declare_id!`
+> and `Anchor.toml` back to the production id, so what ships is
+> `C63vKvys…`. The two programs are byte-identical apart from the id, and
+> `account-layout.json` is unchanged — but that is an expectation, not evidence,
+> so the cutover carries its own re-validation (§7).
+
 ---
 
 ## 1. Results
@@ -223,3 +230,39 @@ Recorded because each cost real time and each will recur.
 - **litesvm 0.15 no longer starts near slot 0.** Absolute expiries in fixtures
   silently became past slots, and failed as vault errors
   (`InvalidExpirySlot`, `NoteLockExpired`) rather than as harness drift.
+
+## 7. The production-id cutover, and what it does NOT carry over
+
+The stack's last layer restores `declare_id!` and `Anchor.toml` to
+`C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`. Three things are worth stating
+plainly, because "byte-identical apart from the id" is easy to over-trust.
+
+**Every PDA changes.** Each one is program-derived, so `VaultConfig`, the K
+`MerkleTree` shards, `WalletEntry`, `NoteLock`, `ConsumedNoteEntry`, the settle
+ALT — all of them live at different addresses under the two ids. The evidence
+in this document was gathered against the experiment program's accounts. It says
+nothing about the production program's accounts, which are the ones that already
+hold real devnet state.
+
+**The deployed production program is still Anchor v1** until someone runs
+`deploy-devnet.sh` against it. Merging this stack changes the source, not the
+chain. Until the redeploy, `main` and devnet disagree.
+
+**The v1 → v2 account-layout question is answered, and it is the reassuring
+answer:** `programs/vault/account-layout.json` is byte-identical to v1, so the
+existing on-chain accounts decode correctly under the v2 program. That is what
+makes an in-place upgrade viable at all rather than requiring a re-foundation.
+It is asserted by `account_layout_fixture.rs` over all nine structs — the same
+fixture that silently covered only five of them before this port.
+
+**Required after merge, before trusting the production program:**
+
+1. `bash scripts/build-vault-sbf.sh devnet-admin` — never the bare
+   `cargo build-sbf` (§6: it exits 0 producing nothing).
+2. `bash scripts/deploy-devnet.sh` — an in-place upgrade, same program id.
+3. Verify the DEPLOYED artifact, not the deploy command's exit code. A
+   `close_batch_validity_marker` with the new two-account shape is the sharpest
+   probe: it fails with `2040` against a v1 program and succeeds against v2.
+4. Tree reset (§2.4) — mandatory after any VK/program change.
+5. `devnet-deposit-withdraw` (`RUN_DEVNET_DW=1`) for the no-CVM half, then one
+   `cvm-settle-e2e` for the settle path.
