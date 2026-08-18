@@ -34,7 +34,7 @@ expense and gains them nothing.
 
 ---
 
-## 2. Sweep results — all five proof-verifying handlers
+## 2. Sweep results — all six proof-verifying handlers
 
 | Handler | Public inputs | Signer bound? | `init` PDA seeded by | Verdict |
 |---|---|---|---|---|
@@ -102,8 +102,10 @@ incidental, not designed: the moment anything starts trusting
   may exist per commitment, which is fine precisely because nothing reads them
   for authorisation, and it makes the entry mean what it actually is: *this
   signer registered this commitment*. Touches the seed derivation, so
-  `sdk/src/idl/seeds.ts` + `walletEntryPda()` + tests move with it (CLAUDE.md
-  §8.3). No circuit change.
+  `packages/sdk/src/idl/seeds.ts`, `walletEntryPda()` in `vault-client.ts`, and
+  the tests that derive the address all move with it in the SAME commit
+  (CLAUDE.md §8.3 — CI does NOT catch a missed SDK mirror; only the integration
+  tests do, as `AccountNotFound` / `ConstraintSeeds (2006)`). No circuit change.
 - **(B) Bind the owner into the proof** — add the owner pubkey as two Fr halves
   to VALID_WALLET_CREATE's public inputs. Cryptographically correct, and it makes
   the on-chain `owner` field trustworthy for future consumers. Cost is the full
@@ -133,28 +135,55 @@ before relaxing any amount constraint.
 
 ---
 
-## 5. F-13 — `verify_match_batch` marker payer capture
+## 5. F-13 — `verify_match_batch` marker capture stalls the batch
 
-**Severity: Low, but it interacts with a change made in this port.**
+**Severity: Medium.** Raised from Low after review — see the correction note at
+the end of this section.
+
+**A cheap, repeatable liveness attack on settlement.**
 
 `payer` is deliberately "anyone" (the handler's own comment says so, correctly:
 authorisation is the proof). The marker is `init` on `[SEED, merkle_root]`.
 
 An observer can front-run the TEE's Tx B with the same proof and become
-`marker.payer`. The marker content is still correct and the batch still settles,
-so this is not a settlement-integrity issue. Two consequences:
+`marker.payer`. Three consequences, in increasing order of severity:
 
-1. The TEE's own Tx B fails with an already-initialised account. Whether that is
-   handled or fatal is a **settle-pipeline** question, not a program one.
-2. **After this port's §3.1 change, only `marker.payer` can close the marker.**
-   A captured marker is therefore never swept: its rent is stranded and
-   `marker_sweep.rs` retries it forever. Under Anchor v1's three-account shape
-   any signer could have swept it.
+1. **The batch fails outright.** `settle/worker.rs` does
+   `submit_ixs(&ctx.rpc, ctx.primary_keypair(), &verify_ixs).await?` — the `?`
+   propagates the already-initialised-account error, and **nothing anywhere in
+   `crates/darknyx-tee/src/settle/` reconciles an existing marker** (grepped for
+   `already_initiali` / `AlreadyInUse` / `marker_exists`: no hits). The batch
+   never reaches Tx D.
+2. **Both sides' notes stay locked until lock expiry.** The `lock_note` Tx As
+   already landed before the prove/verify branch, so a failed Tx B leaves them
+   pinned with no settlement and no early release; only the lock sweeper
+   reclaims them, at expiry.
+3. **After this port's §3.1 change, only `marker.payer` can close the marker.**
+   The captured marker is therefore never swept: its rent is stranded and
+   `marker_sweep.rs`, which signs with the primary TEE key, retries and fails
+   forever. Under Anchor v1's three-account shape any signer could have swept it.
 
-This is the honest cost of collapsing the close-marker slots to dodge
-`ConstraintDuplicateMutableAccount`. It was the right call for the aliasing
-problem; it narrows recovery here. Worth revisiting together with F-11, since
-both are "the signer is unconstrained and the PDA is one-shot".
+Settlement *integrity* is untouched — the marker content is correct and no
+value moves incorrectly. What is attacked is liveness, and it is cheap: one
+transaction per batch, repeatable, and it selects the victims (the resting
+orders the attacker chose to have matched).
+
+**Fix, and it is a single change that covers both halves.** Restore
+expiry-gated *permissionless* close with rent refunded to `marker.payer`, rather
+than requiring `signer == payer`. That is what the v1 three-slot shape gave us;
+§3.1 lost it as a side effect of dodging `ConstraintDuplicateMutableAccount`,
+and the aliasing problem can be solved without it (the close instruction can
+take the payer as a **read-only** refund target, since `close = ` needs the
+lamport destination writable but the *authority* need not be the same account).
+Separately, `verify_match_batch`'s caller should detect an already-initialised
+marker and continue rather than failing the batch.
+
+> **Correction, 2026-08-18.** This section originally rated F-13 **Low** and
+> said "the batch still settles". That was wrong: it assumed the worker treats a
+> failed Tx B as recoverable. It does not — the `?` propagates. Raised by
+> CodeRabbit on PR #175 and confirmed by reading `settle/worker.rs`. The
+> mistake is worth recording because it came from reasoning about the on-chain
+> handler in isolation while the impact lived in the caller.
 
 ---
 

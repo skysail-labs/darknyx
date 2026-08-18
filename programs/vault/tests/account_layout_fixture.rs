@@ -271,6 +271,15 @@ fn every_account_struct_is_covered() {
     // OutstandingMint went unasserted through a layout-changing migration. Pin
     // the count so a new account type cannot be added without a layout entry.
     let rendered = render();
+    // The name loop below proves each of the nine is PRESENT; it cannot prove
+    // nothing else is. Without this count, a tenth account struct renders into
+    // the fixture and this test still passes, which is the exact failure the
+    // test exists to prevent.
+    assert_eq!(
+        rendered.matches("\"account_len\"").count(),
+        9,
+        "layout fixture account count drifted"
+    );
     for name in [
         "VaultConfig",
         "MarketConfig",

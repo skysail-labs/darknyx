@@ -265,16 +265,34 @@ mod upgrade_authority_tests {
 
     #[test]
     fn reads_the_authority_from_the_right_offset() {
-        // Guards the offset arithmetic itself: flip one byte immediately BEFORE
-        // the authority and one immediately AFTER the header, and the parsed key
-        // must be unchanged. A shifted window would move with them.
+        // Guards the offset arithmetic itself. Two things matter, and only one
+        // of them is obvious.
+        //
+        // (1) Every assertion compares against `key` - the value we PUT IN -
+        //     never against another call to the parser. An earlier version
+        //     compared `parse(&mutated)` with `parse(&clean)`, which is stable
+        //     under ANY consistent shift of AUTHORITY_OFFSET: both sides move
+        //     together, so the test passed while the window was wrong.
+        //     Mutation-checked: anchored on `key`, AUTHORITY_OFFSET 13 -> 12
+        //     FAILS this test; compared against another parse, it passed.
+        //
+        // (2) The mutated byte must be one the helper does not already set to
+        //     that value. Writing 1 at AUTHORITY_OFFSET - 1 hits the Option tag,
+        //     which `program_data_bytes(Some(_))` already sets to 1 - a no-op
+        //     mutation. Flip a deployed-slot byte instead (slot occupies 4..12),
+        //     which keeps the encoding valid.
         let key = [0x5Au8; 32];
-        let base = parse_upgrade_authority(&program_data_bytes(Some(key))).unwrap();
+        let expected = Address::from(key);
+        assert_eq!(
+            parse_upgrade_authority(&program_data_bytes(Some(key))),
+            Some(expected),
+            "a clean header must parse to exactly the key that was written"
+        );
         let mut b = program_data_bytes(Some(key));
-        b[AUTHORITY_OFFSET - 1] = 1; // still the Option tag -> must stay Some
-        assert_eq!(parse_upgrade_authority(&b), Some(base));
+        b[AUTHORITY_OFFSET - 2] ^= 0xFF; // a deployed-slot byte, before the key
+        assert_eq!(parse_upgrade_authority(&b), Some(expected));
         let mut c = program_data_bytes(Some(key));
         c.push(0xFF); // trailing bytes beyond the header are ignored
-        assert_eq!(parse_upgrade_authority(&c), Some(base));
+        assert_eq!(parse_upgrade_authority(&c), Some(expected));
     }
 }
