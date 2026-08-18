@@ -350,7 +350,7 @@ pub struct MatchResultPayload {
     // dropped — they're proven in-circuit + bound by the note commitments.
     // Change-amount recovery (Proposal B, v8): the 128-byte encrypted
     // change_amount bundle was appended.
-    // Mirror of `vault::instructions::tee_forced_settle::MatchResultPayload`.
+    // Mirror of `vault::instructions::settlement_shared::MatchResultPayload`.
     pub fill_recovery: [u8; 128],
 }
 
@@ -409,7 +409,7 @@ impl MatchResultPayload {
     }
 }
 
-/// Mirror of `tee_forced_settle::canonical_payload_hash`. Byte-identical
+/// Mirror of `settlement_shared::canonical_payload_hash`. Byte-identical
 /// output or signature verification fails.
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
@@ -749,8 +749,8 @@ pub fn batch_validity_marker_exists(h: &Harness, merkle_root: &[u8; 32]) -> bool
 /// the two structs are byte-identical Borsh shapes.
 fn to_onchain_payload(
     p: &MatchResultPayload,
-) -> vault::instructions::tee_forced_settle::MatchResultPayload {
-    use vault::instructions::tee_forced_settle::MatchResultPayload as OnP;
+) -> vault::instructions::settlement_shared::MatchResultPayload {
+    use vault::instructions::settlement_shared::MatchResultPayload as OnP;
     OnP {
         match_id: p.match_id,
         note_a_use_tag: p.note_a_use_tag,

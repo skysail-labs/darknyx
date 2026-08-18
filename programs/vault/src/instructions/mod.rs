@@ -43,7 +43,7 @@ pub mod reset_merkle_tree;
 pub mod rotate_root_key;
 pub mod set_protocol_config;
 pub mod set_tee_pubkey;
-pub mod tee_forced_settle;
+pub mod settlement_shared;
 #[allow(unused_variables)]
 pub mod tee_forced_settle_batched;
 pub mod update_market_config;
@@ -71,7 +71,7 @@ pub use reset_merkle_tree::*;
 pub use rotate_root_key::*;
 pub use set_protocol_config::*;
 pub use set_tee_pubkey::*;
-pub use tee_forced_settle::*;
+pub use settlement_shared::*;
 pub use tee_forced_settle_batched::*;
 pub use update_market_config::*;
 pub use verify_match_batch::*;

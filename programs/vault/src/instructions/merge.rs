@@ -230,7 +230,7 @@ pub fn merge_handler(
 
 /// Manually create + populate a `ConsumedNoteEntry` PDA (zero-copy), keyed on
 /// the note COMMITMENT — the SAME consume-once guard `withdraw` inits and TEE
-/// settle inits (`consumed_a/b`). Mirrors `tee_forced_settle::create_relock_pda`.
+/// settle inits (`consumed_a/b`). Mirrors `settlement_shared::create_relock_pda`.
 /// Fails if the PDA already exists (a prior withdraw / settle / merge already
 /// consumed this note → double-spend). `match_id` is the all-zero sentinel
 /// (merge is not a match), matching `withdraw`'s `ConsumedNoteEntry`.

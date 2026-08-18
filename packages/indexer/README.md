@@ -64,7 +64,7 @@ Until then it stays a dormant reference implementation.
 
 ## Byte-layout contract
 
-`src/decode.ts` mirrors `programs/vault/.../tee_forced_settle.rs::MatchResultPayload`,
+`src/decode.ts` mirrors `programs/vault/.../settlement_shared.rs::MatchResultPayload`,
 the SDK encoder `packages/sdk/src/settlement/settle-builder.ts::serializePayload`,
 and the SDK decoder `packages/sdk/src/fills/chain-history.ts`. Change the payload
 layout in one place → change all four and re-run their round-trip tests

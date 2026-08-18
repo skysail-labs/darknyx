@@ -214,4 +214,4 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 - Client live-tail + chain-backfill: `fills/ws-client.ts` (`startFillsSync`);
   the OPTIONAL by-order_id indexer locator is `fills/history.ts`
   (`backfillHistory`).
-- Settle payload: `tee_forced_settle.rs::MatchResultPayload`.
+- Settle payload: `settlement_shared.rs::MatchResultPayload`.

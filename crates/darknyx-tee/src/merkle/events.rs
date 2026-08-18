@@ -130,7 +130,7 @@ struct NoteCreatedEvent {
 }
 
 /// Borsh-decode mirror of the vault `TradeSettled` event (field order
-/// must match `programs/vault/src/instructions/tee_forced_settle.rs`).
+/// must match `programs/vault/src/instructions/settlement_shared.rs`).
 /// We only consume the six leaf-index fields, but the full layout is
 /// required for a correct sequential borsh decode.
 #[derive(BorshDeserialize)]
