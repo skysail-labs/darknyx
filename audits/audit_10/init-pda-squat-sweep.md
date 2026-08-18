@@ -140,6 +140,13 @@ incidental, not designed: the moment anything starts trusting
 
 **Recommendation: (A) now, (B) before anything reads `wallet_entry.owner`.**
 
+> **Resolved 2026-08-19 — (A) shipped.** `wallet_entry` is now
+> `PDA([b"wallet", commitment, owner])`. No circuit change. Mirrored in the SDK
+> (`walletEntryPda` now requires the owner) and both litesvm helpers.
+> Mutation-tested twice. **(B) is still open and still required before any
+> reader of `wallet_entry.owner` exists** — seeds prove who paid rent, not who
+> holds the commitment's keys.
+
 ---
 
 ## 4. PS-01 — `deposit` commitment squatting (bounded by cost)
@@ -152,10 +159,24 @@ but the same instruction transfers `amount` of the mint out of *their* token
 account, and they cannot produce the VALID_SPEND proof to get it back, because
 they do not know the note's `inner_hash`.
 
-So the grief costs the attacker the full note amount, permanently. Real, but
-economically self-limiting; recorded rather than fixed. It escalates if a
-zero-amount or dust deposit is ever accepted for a commitment — check that
+So the grief costs the attacker the full note amount, permanently. It escalates
+if a zero-amount or dust deposit is ever accepted for a commitment — check that
 before relaxing any amount constraint.
+
+> **Won't Fix, 2026-08-19 — and the reason matters more than the verdict.**
+> The symmetric remedy, adding `depositor` to `DepositedNoteEntry`'s seeds,
+> would **reintroduce the bug the guard exists to prevent**. `state.rs` spells
+> it out: two deposits sharing a commitment both move tokens in and both
+> increment `outstanding`, but only ONE can ever be withdrawn — the vault ends
+> up permanently over-collateralised, so no solvency alarm fires, and the second
+> deposit is silently unrecoverable. It is reachable by ACCIDENT, not only by
+> malice, because `recovery_nonce = deriveBlindingFactor(seed, depositIndex)` is
+> deterministic and the SDK persists `depositIndex` nowhere.
+>
+> **The global keying is the feature.** This is the case where the pattern in §1
+> holds structurally but the fix that works for `create_wallet` is the wrong
+> move here — worth stating explicitly, because "apply the same fix to every row
+> in the sweep" is the obvious next step and it would be a regression.
 
 ---
 
