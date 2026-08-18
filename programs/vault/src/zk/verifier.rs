@@ -11,7 +11,7 @@ use anchor_lang::prelude::*;
 use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
 
 /// A raw Groth16 proof as it arrives from snarkjs / ark-circom.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+#[derive(SchemaWrite, SchemaRead, Clone, Debug)]
 pub struct Groth16Proof {
     pub pi_a: [u8; 64],
     pub pi_b: [u8; 128],
@@ -47,10 +47,10 @@ pub fn verify_groth16_proof<const NR: usize>(
 ) -> Result<()> {
     let mut verifier =
         Groth16Verifier::new(&proof.pi_a, &proof.pi_b, &proof.pi_c, public_inputs, vk)
-            .map_err(|_| error!(VaultError::InvalidProof))?;
+            .map_err(|_| Error::from(VaultError::InvalidProof))?;
 
     verifier
         .verify()
-        .map_err(|_| error!(VaultError::InvalidProof))?;
+        .map_err(|_| Error::from(VaultError::InvalidProof))?;
     Ok(())
 }

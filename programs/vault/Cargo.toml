@@ -13,8 +13,13 @@ default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
+idl-build = ["anchor-lang/idl-build"]
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# v2: anchor-spl no longer exposes `idl-build`. This project generates and
+# consumes no IDL — the SDK hand-codes every discriminator and Borsh layout
+# (CLAUDE.md §7.1) — so the feature is dropped outright rather than narrowed to
+# anchor-lang alone. Nothing referenced it.
+
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -27,11 +32,15 @@ test-sbf = []
 # `--features devnet-admin` (deploy-devnet.sh + the litesvm suites depend on it).
 devnet-admin = []
 [dependencies]
-anchor-lang = { workspace = true, features = ["init-if-needed"] }
+# v2 dropped the `init-if-needed` feature gate; the constraint is available
+# unconditionally (guide §7.1). `deposit` still uses it for the per-mint
+# OutstandingMint + vault ATA on the first deposit of each mint.
+anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
+wincode = { workspace = true }
+pinocchio = { workspace = true }
 solana-sdk-ids = { workspace = true }
 solana-sha256-hasher = { workspace = true }
-solana-instructions-sysvar = { workspace = true }
 groth16-solana = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ff = { workspace = true }
@@ -51,10 +60,16 @@ serde_json = "1.0"
 # send the TEE Ed25519 signature-verify ix.
 litesvm = { workspace = true, features = ["precompiles"] }
 solana-account = "~3.4"
-solana-address = "=2.2.0"
-solana-instruction = "=3.2.0"
+# v2 EXPERIMENT: was "=2.2.0". anchor-lang 2.0.0-rc.1 declares solana-address
+# "^2.0" + wincode "^0.5", but solana-address only uses wincode 0.5 at 2.6.x
+# (2.2-2.5 -> 0.4.x, 2.7 -> 0.6). Any other choice makes Address implement
+# SchemaRead/SchemaWrite from a DIFFERENT wincode than the derive requires,
+# and the failure names neither crate. Upstream declares a range it does not
+# actually support.
+solana-address = { workspace = true }
+solana-instruction = "3"        # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-keypair = "~3.1"
-solana-message = "=3.1.0"
+solana-message = "3"            # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-signer = "~3.0"
 solana-transaction = "^3.1"
 solana-system-interface = "3.0.0"

@@ -27,23 +27,23 @@ use crate::state::{MerkleTree, VaultConfig, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8)]
-pub struct ResetMerkleTree<'info> {
-    #[account(address = vault_config.load()?.admin @ VaultError::Unauthorized)]
-    pub admin: Signer<'info>,
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+pub struct ResetMerkleTree {
+    #[account(address = vault_config.admin @ VaultError::Unauthorized)]
+    pub admin: Signer,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
     #[account(
         mut,
         seeds = [MerkleTree::SEED, &[tree_id]],
-        bump = merkle_tree.load()?.bump,
+        bump = merkle_tree.bump,
     )]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    pub merkle_tree: Account<MerkleTree>,
 }
 
-pub fn reset_merkle_tree_handler(ctx: Context<ResetMerkleTree>, _tree_id: u8) -> Result<()> {
-    let empty = empty_root(&ctx.accounts.vault_config.load()?.zero_subtree_roots)?;
-    let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
-    tree.leaf_count = 0;
+pub fn reset_merkle_tree_handler(ctx: &mut Context<ResetMerkleTree>, _tree_id: u8) -> Result<()> {
+    let empty = empty_root(&ctx.accounts.vault_config.zero_subtree_roots)?;
+    let tree = &mut ctx.accounts.merkle_tree;
+    tree.leaf_count = (0).into();
     tree.right_path = [[0u8; 32]; MERKLE_DEPTH as usize];
     tree.roots = [[0u8; 32]; ROOT_HISTORY_SIZE];
     tree.roots_head = 0;

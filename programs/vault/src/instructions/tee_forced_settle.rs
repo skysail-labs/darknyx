@@ -46,7 +46,7 @@ use anchor_lang::prelude::*;
 /// encoded as `[0u8; 32]` when the corresponding change is zero
 /// (exact-fill) to keep the payload fixed-size and Borsh-stable; the
 /// handler skips the tree insertion for zero commitments.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+#[derive(SchemaWrite, SchemaRead, Clone, Debug)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
     /// The CONSUMED inputs, as note-use TAGS rather than commitments. These key
@@ -155,12 +155,12 @@ pub struct MatchResultPayload {
 /// `release_lock` will look up. Returns an error if the account is
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn create_relock_pda<'info>(
-    note_lock_ai: &UncheckedAccount<'info>,
-    payer: &Signer<'info>,
-    system_program: &Program<'info, System>,
+pub(crate) fn create_relock_pda(
+    note_lock_ai: &mut UncheckedAccount,
+    payer: &mut Signer,
+    system_program: &Program<System>,
     note_use_tag: &[u8; 32],
-    token_mint: &Pubkey,
+    token_mint: &Address,
     order_id: &[u8; 16],
     expiry_slot: u64,
 ) -> Result<()> {
@@ -168,10 +168,14 @@ pub(crate) fn create_relock_pda<'info>(
     use core::mem::size_of;
 
     let (expected_pda, bump) =
-        Pubkey::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
-    require_keys_eq!(note_lock_ai.key(), expected_pda, VaultError::Unauthorized);
+        Address::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
+    require_keys_eq!(
+        *note_lock_ai.address(),
+        expected_pda,
+        VaultError::Unauthorized
+    );
     require!(
-        note_lock_ai.data_is_empty() && note_lock_ai.lamports() == 0,
+        note_lock_ai.data_len() == 0 && note_lock_ai.lamports() == 0,
         VaultError::NoteAlreadyLocked
     );
 
@@ -199,10 +203,10 @@ pub(crate) fn create_relock_pda<'info>(
     let signer_seeds = &[seeds];
 
     let cpi_ctx = CpiContext::new_with_signer(
-        system_program.key(),
+        system_program.address(),
         system_program::CreateAccount {
-            from: payer.to_account_info(),
-            to: note_lock_ai.to_account_info(),
+            from: payer.to_cpi_handle_mut(),
+            to: note_lock_ai.to_cpi_handle_mut(),
         },
         signer_seeds,
     );
@@ -211,7 +215,10 @@ pub(crate) fn create_relock_pda<'info>(
     // Populate. Discriminator for zero_copy is the first 8 bytes of
     // anchor_lang::solana_program::hash::hash("account:NoteLock").
     {
-        let mut data = note_lock_ai.try_borrow_mut_data()?;
+        // `AccountView` is Copy, but a copy still writes through to the same
+        // underlying buffer — this is not a scratch clone.
+        let mut view = *note_lock_ai.account();
+        let mut data = view.try_borrow_mut()?;
         let disc = NoteLock::DISCRIMINATOR;
         data[..8].copy_from_slice(disc);
         let (_head, body) = data.split_at_mut(8);
@@ -225,8 +232,8 @@ pub(crate) fn create_relock_pda<'info>(
         // settle reads back.
         lock.token_mint = *token_mint;
         lock.order_id = *order_id;
-        lock.expiry_slot = expiry_slot;
-        lock.locked_by = payer.key();
+        lock.expiry_slot = (expiry_slot).into();
+        lock.locked_by = *payer.address();
         lock.bump = bump;
         lock._padding = [0u8; 7];
     }
@@ -303,7 +310,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
 }
 
 /// The Solana Ed25519Program precompile id.
-fn ed25519_program_id() -> Pubkey {
+fn ed25519_program_id() -> Address {
     solana_sdk_ids::ed25519_program::ID
 }
 
@@ -326,59 +333,62 @@ fn ed25519_program_id() -> Pubkey {
 /// We only accept the inlined form — cross-ix lookups are not worth the
 /// complexity and a well-behaved relayer always inlines.
 pub fn verify_tee_signature(
-    instructions_sysvar: &UncheckedAccount<'_>,
-    expected_pubkey: &Pubkey,
+    instructions_sysvar: &UncheckedAccount,
+    expected_pubkey: &Address,
     expected_msg: &[u8; 32],
 ) -> Result<()> {
-    use solana_instructions_sysvar::load_instruction_at_checked;
+    // v2: `solana_instructions_sysvar::load_instruction_at_checked` takes the
+    // old `AccountInfo`, which no longer exists — introspection moves to
+    // pinocchio's `Instructions` reader over the same sysvar bytes. The parsing
+    // below is byte-for-byte the same Ed25519 precompile layout; only the
+    // accessor changed.
+    use pinocchio::sysvars::instructions::Instructions;
 
-    let ai = instructions_sysvar.to_account_info();
-    // The sysvar data starts with a u16 instruction count at offset 0.
-    // Use it as the upper bound so we scan every instruction in the tx
-    // regardless of where the Ed25519 precompile is placed relative to us.
-    // Previous code used `current_ix_idx + 8` which silently skipped the
-    // precompile if it was placed > 8 slots after the settle ix.
-    let total_ix_count: usize = {
-        let data = ai
-            .try_borrow_data()
-            .map_err(|_| error!(VaultError::InvalidTeeSignature))?;
-        if data.len() < 2 {
-            return Err(error!(VaultError::InvalidTeeSignature));
-        }
-        u16::from_le_bytes([data[0], data[1]]) as usize
-    };
+    let ai = instructions_sysvar.account();
+    let data = ai
+        .try_borrow()
+        .map_err(|_| Error::from(VaultError::InvalidTeeSignature))?;
+    if data.len() < 2 {
+        return Err(Error::from(VaultError::InvalidTeeSignature));
+    }
+    // SAFETY: the caller constrains this account to the instructions sysvar
+    // address via `address = solana_sdk_ids::sysvar::instructions::ID`, so the
+    // bytes are the runtime's own sysvar data.
+    let ixs = unsafe { Instructions::new_unchecked(&data[..]) };
+    let total_ix_count = ixs.num_instructions();
 
     // Walk every instruction in the tx looking for a single Ed25519Program
     // precompile entry with matching (pk, msg).
     for i in 0..total_ix_count {
-        let ix = match load_instruction_at_checked(i, &ai) {
+        let ix = match ixs.load_instruction_at(i) {
             Ok(v) => v,
             Err(_) => break,
         };
-        if ix.program_id != ed25519_program_id() {
+        if ix.get_program_id() != &ed25519_program_id() {
             continue;
         }
-        if ix.data.len() < 16 {
+        let ix_data = ix.get_instruction_data();
+        if ix_data.len() < 16 {
             continue;
         }
-        let num_sigs = ix.data[0];
+        let num_sigs = ix_data[0];
         if num_sigs != 1 {
             continue;
         }
-        let pk_off = u16::from_le_bytes([ix.data[6], ix.data[7]]) as usize;
-        let pk_ix_idx = u16::from_le_bytes([ix.data[8], ix.data[9]]);
-        let msg_off = u16::from_le_bytes([ix.data[10], ix.data[11]]) as usize;
-        let msg_len = u16::from_le_bytes([ix.data[12], ix.data[13]]) as usize;
-        let msg_ix_idx = u16::from_le_bytes([ix.data[14], ix.data[15]]);
+        let pk_off = u16::from_le_bytes([ix_data[6], ix_data[7]]) as usize;
+        let pk_ix_idx = u16::from_le_bytes([ix_data[8], ix_data[9]]);
+        let msg_off = u16::from_le_bytes([ix_data[10], ix_data[11]]) as usize;
+        let msg_len = u16::from_le_bytes([ix_data[12], ix_data[13]]) as usize;
+        let msg_ix_idx = u16::from_le_bytes([ix_data[14], ix_data[15]]);
         // We only accept inlined pk/msg (index == u16::MAX).
         if pk_ix_idx != u16::MAX || msg_ix_idx != u16::MAX {
             continue;
         }
-        if pk_off + 32 > ix.data.len() || msg_off + msg_len > ix.data.len() {
+        if pk_off + 32 > ix_data.len() || msg_off + msg_len > ix_data.len() {
             continue;
         }
-        let pk_bytes = &ix.data[pk_off..pk_off + 32];
-        let msg_bytes = &ix.data[msg_off..msg_off + msg_len];
+        let pk_bytes = &ix_data[pk_off..pk_off + 32];
+        let msg_bytes = &ix_data[msg_off..msg_off + msg_len];
         if pk_bytes != expected_pubkey.as_ref() {
             continue;
         }
@@ -389,7 +399,7 @@ pub fn verify_tee_signature(
         // (pk, msg) pair or the tx would have failed before reaching us.
         return Ok(());
     }
-    Err(error!(VaultError::InvalidTeeSignature))
+    Err(Error::from(VaultError::InvalidTeeSignature))
 }
 
 #[cfg(test)]

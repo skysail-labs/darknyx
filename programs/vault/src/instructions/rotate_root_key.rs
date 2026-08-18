@@ -9,27 +9,29 @@ use crate::state::*;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
-#[instruction(new_root_key: Pubkey)]
-pub struct RotateRootKey<'info> {
+pub struct RotateRootKey {
     /// Must equal `vault_config.root_key`. Verified in the handler.
-    pub current_root_key: Signer<'info>,
+    pub current_root_key: Signer,
 
     #[account(
         mut,
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 }
 
-pub fn rotate_root_key_handler(ctx: Context<RotateRootKey>, new_root_key: Pubkey) -> Result<()> {
-    let mut cfg = ctx.accounts.vault_config.load_mut()?;
+pub fn rotate_root_key_handler(
+    ctx: &mut Context<RotateRootKey>,
+    new_root_key: Address,
+) -> Result<()> {
+    let cfg = &mut ctx.accounts.vault_config;
     require!(
-        ctx.accounts.current_root_key.key() == cfg.root_key,
+        *ctx.accounts.current_root_key.address() == cfg.root_key,
         VaultError::Unauthorized
     );
     require!(
-        new_root_key != Pubkey::default()
+        new_root_key != Address::default()
             && new_root_key != cfg.root_key
             && new_root_key != cfg.admin
             && !cfg.is_authorized_tee(&new_root_key),
@@ -38,7 +40,7 @@ pub fn rotate_root_key_handler(ctx: Context<RotateRootKey>, new_root_key: Pubkey
     cfg.root_key = new_root_key;
 
     emit!(RootKeyRotated {
-        old_root_key: ctx.accounts.current_root_key.key(),
+        old_root_key: *ctx.accounts.current_root_key.address(),
         new_root_key,
     });
     Ok(())
@@ -46,6 +48,6 @@ pub fn rotate_root_key_handler(ctx: Context<RotateRootKey>, new_root_key: Pubkey
 
 #[event]
 pub struct RootKeyRotated {
-    pub old_root_key: Pubkey,
-    pub new_root_key: Pubkey,
+    pub old_root_key: Address,
+    pub new_root_key: Address,
 }

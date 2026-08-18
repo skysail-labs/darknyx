@@ -22,9 +22,9 @@ use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32])]
-pub struct CloseBatchValidityMarker<'info> {
+pub struct CloseBatchValidityMarker {
     /// Caller. Any signer may sweep once the marker has expired.
-    pub authority: Signer<'info>,
+    pub authority: Signer,
 
     /// Refund target on close. MUST equal `marker.payer` (set by
     /// `verify_match_batch`). The `has_one = payer` constraint on
@@ -32,7 +32,7 @@ pub struct CloseBatchValidityMarker<'info> {
     ///
     /// CHECK: Validated via Anchor's `has_one = payer` on `marker`.
     #[account(mut)]
-    pub payer: UncheckedAccount<'info>,
+    pub payer: UncheckedAccount,
 
     /// Marker PDA — closed to `payer`.
     #[account(
@@ -42,35 +42,35 @@ pub struct CloseBatchValidityMarker<'info> {
         bump = marker.bump,
         has_one = payer,
     )]
-    pub marker: Account<'info, BatchValidityMarker>,
+    pub marker: Account<BatchValidityMarker>,
 }
 
 pub fn close_batch_validity_marker_handler(
-    ctx: Context<CloseBatchValidityMarker>,
+    ctx: &mut Context<CloseBatchValidityMarker>,
     _merkle_root: [u8; 32],
 ) -> Result<()> {
     let marker = &ctx.accounts.marker;
-    let authority = ctx.accounts.authority.key();
+    let authority = *ctx.accounts.authority.address();
     let clock = Clock::get()?;
     // The marker is unusable by Tx D at E (`clock.slot < expiry_slot`), so it is
     // safe and unambiguous to reclaim at E. No signer, including the payer, has
     // an early-close path.
     require!(
-        clock.slot >= marker.expiry_slot,
+        clock.slot >= marker.expiry_slot.get(),
         VaultError::BatchValidityMarkerNotExpired,
     );
 
     emit!(BatchValidityMarkerClosed {
         payer: marker.payer,
         closed_by: authority,
-        expiry_slot: marker.expiry_slot,
+        expiry_slot: marker.expiry_slot.get(),
     });
     Ok(())
 }
 
 #[event]
 pub struct BatchValidityMarkerClosed {
-    pub payer: Pubkey,
-    pub closed_by: Pubkey,
+    pub payer: Address,
+    pub closed_by: Address,
     pub expiry_slot: u64,
 }

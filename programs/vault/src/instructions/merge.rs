@@ -39,21 +39,21 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8)]
-pub struct Merge<'info> {
+pub struct Merge {
     /// Any signer pays rent for the new consumed-note PDAs + output leaf. Authority
     /// is the ZK proof.
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub payer: Signer,
 
     /// Global config — read-only (provides `zero_subtree_roots`).
-    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.bump)]
+    pub vault_config: Account<VaultConfig>,
 
     /// The Merkle-tree shard the inputs live in + the merged output is appended to.
-    #[account(mut, seeds = [MerkleTree::SEED, &[tree_id]], bump = merkle_tree.load()?.bump)]
-    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+    #[account(mut, seeds = [MerkleTree::SEED, &[tree_id]], bump = merkle_tree.bump)]
+    pub merkle_tree: Account<MerkleTree>,
 
-    pub system_program: Program<'info, System>,
+    pub system_program: Program<System>,
     // `remaining_accounts` contains two same-length runs, each in active
     // input-use-tag order: first the writable, uninitialised
     // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs, which may be
@@ -64,11 +64,11 @@ pub struct Merge<'info> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn merge_handler<'info>(
-    ctx: Context<'info, Merge<'info>>,
+    ctx: &mut Context<Merge>,
     tree_id: u8,
     input_use_tags: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
-    token_mint: Pubkey,
+    token_mint: Address,
     merkle_root: [u8; 32],
     k: u8,
     proof: Groth16Proof,
@@ -92,11 +92,14 @@ pub fn merge_handler<'info>(
     // or a tree append. The circuit independently requires at least one active,
     // positive input and a positive output amount.
     require!(active_len > 0, VaultError::EmptyMerge);
+    // `remaining_accounts()` returns an OWNED Vec, so it must be bound before
+    // splitting — splitting the temporary leaves the halves dangling.
+    let mut remaining = ctx.remaining_accounts()?;
     require!(
-        ctx.remaining_accounts.len() == active_len.saturating_mul(2),
+        remaining.len() == active_len.saturating_mul(2),
         VaultError::MergeAccountMismatch
     );
-    let (consumed_accounts, note_lock_accounts) = ctx.remaining_accounts.split_at(active_len);
+    let (consumed_accounts, note_lock_accounts) = remaining.split_at_mut(active_len);
     // S-11: active inputs must be pairwise DISTINCT. Two identical active
     // tags would make the circuit's `outputAmount` double-count one
     // note. That is currently unreachable — the second
@@ -113,8 +116,12 @@ pub fn merge_handler<'info>(
     let now_slot = Clock::get()?.slot;
     for (tag, note_lock) in active_tags.iter().zip(note_lock_accounts) {
         let (expected, _) =
-            Pubkey::find_program_address(&[NoteLock::SEED, tag.as_ref()], &crate::ID);
-        require_keys_eq!(note_lock.key(), expected, VaultError::MergeAccountMismatch);
+            Address::find_program_address(&[NoteLock::SEED, tag.as_ref()], &crate::ID);
+        require_keys_eq!(
+            *note_lock.address(),
+            expected,
+            VaultError::MergeAccountMismatch
+        );
         // S-03: only a LIVE lock blocks the merge (N-04's intent — stop an
         // owner merging a live order's collateral and griefing the
         // counterparty — is preserved; an EXPIRED lock no longer bricks it).
@@ -126,7 +133,7 @@ pub fn merge_handler<'info>(
 
     // Merkle root must be recent in THIS shard (membership proofs built against it).
     require!(
-        ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
+        ctx.accounts.merkle_tree.contains_root(&merkle_root),
         VaultError::StaleMerkleRoot
     );
 
@@ -175,7 +182,7 @@ pub fn merge_handler<'info>(
             );
             verify_groth16_proof::<8>(&vk, &proof, &pi)?;
         }
-        _ => return err!(VaultError::InvalidMergeK),
+        _ => return Err(Error::from(VaultError::InvalidMergeK)),
     }
 
     // ----- Consume each non-zero (active) input by creating its ConsumedNoteEntry -----
@@ -185,10 +192,10 @@ pub fn merge_handler<'info>(
     // Reuse the slot already read for the lock-liveness check — same
     // transaction, therefore the same slot, and one fewer sysvar read.
     let spent_slot = now_slot;
-    for (commitment, ai) in active_tags.iter().zip(consumed_accounts) {
+    for (commitment, ai) in active_tags.iter().zip(consumed_accounts.iter_mut()) {
         create_consumed_note_pda(
             ai,
-            &ctx.accounts.payer,
+            &mut ctx.accounts.payer,
             &ctx.accounts.system_program,
             commitment,
             spent_slot,
@@ -201,8 +208,8 @@ pub fn merge_handler<'info>(
     // it — the off-chain mirror + the client both need the EXACT index, which a
     // post-hoc leaf_count read can't give under concurrent appends.
     let (leaf_index, new_root) = {
-        let zsr = ctx.accounts.vault_config.load()?.zero_subtree_roots;
-        let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
+        let zsr = ctx.accounts.vault_config.zero_subtree_roots;
+        let tree = &mut ctx.accounts.merkle_tree;
         let leaf_index = tree.leaf_count;
         let new_root = append_leaf(tree, &zsr, output_commitment)?;
         (leaf_index, new_root)
@@ -215,7 +222,7 @@ pub fn merge_handler<'info>(
         output_commitment,
         token_mint,
         k,
-        leaf_index,
+        leaf_index: leaf_index.get(),
         new_root,
     });
     Ok(())
@@ -227,20 +234,20 @@ pub fn merge_handler<'info>(
 /// Fails if the PDA already exists (a prior withdraw / settle / merge already
 /// consumed this note → double-spend). `match_id` is the all-zero sentinel
 /// (merge is not a match), matching `withdraw`'s `ConsumedNoteEntry`.
-fn create_consumed_note_pda<'info>(
-    ai: &AccountInfo<'info>,
-    payer: &Signer<'info>,
-    system_program: &Program<'info, System>,
+fn create_consumed_note_pda(
+    ai: &mut AccountView,
+    payer: &mut Signer,
+    system_program: &Program<System>,
     note_use_tag: &[u8; 32],
     consumed_slot: u64,
 ) -> Result<()> {
-    let (expected, bump) = Pubkey::find_program_address(
+    let (expected, bump) = Address::find_program_address(
         &[ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         &crate::ID,
     );
-    require_keys_eq!(ai.key(), expected, VaultError::MergeAccountMismatch);
+    require_keys_eq!(*ai.address(), expected, VaultError::MergeAccountMismatch);
     require!(
-        ai.data_is_empty() && ai.lamports() == 0,
+        ai.data_len() == 0 && ai.lamports() == 0,
         VaultError::NoteAlreadyConsumed
     );
 
@@ -252,10 +259,10 @@ fn create_consumed_note_pda<'info>(
 
     system_program::create_account(
         CpiContext::new_with_signer(
-            system_program.key(),
+            system_program.address(),
             system_program::CreateAccount {
-                from: payer.to_account_info(),
-                to: ai.to_account_info(),
+                from: payer.to_cpi_handle_mut(),
+                to: ai.to_cpi_handle_mut(),
             },
             signer_seeds,
         ),
@@ -264,13 +271,13 @@ fn create_consumed_note_pda<'info>(
         &crate::ID,
     )?;
 
-    let mut data = ai.try_borrow_mut_data()?;
+    let mut data = ai.try_borrow_mut()?;
     data[..8].copy_from_slice(ConsumedNoteEntry::DISCRIMINATOR);
     let (_head, body) = data.split_at_mut(8);
     let c: &mut ConsumedNoteEntry = bytemuck::from_bytes_mut(body);
     c.note_use_tag = *note_use_tag;
     c.match_id = [0u8; 16];
-    c.consumed_slot = consumed_slot;
+    c.consumed_slot = (consumed_slot).into();
     c.bump = bump;
     c._padding = [0u8; 7];
     Ok(())
@@ -281,7 +288,7 @@ pub struct NoteMerged {
     /// Shard the merged output leaf was appended to (routes the off-chain mirror).
     pub tree_id: u8,
     pub output_commitment: [u8; 32],
-    pub token_mint: Pubkey,
+    pub token_mint: Address,
     pub k: u8,
     /// Tree position the merged output leaf landed at (its inclusion index).
     pub leaf_index: u64,

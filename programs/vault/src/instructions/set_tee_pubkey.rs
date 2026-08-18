@@ -18,25 +18,25 @@ use crate::state::*;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
-pub struct SetTeePubkey<'info> {
+pub struct SetTeeAddress {
     /// Admin signer — must equal `vault_config.admin`.
-    pub admin: Signer<'info>,
+    pub admin: Signer,
 
     #[account(
         mut,
         seeds = [VaultConfig::SEED],
-        bump = vault_config.load()?.bump,
+        bump = vault_config.bump,
     )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
+    pub vault_config: Account<VaultConfig>,
 }
 
 /// Install the FULL authorized TEE signer set (the K shard fee-payer/authority
 /// keys). Replaces the whole `tee_pubkeys` array + `num_tee_keys`. One ix sets
 /// all K at the rotation ceremony (e.g. when a fresh CVM derives K dstack keys).
-pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> Result<()> {
-    let mut cfg = ctx.accounts.vault_config.load_mut()?;
+pub fn set_tee_pubkey_handler(ctx: &mut Context<SetTeeAddress>, keys: Vec<Address>) -> Result<()> {
+    let cfg = &mut ctx.accounts.vault_config;
     require!(
-        ctx.accounts.admin.key() == cfg.admin,
+        *ctx.accounts.admin.address() == cfg.admin,
         VaultError::Unauthorized
     );
     require!(
@@ -49,21 +49,21 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
     // settles shard j). n ≤ MAX_TEE_KEYS (16) → the O(n²) dup scan is trivial.
     for (i, k) in keys.iter().enumerate() {
         require!(
-            *k != Pubkey::default() && *k != cfg.admin && *k != cfg.root_key,
+            *k != Address::default() && *k != cfg.admin && *k != cfg.root_key,
             VaultError::InvalidTeeKey
         );
         require!(!keys[..i].contains(k), VaultError::InvalidTeeKey);
     }
 
     let old = cfg.tee_pubkeys[0];
-    cfg.tee_pubkeys = [Pubkey::default(); MAX_TEE_KEYS];
+    cfg.tee_pubkeys = [Address::default(); MAX_TEE_KEYS];
     for (slot, k) in cfg.tee_pubkeys.iter_mut().zip(keys.iter()) {
         *slot = *k;
     }
     cfg.num_tee_keys = keys.len() as u8;
 
-    emit!(TeePubkeyRotated {
-        admin: ctx.accounts.admin.key(),
+    emit!(TeeAddressRotated {
+        admin: *ctx.accounts.admin.address(),
         old_tee_pubkey: old,
         new_tee_pubkey: keys[0],
         num_keys: keys.len() as u8,
@@ -72,9 +72,9 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
 }
 
 #[event]
-pub struct TeePubkeyRotated {
-    pub admin: Pubkey,
-    pub old_tee_pubkey: Pubkey,
-    pub new_tee_pubkey: Pubkey,
+pub struct TeeAddressRotated {
+    pub admin: Address,
+    pub old_tee_pubkey: Address,
+    pub new_tee_pubkey: Address,
     pub num_keys: u8,
 }

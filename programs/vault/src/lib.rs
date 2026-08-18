@@ -54,10 +54,10 @@ pub mod vault {
     /// Initialize the global `VaultConfig` singleton. One-time setup. The K
     /// Merkle-tree shards are created separately via `initialize_tree`.
     pub fn initialize(
-        ctx: Context<Initialize>,
-        operations_admin: Pubkey,
-        tee_pubkeys: Vec<Pubkey>,
-        root_key: Pubkey,
+        ctx: &mut Context<Initialize>,
+        operations_admin: Address,
+        tee_pubkeys: Vec<Address>,
+        root_key: Address,
         num_trees: u8,
     ) -> Result<()> {
         initialize::initialize_handler(ctx, operations_admin, tee_pubkeys, root_key, num_trees)
@@ -66,7 +66,7 @@ pub mod vault {
     /// Initialize one enabled mint-pair market. Mint decimals are read from the
     /// SPL accounts and scaled-price parameters are governance-bounded.
     pub fn initialize_market(
-        ctx: Context<InitializeMarket>,
+        ctx: &mut Context<InitializeMarket>,
         price_scale: u64,
         tick_size: u64,
         min_order_size: u64,
@@ -83,19 +83,19 @@ pub mod vault {
 
     /// Initialize one Merkle-tree shard account (`tree_id < num_trees`).
     /// Admin-gated. Run once per shard at devnet-setup.
-    pub fn initialize_tree(ctx: Context<InitializeTree>, tree_id: u8) -> Result<()> {
+    pub fn initialize_tree(ctx: &mut Context<InitializeTree>, tree_id: u8) -> Result<()> {
         initialize_tree::initialize_tree_handler(ctx, tree_id)
     }
 
     /// Rotate the protocol root key. Must be signed by the current
     /// root key (self-signature model — admin cannot override).
-    pub fn rotate_root_key(ctx: Context<RotateRootKey>, new_root_key: Pubkey) -> Result<()> {
+    pub fn rotate_root_key(ctx: &mut Context<RotateRootKey>, new_root_key: Address) -> Result<()> {
         rotate_root_key::rotate_root_key_handler(ctx, new_root_key)
     }
 
     /// Register a User Commitment via VALID_WALLET_CREATE proof.
     pub fn create_wallet(
-        ctx: Context<CreateWallet>,
+        ctx: &mut Context<CreateWallet>,
         commitment: [u8; 32],
         proof: Groth16Proof,
     ) -> Result<()> {
@@ -106,7 +106,7 @@ pub mod vault {
     /// The proof keeps owner_commitment + inner_hash private while binding the
     /// public mint, amount, commitment, and recovery nonce.
     pub fn deposit(
-        ctx: Context<Deposit>,
+        ctx: &mut Context<Deposit>,
         tree_id: u8,
         amount: u64,
         note_commitment: [u8; 32],
@@ -119,7 +119,7 @@ pub mod vault {
     /// Withdraw tokens using a VALID_SPEND proof.
     #[allow(clippy::too_many_arguments)]
     pub fn withdraw(
-        ctx: Context<Withdraw>,
+        ctx: &mut Context<Withdraw>,
         tree_id: u8,
         note_use_tag: [u8; 32],
         nullifier: [u8; 32],
@@ -144,11 +144,11 @@ pub mod vault {
     /// remaining_accounts.
     #[allow(clippy::too_many_arguments)]
     pub fn merge<'info>(
-        ctx: Context<'info, Merge<'info>>,
+        ctx: &mut Context<Merge>,
         tree_id: u8,
         input_use_tags: Vec<[u8; 32]>,
         output_commitment: [u8; 32],
-        token_mint: Pubkey,
+        token_mint: Address,
         merkle_root: [u8; 32],
         k: u8,
         proof: Groth16Proof,
@@ -170,12 +170,12 @@ pub mod vault {
     /// private, positive-u64 amount from instruction/event data).
     #[allow(clippy::too_many_arguments)]
     pub fn lock_note(
-        ctx: Context<LockNote>,
+        ctx: &mut Context<LockNote>,
         tree_id: u8,
         note_use_tag: [u8; 32],
         order_id: [u8; 16],
         expiry_slot: u64,
-        token_mint: Pubkey,
+        token_mint: Address,
         merkle_root: [u8; 32],
         proof: Groth16Proof,
     ) -> Result<()> {
@@ -192,7 +192,7 @@ pub mod vault {
     }
 
     /// Release an expired note lock.
-    pub fn release_lock(ctx: Context<ReleaseLock>, note_use_tag: [u8; 32]) -> Result<()> {
+    pub fn release_lock(ctx: &mut Context<ReleaseLock>, note_use_tag: [u8; 32]) -> Result<()> {
         release_lock::release_lock_handler(ctx, note_use_tag)
     }
 
@@ -200,7 +200,7 @@ pub mod vault {
     /// `VaultConfig`. Admin-only. Safe to call repeatedly (e.g. to rotate
     /// the protocol-owner commitment or change the fee rate).
     pub fn set_protocol_config(
-        ctx: Context<SetProtocolConfig>,
+        ctx: &mut Context<SetProtocolConfig>,
         protocol_owner_commitment: [u8; 32],
         fee_rate_bps: u16,
     ) -> Result<()> {
@@ -214,7 +214,7 @@ pub mod vault {
     /// Update or pause an existing market. Its mint identity and snapshotted
     /// decimals remain immutable.
     pub fn update_market_config(
-        ctx: Context<UpdateMarketConfig>,
+        ctx: &mut Context<UpdateMarketConfig>,
         enabled: bool,
         price_scale: u64,
         tick_size: u64,
@@ -235,7 +235,7 @@ pub mod vault {
     /// Admin-only. Needed whenever a fresh CVM boots with a new
     /// dstack-derived signer. Devnet-simplified — production rotation
     /// is multisig + attestation-gated (see `set_tee_pubkey.rs`).
-    pub fn set_tee_pubkey(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> Result<()> {
+    pub fn set_tee_pubkey(ctx: &mut Context<SetTeeAddress>, keys: Vec<Address>) -> Result<()> {
         set_tee_pubkey::set_tee_pubkey_handler(ctx, keys)
     }
 
@@ -249,7 +249,7 @@ pub mod vault {
     /// `verify_valid_create` + `verify_valid_price` ix pair, which
     /// were removed in Phase 1c-hard.
     pub fn verify_match_batch(
-        ctx: Context<VerifyMatchBatch>,
+        ctx: &mut Context<VerifyMatchBatch>,
         merkle_root: [u8; 32],
         proof: Groth16Proof,
     ) -> Result<()> {
@@ -263,7 +263,7 @@ pub mod vault {
     /// + its `ValidCreateMarker` / `ValidPriceMarker` per-match
     /// dependencies were removed in Phase 1c-hard.
     pub fn tee_forced_settle_batched(
-        ctx: Context<TeeForcedSettleBatched>,
+        ctx: &mut Context<TeeForcedSettleBatched>,
         tree_id: u8,
         payload: MatchResultPayload,
         match_index: u8,
@@ -283,7 +283,7 @@ pub mod vault {
     /// the batch have settled, or by anyone post-expiry as garbage
     /// collection. See instructions/close_batch_validity_marker.rs.
     pub fn close_batch_validity_marker(
-        ctx: Context<CloseBatchValidityMarker>,
+        ctx: &mut Context<CloseBatchValidityMarker>,
         merkle_root: [u8; 32],
     ) -> Result<()> {
         close_batch_validity_marker::close_batch_validity_marker_handler(ctx, merkle_root)
@@ -294,7 +294,7 @@ pub mod vault {
     /// under `--features devnet-admin` (audit_1 F-01) — a mainnet build has no
     /// such discriminator.
     #[cfg(feature = "devnet-admin")]
-    pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>, tree_id: u8) -> Result<()> {
+    pub fn reset_merkle_tree(ctx: &mut Context<ResetMerkleTree>, tree_id: u8) -> Result<()> {
         reset_merkle_tree::reset_merkle_tree_handler(ctx, tree_id)
     }
 
@@ -304,7 +304,7 @@ pub mod vault {
     /// `--features devnet-admin` (audit_1 F-02) — a mainnet build has no such
     /// discriminator.
     #[cfg(feature = "devnet-admin")]
-    pub fn close_vault_config(ctx: Context<CloseVaultConfig>) -> Result<()> {
+    pub fn close_vault_config(ctx: &mut Context<CloseVaultConfig>) -> Result<()> {
         close_vault_config::close_vault_config_handler(ctx)
     }
 }
