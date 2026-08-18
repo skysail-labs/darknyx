@@ -1,9 +1,14 @@
-# audit_9 — proof-not-bound-to-signer / `init` PDA squatting
+# audit_10 — proof-not-bound-to-signer / `init` PDA squatting
 
 **Date:** 2026-08-18
 **Trigger:** CodeRabbit raised the `create_wallet` case on PR #170 (the Anchor v2
-port). This document is the finding plus the **program-wide sweep for the same
-pattern** that the report was asked to produce.
+port). This document is the **program-wide sweep for that pattern**.
+
+> **`create_wallet` itself is already tracked as `audit_9` TR-14**, filed
+> independently and merged to `main` (#176) while this port was in flight.
+> **This document does not re-file it.** §3 is an AMENDMENT to TR-14's
+> disposition, not a new finding. PS-01 and PS-02 ARE new — `audit_9` covers
+> neither.
 **Scope:** every `#[derive(Accounts)]` in `programs/vault/src/instructions/`.
 
 > **This is not a v2 regression.** `create_wallet` on `main` under Anchor 1.1.2
@@ -38,9 +43,9 @@ expense and gains them nothing.
 
 | Handler | Public inputs | Signer bound? | `init` PDA seeded by | Verdict |
 |---|---|---|---|---|
-| `create_wallet` | `[commitment]` | **no** | `commitment` | **VULNERABLE — F-11** |
-| `deposit` | `[commitment, mint_lo, mint_hi, amount, recovery_nonce]` | no | `note_commitment` | **Bounded — F-12** |
-| `verify_match_batch` | `[merkle_root, config_digest]` | no (any payer, by design) | `merkle_root` | **Interaction — F-13** |
+| `create_wallet` | `[commitment]` | **no** | `commitment` | **VULNERABLE — `audit_9` TR-14; see §3** |
+| `deposit` | `[commitment, mint_lo, mint_hi, amount, recovery_nonce]` | no | `note_commitment` | **Bounded — PS-01** |
+| `verify_match_batch` | `[merkle_root, config_digest]` | no (any payer, by design) | `merkle_root` | **Interaction — PS-02** |
 | `lock_note` | `[merkle_root, note_use_tag, mint_lo, mint_hi]` | **yes** — `tee_pubkeys` | `note_use_tag` | Safe |
 | `withdraw` | `[tag, root, nullifier, mint_lo/hi, amount, dest_lo, dest_hi]` | no | `note_use_tag` | Safe — **binds destination** |
 | `merge` | `[out_commitment, in_tags…, root, mint_lo/hi]` | no | `note_use_tag` ×K | Safe — binds the effect |
@@ -56,9 +61,28 @@ the user, at their own cost.
 
 ---
 
-## 3. F-11 — `create_wallet` wallet-identity squatting
+## 3. Amendment to `audit_9` TR-14 — `create_wallet`
 
-**Severity: Medium.** Griefing, permanent, rent-cheap. Not theft.
+**Not a new finding.** TR-14 already records the front-run, the single public
+input, and the grep proving nothing reads `WalletEntry.owner`. Two corrections
+to its disposition — one makes it worse, one makes it cheaper to fix.
+
+**(i) TR-14's Low is understated.** It reads the impact as "rent-burn and a
+misattributed registry row, nothing more". The registration is not merely
+misattributed — it becomes **impossible**. `wallet_entry` is `init` and there is
+no `close_wallet`, so the address is occupied permanently; and the commitment is
+`userCommitmentFromKeys(root_key, spending_key, viewing_key, r0, r1, r2)`, a
+deterministic function of the user's long-lived identity, so the victim cannot
+simply choose another. The impact is **permanent denial of registration to a
+specific user**, for one fee plus ~0.001 SOL of unrecoverable rent. Suggested
+severity: **Medium**.
+
+**(ii) TR-14 marks this `Lockstep: yes` and offers only a circuit change.**
+Option (A) below fixes it without touching the circuit. This matters because
+"the fix is a lockstep circuit change" is precisely what leaves a Low finding
+sitting unfixed.
+
+The original analysis follows.
 
 `programs/vault/src/instructions/create_wallet.rs`
 
@@ -118,7 +142,7 @@ incidental, not designed: the moment anything starts trusting
 
 ---
 
-## 4. F-12 — `deposit` commitment squatting (bounded by cost)
+## 4. PS-01 — `deposit` commitment squatting (bounded by cost)
 
 **Severity: Low.**
 
@@ -135,7 +159,7 @@ before relaxing any amount constraint.
 
 ---
 
-## 5. F-13 — `verify_match_batch` marker capture stalls the batch
+## 5. PS-02 — `verify_match_batch` marker capture stalls the batch
 
 **Severity: Medium.** Raised from Low after review — see the correction note at
 the end of this section.
@@ -178,7 +202,7 @@ lamport destination writable but the *authority* need not be the same account).
 Separately, `verify_match_batch`'s caller should detect an already-initialised
 marker and continue rather than failing the batch.
 
-> **Correction, 2026-08-18.** This section originally rated F-13 **Low** and
+> **Correction, 2026-08-18.** This section originally rated PS-02 **Low** and
 > said "the batch still settles". That was wrong: it assumed the worker treats a
 > failed Tx B as recoverable. It does not — the `?` propagates. Raised by
 > CodeRabbit on PR #175 and confirmed by reading `settle/worker.rs`. The

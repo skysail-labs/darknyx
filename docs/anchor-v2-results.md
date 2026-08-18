@@ -1,7 +1,7 @@
 # Anchor v1 → v2-rc.1: port completion record
 
-Branch `experiment/anchor-v2-rc1`, split into the stacked PRs #169 → #170 →
-#171 → #172 → #174 → #175.
+Branch `experiment/anchor-v2-rc1`, split into the stacked PRs
+`#169 → #170 → #171 → #172 → #174 → #175`.
 
 Validated on devnet under program
 `DtSR7WELiAJMSMsPSLmDmA9ai5Q4715vooH8vderTvX7`, deliberately separate from

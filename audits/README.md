@@ -55,6 +55,7 @@ is the authority.
 | `audit_7` | Client attestation review + un-audited surface sweep | `CA-`, `SW-`, `PF-12…PF-27` |
 | `audit_8` | Browser trader + oracle source switch + note-use-tag lockstep | `R-`, `PF-28…` |
 | `audit_9` | RA-TLS transport stack (T-03P) + `audit_7` carry-forward settle/crypto | `TR-`, `PF-31…` |
+| `audit_10` | Proof-not-bound-to-signer / `init` PDA squatting sweep (from the Anchor v2 port) | `PS-` |
 
 **ID prefixes are never reused.** A new engagement picks a fresh letter prefix
 and continues the shared `PF-` numbering for performance items. Reusing a
