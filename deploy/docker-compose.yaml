@@ -32,7 +32,7 @@ services:
     # fetched via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:aeda7801047b7d84fc63219ee575d5221bce53ad8945d25bb27d99ff68118b7b
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:d17d6ca648b706441a1bd81b7ce55c4ee1a4f74e9be1e59253edc6c4a2739dee
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -162,6 +162,17 @@ services:
       # (the devnet-setup e2e-config mints). Empty/unset → placeholder
       # dev mints (synthetic-order loadgen mode; settlement disabled). Supplying
       # only one mint is rejected. See Config.
+      # Which vault program this enclave talks to. Empty/unset -> the
+      # compiled-in default. Set it to point a CVM at a different vault (an
+      # Anchor v2 experiment, a second devnet foundation) WITHOUT rebuilding
+      # and re-attesting the image.
+      #
+      # This must be declared here or the variable is silently dropped at the
+      # container boundary: the enclave then falls back to the default program,
+      # reads THAT program's VaultConfig successfully, and fails much later on
+      # a missing MarketConfig — an error that points at the wrong subsystem
+      # entirely. Exactly what happened on the first v2 CVM deploy.
+      DARKNYX_TEE_VAULT_PROGRAM_ID: ${DARKNYX_TEE_VAULT_PROGRAM_ID:-}
       DARKNYX_TEE_BASE_MINT: ${DARKNYX_TEE_BASE_MINT}
       DARKNYX_TEE_QUOTE_MINT: ${DARKNYX_TEE_QUOTE_MINT}
       DARKNYX_TEE_MARKET_SYMBOL: ${DARKNYX_TEE_MARKET_SYMBOL:-SOL-USDC}
