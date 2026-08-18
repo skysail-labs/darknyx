@@ -59,6 +59,12 @@ serde_json = "1.0"
 # (tee_forced_settle_batched / match_batch_verify, migrated from matching_engine)
 # send the TEE Ed25519 signature-verify ix.
 litesvm = { workspace = true, features = ["precompiles"] }
+# v2 EXPERIMENT: agave 4.2.1 changed ExecutionRecord's fields, which breaks
+# litesvm 0.15.2 even though litesvm asks for "^4.1.1" — an upstream semver
+# break inside a minor release. Pin the family to 4.1.x so the range resolves
+# to something that actually compiles.
+solana-transaction-context = "=4.1.1"
+solana-program-runtime = "=4.1.1"
 solana-account = "~3.4"
 # v2 EXPERIMENT: was "=2.2.0". anchor-lang 2.0.0-rc.1 declares solana-address
 # "^2.0" + wincode "^0.5", but solana-address only uses wincode 0.5 at 2.6.x
@@ -71,7 +77,7 @@ solana-instruction = "3"        # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-keypair = "~3.1"
 solana-message = "3"            # v2 EXPERIMENT: relaxed for litesvm 0.15.2
 solana-signer = "~3.0"
-solana-transaction = "^3.1"
+solana-transaction = { workspace = true }  # v2 EXPERIMENT: needs the workspace bincode feature for Transaction::new
 solana-system-interface = "3.0.0"
 sha2 = "0.10"
 borsh = { workspace = true, features = ["derive"] }
