@@ -3,7 +3,7 @@
 //!
 //! This Rust port MUST produce, for any payload:
 //!   - the SAME 552-byte Borsh serialization as the on-chain
-//!     `vault::instructions::tee_forced_settle::MatchResultPayload`
+//!     `vault::instructions::settlement_shared::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
 //!   - the SAME 32-byte canonical hash as the on-chain
@@ -150,7 +150,7 @@ mod tests {
 
     /// The exact fixture from the on-chain
     /// `canonical_payload_hash_fixed_vector` unit test in
-    /// programs/vault/src/instructions/tee_forced_settle.rs.
+    /// programs/vault/src/instructions/settlement_shared.rs.
     fn fixed_vector_payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],

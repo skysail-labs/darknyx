@@ -71,7 +71,7 @@ settle moment**, in three places:
    note entering a trade is public on its lock PDA.
 2. **`MatchResultPayload` carries plaintext `u64`s** in the settle ix data —
    `base_amount`, `quote_amount`, `clearing_price`, `buyer/seller_change_amt`,
-   `buyer/seller_fee_amt` (`programs/vault/src/instructions/tee_forced_settle.rs:42-97`).
+   `buyer/seller_fee_amt` (`programs/vault/src/instructions/settlement_shared.rs:42-97`).
 3. **The match leaf hashes those plaintext amounts** —
    `crates/darknyx-tee/src/prover/leaf.rs:60-97`:
    ```
@@ -168,7 +168,7 @@ Move all four to the commitment-only layout *in one commit*:
   `note_*_commitment == [0;32]`.
 - `verify_match_batch.rs`: public inputs `[merkle_root]` → `[merkle_root, fee_rate_bps]`.
 - `state.rs`: drop `NoteLock.amount`; `lock_note.rs` binds the commitment (not a plaintext amount).
-- `MatchResultPayload` (`tee_forced_settle.rs:42-97`): **drop** `base_amount`, `quote_amount`,
+- `MatchResultPayload` (`settlement_shared.rs`): **drop** `base_amount`, `quote_amount`,
   `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`. **Keep** `match_id`,
   `note_*_commitment` (incl. fee notes), `nullifier_a/b`, `order_id_a/b`, relock fields,
   `batch_slot`. → **smaller settle tx** (free win on §6's byte budget).
@@ -177,7 +177,7 @@ Move all four to the commitment-only layout *in one commit*:
 
 ### 6.4 Canonical payload hash (the TEE-signed message)
 `canonical_payload_hash` is over the payload; shrinking it changes the hash → **byte-equality
-cascade** across vault (`tee_forced_settle.rs`) + TEE (`crates/darknyx-tee/src/settle/payload.rs`) + SDK
+cascade** across vault (`settlement_shared.rs`) + TEE (`crates/darknyx-tee/src/settle/payload.rs`) + SDK
 (`settle-builder.ts::canonicalPayloadHash`), with a **domain-tag bump** (precedent: the prior
 settlement-domain v5 → v6). The amounts don't need to be *signed* — the proof binds them; the signature
 binds the commitments/nullifiers/order_ids.
@@ -299,7 +299,7 @@ Each phase is independently reviewable; the circuit change (P1-P2) lands as one 
 ## Appendix — key file/line references (as of 2026-06-20)
 
 - Leak surface: `programs/vault/src/state.rs:180` (NoteLock.amount);
-  `tee_forced_settle.rs:42-97` (MatchResultPayload);
+  `settlement_shared.rs` (MatchResultPayload);
   `crates/darknyx-tee/src/prover/leaf.rs:60-97` (leaf hashes amounts).
 - Already-in-circuit: `circuits/templates/match_batch.circom:144-145` (conservation),
   `:165-189` (change-note conditional), `:198-205` (range checks on base/quote/price + price mul).

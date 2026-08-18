@@ -1,14 +1,11 @@
 //! v3 — TEE-forced atomic settlement, batched-marker variant.
 //!
-//! Mirror of `tee_forced_settle` (per-match `ValidCreateMarker` +
-//! `ValidPriceMarker` flow) except the two markers are collapsed into
-//! ONE `BatchValidityMarker`. The marker is written by the upstream
+//! One `BatchValidityMarker` covers the whole batch, written by the upstream
 //! `verify_match_batch` ix and seeded by the Merkle root over up-to-16
 //! per-slot leaves.
 //!
 //! The handler:
-//!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash
-//!      (identical to the per-match flow).
+//!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash.
 //!   2. Recomputes the per-slot leaf from consumed/relock note-use tags plus
 //!      created commitments (arity-12 — must byte-match the circuit's
 //!      `MatchSlot` template).
@@ -16,25 +13,23 @@
 //!      provided sibling hashes + match_index.
 //!   4. Asserts the BatchValidityMarker PDA exists at the
 //!      [b"batch_validity", root]-derived address + non-expired.
-//!   5. Applies the same conservation laws + state mutations as the
-//!      per-match handler. (Lock + consumed-note writes +
-//!      Merkle-tree appends + optional re-locks.)
+//!   5. Applies the conservation laws + state mutations: lock +
+//!      consumed-note writes, Merkle-tree appends, optional re-locks.
 //!   6. Leaves the marker OPEN — one `BatchValidityMarker` covers all N
 //!      matches in the batch, so a separate `close_batch_validity_marker`
 //!      ix reclaims its rent exactly once, after every match settles.
 //!      (Closing it here would brick every match after the first — see §8.2.)
 //!
-//! Coexists with `tee_forced_settle` during the cutover window. The
-//! matcher chooses which path to use; once the batched path proves
-//! out on devnet, the per-match ix + its two markers can be deleted
-//! in a follow-up vault upgrade.
+//! This is the ONLY settle entrypoint. Its shared helpers — the payload, the
+//! canonical hash, the signature check, the relock allocator — live in
+//! `settlement_shared.rs`.
 //!
 //! Hardcoded N=16: the proof's Merkle tree is depth 4. Smaller batch
 //! sizes (N=2 / N=4) are for circuit-side scaling validation; the
 //! on-chain handler accepts N=16 only.
 
 use crate::errors::VaultError;
-use crate::instructions::tee_forced_settle::{
+use crate::instructions::settlement_shared::{
     canonical_payload_hash, verify_tee_signature, MatchResultPayload, TradeSettled,
 };
 use crate::merkle::append_leaves;
@@ -577,7 +572,7 @@ pub fn tee_forced_settle_batched_handler(
     // Re-locks LAST so a re-lock failure rolls back every preceding
     // state change.
     if payload.buyer_relock_order_id != [0u8; 16] {
-        super::tee_forced_settle::create_relock_pda(
+        super::settlement_shared::create_relock_pda(
             &mut ctx.accounts.note_lock_e,
             &mut ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
@@ -592,7 +587,7 @@ pub fn tee_forced_settle_batched_handler(
         )?;
     }
     if payload.seller_relock_order_id != [0u8; 16] {
-        super::tee_forced_settle::create_relock_pda(
+        super::settlement_shared::create_relock_pda(
             &mut ctx.accounts.note_lock_f,
             &mut ctx.accounts.tee_authority,
             &ctx.accounts.system_program,

@@ -1,26 +1,19 @@
-//! Shared settlement infrastructure. The v3.1 per-match
-//! `tee_forced_settle` handler + its `TeeForcedSettle<'info>` Accounts
-//! struct used to live here; both were deleted in Phase 1c-hard once
-//! `verify_match_batch` + `tee_forced_settle_batched` took over every
-//! settle path on-chain and every test was migrated to the batched
-//! flow.
+//! Settlement pieces shared across the settle path, owned by no single
+//! instruction. `tee_forced_settle_batched` is the only settle entrypoint in
+//! `#[program]`; these are the parts of it that other code — the enclave, the
+//! SDK, the tests, `merge` — must agree with byte for byte.
 //!
-//! What stays here is the SHARED settlement infrastructure that the
-//! v3.5 batched handler depends on:
-//! * `MatchResultPayload` (the Borsh struct the TEE signs and every
-//!   settle ix carries),
-//! * `canonical_payload_hash` (the SHA-256 over the payload that the
-//!   TEE actually signs; cross-language byte-identical with the TS
-//!   `canonicalPayloadHash`),
-//! * `verify_tee_signature` (the Ed25519-precompile-inspection helper
-//!   the batched handler reuses verbatim),
-//! * `create_relock_pda` (allocates a fresh `NoteLock` for a
-//!   continuing-order change note — used during atomic re-lock by
-//!   `tee_forced_settle_batched`),
-//! * `TradeSettled` (the event the batched handler emits).
-//!
-//! When this file empties out further (e.g. the TradeSettled event
-//! moves elsewhere), rename it to something like `settlement_shared.rs`.
+//! * `MatchResultPayload` — the Borsh struct the TEE signs and every settle ix
+//!   carries.
+//! * `canonical_payload_hash` — the SHA-256 the TEE actually signs, over the
+//!   `darknyx-match-v11` domain. Byte-identical with the TS
+//!   `canonicalPayloadHash` and two other implementations; see CLAUDE.md §7.1.
+//!   `canonical_payload_hash_fixed_vector` below pins it.
+//! * `verify_tee_signature` — Ed25519-precompile inspection, called by the
+//!   batched handler.
+//! * `create_relock_pda` — allocates a fresh `NoteLock` for a continuing
+//!   order's change note during the atomic re-lock.
+//! * `TradeSettled` — the settlement event.
 
 use crate::errors::VaultError;
 use crate::state::*;
@@ -132,22 +125,6 @@ pub struct MatchResultPayload {
     // factored out into a preceding `verify_valid_price` ix; that path was
     // since subsumed by the batched VALID_MATCH_BATCH proof.
 }
-
-// ---------------------------------------------------------------------------
-// v3.1 per-match handler + its Accounts struct lived here. Deleted in
-// Phase 1c-hard (see `docs/v3.5-migration.md`). The on-chain settle
-// path is now `tee_forced_settle_batched` — one Groth16 covers the
-// whole batch via `verify_match_batch`, then a single ix consumes the
-// matched locks + appends leaves + re-locks change notes against a
-// Merkle inclusion proof rooted at the batched marker. See
-// `programs/vault/src/instructions/tee_forced_settle_batched.rs`.
-//
-// What stays in THIS file is the shared infrastructure the batched
-// handler depends on: `MatchResultPayload` + `canonical_payload_hash`
-// + `create_relock_pda` + `verify_tee_signature` + `TradeSettled`.
-// When this file shrinks further we can rename it
-// `settlement_shared.rs`.
-// ---------------------------------------------------------------------------
 
 /// Manually create a NoteLock PDA so the settlement tx can atomically
 /// re-lock a change note against the continuing order. The seeds MUST be

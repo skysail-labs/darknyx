@@ -34,7 +34,7 @@ pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
 pub use instructions::set_tee_pubkey;
-pub use instructions::tee_forced_settle;
+pub use instructions::settlement_shared;
 pub use instructions::tee_forced_settle_batched;
 pub use instructions::update_market_config;
 pub use instructions::verify_match_batch;
