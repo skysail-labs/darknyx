@@ -10,6 +10,11 @@ test-ledger/
 
 # Node
 node_modules/
+# ...and the slash-less form. A rule ending in `/` matches DIRECTORIES ONLY,
+# so a worktree that symlinks `node_modules` at the root sails past the rule
+# above and gets committed as an absolute link into one developer's home.
+# That has now happened twice in this repo (once here, once for */_js).
+node_modules
 dist/
 *.log
 .turbo/

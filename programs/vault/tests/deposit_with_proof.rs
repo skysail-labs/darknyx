@@ -252,8 +252,8 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
         "VALID_DEPOSIT_GATE constraints=2501 tx_bytes={tx_size} cu={}",
         meta.compute_units_consumed
     );
-    // Same `CU_PROFILE` marker the settle/verify tests already use, so the
-    // Anchor v1→v2 comparison can scrape one convention across the suite.
+    // Same `CU_PROFILE` marker the settle/verify tests already use, so one
+    // convention scrapes across the whole suite.
     eprintln!(
         "CU_PROFILE deposit consumed={}",
         meta.compute_units_consumed

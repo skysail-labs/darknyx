@@ -321,8 +321,6 @@ const _: () = assert!(
 /// Fails CLOSED — an account that is program-owned but too short to parse is
 /// treated as live rather than assumed absent.
 pub fn note_lock_is_live(info: &AccountView, now_slot: u64) -> Result<bool> {
-    // v2: `owner` is a method on AccountView (not a field), and the raw data
-    // borrow is `try_borrow()` rather than `try_borrow_data()`.
     if info.owner() != &crate::ID {
         return Ok(false); // no lock at all
     }

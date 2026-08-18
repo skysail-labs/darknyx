@@ -21,7 +21,10 @@ pub struct ReleaseLock {
 pub fn release_lock_handler(ctx: &mut Context<ReleaseLock>, _note_use_tag: [u8; 32]) -> Result<()> {
     let lock = &ctx.accounts.note_lock;
     let clock = Clock::get()?;
-    require!(clock.slot >= lock.expiry_slot.get(), VaultError::LockNotExpired);
+    require!(
+        clock.slot >= lock.expiry_slot.get(),
+        VaultError::LockNotExpired
+    );
 
     emit!(NoteLockReleased {
         note_use_tag: lock.note_use_tag,

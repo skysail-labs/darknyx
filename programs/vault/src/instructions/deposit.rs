@@ -3,8 +3,8 @@ use crate::merkle::append_leaf;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_deposit::*, Groth16Proof};
 use anchor_lang::prelude::*;
-// v2: the `token::mint = ...` / `token::authority = ...` init constraints emit
-// bare `token::` paths, so the MODULE must be in scope, not just its items.
+// The `token::mint = ...` init constraints expand to bare `token::` paths, so
+// this module import is load-bearing despite looking unused. Do not remove it.
 use anchor_spl::token;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 use std::mem::size_of;
@@ -119,9 +119,6 @@ pub fn deposit_handler(
     verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
 
     // Transfer tokens in.
-    // v2 CPI handles: `cpi_handle_mut()` for the accounts the transfer debits
-    // and credits (both are `mut` in the Accounts struct, which the mut handle
-    // requires), `cpi_handle()` for the read-only mint and authority.
     let cpi_accounts = TransferChecked {
         from: ctx.accounts.depositor_token_account.to_cpi_handle_mut(),
         to: ctx.accounts.vault_token_account.to_cpi_handle_mut(),
@@ -131,17 +128,12 @@ pub fn deposit_handler(
     transfer_checked(
         CpiContext::new(ctx.accounts.token_program.address(), cpi_accounts),
         amount,
-        // v2: SPL wrapper fields are private; read through the accessor.
         ctx.accounts.token_mint.decimals(),
     )?;
 
     // Append into the shard's Merkle tree (zero_subtree_roots come from the
     // global config).
     //
-    // v1 took a `.load()` Ref here and had to `drop(cfg)` before touching
-    // another account, because the borrow guard was live. v2 `Account<T>` is a
-    // direct view over the buffer with no guard to release, so the roots are
-    // copied out (the array is Copy) and the scoping dance is gone.
     let (leaf_index, new_root) = {
         let zsr = ctx.accounts.vault_config.zero_subtree_roots;
         let tree = &mut ctx.accounts.merkle_tree;
@@ -169,10 +161,9 @@ pub fn deposit_handler(
     // Solvency invariant: outstanding can never exceed the SPL pool. After
     // a deposit, both sides incremented by `amount`, so this is tight.
     //
-    // v1 needed a `reload()` here because the `transfer_checked` CPI mutated
-    // the account after borsh had already deserialized it. v2 `Account<T>` is
-    // zero-copy over the live account buffer, so the post-CPI value is read
-    // directly and the reload is not just unnecessary but meaningless.
+    // No reload before this read: `Account<T>` is zero-copy over the live
+    // buffer, so the post-CPI amount is already visible. Adding one back would
+    // be a no-op, not a fix.
     require!(
         om.outstanding.get() <= ctx.accounts.vault_token_account.amount(),
         VaultError::SolvencyInvariantViolated

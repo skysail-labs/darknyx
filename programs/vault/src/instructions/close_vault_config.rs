@@ -37,8 +37,6 @@ pub struct CloseVaultConfig {
 }
 
 pub fn close_vault_config_handler(ctx: &mut Context<CloseVaultConfig>) -> Result<()> {
-    // v2: AccountView is Copy and mutations write through to the underlying
-    // buffer, which is how anchor's own Slab::close works. `owner` is a method.
     let mut info = *ctx.accounts.vault_config.account();
     require!(info.owner() == &crate::ID, VaultError::Unauthorized);
 
@@ -59,8 +57,7 @@ pub fn close_vault_config_handler(ctx: &mut Context<CloseVaultConfig>) -> Result
     // 0-lamport account at tx end, so a follow-up `initialize` can recreate it.
     let mut admin_info = *ctx.accounts.admin.account();
     let reclaimed = info.lamports();
-    // v2: `set_lamports` replaces the `**x.try_borrow_mut_lamports()? = ...`
-    // dance. The checked_add is preserved deliberately.
+    // The checked_add is deliberate: a silent wrap here would mint lamports.
     admin_info.set_lamports(
         admin_info
             .lamports()

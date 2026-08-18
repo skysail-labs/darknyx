@@ -92,9 +92,8 @@ pub fn merge_handler<'info>(
     // or a tree append. The circuit independently requires at least one active,
     // positive input and a positive output amount.
     require!(active_len > 0, VaultError::EmptyMerge);
-    // v2: `remaining_accounts` is a method returning an owned
-    // `Vec<AccountView>`, not a borrowed slice field. It must be bound before
-    // splitting — splitting a temporary would leave the halves dangling.
+    // `remaining_accounts()` returns an OWNED Vec, so it must be bound before
+    // splitting — splitting the temporary leaves the halves dangling.
     let mut remaining = ctx.remaining_accounts()?;
     require!(
         remaining.len() == active_len.saturating_mul(2),
@@ -118,7 +117,11 @@ pub fn merge_handler<'info>(
     for (tag, note_lock) in active_tags.iter().zip(note_lock_accounts) {
         let (expected, _) =
             Address::find_program_address(&[NoteLock::SEED, tag.as_ref()], &crate::ID);
-        require_keys_eq!(*note_lock.address(), expected, VaultError::MergeAccountMismatch);
+        require_keys_eq!(
+            *note_lock.address(),
+            expected,
+            VaultError::MergeAccountMismatch
+        );
         // S-03: only a LIVE lock blocks the merge (N-04's intent — stop an
         // owner merging a live order's collateral and griefing the
         // counterparty — is preserved; an EXPIRED lock no longer bricks it).
@@ -231,9 +234,6 @@ pub fn merge_handler<'info>(
 /// Fails if the PDA already exists (a prior withdraw / settle / merge already
 /// consumed this note → double-spend). `match_id` is the all-zero sentinel
 /// (merge is not a match), matching `withdraw`'s `ConsumedNoteEntry`.
-// v2: `ai` and `payer` are taken by &mut because `CreateAccount`'s slots are
-// `CpiHandleMut`, and `to_cpi_handle_mut()` requires unique access. The `'info`
-// lifetime went with the wrapper lifetimes.
 fn create_consumed_note_pda(
     ai: &mut AccountView,
     payer: &mut Signer,
@@ -246,7 +246,6 @@ fn create_consumed_note_pda(
         &crate::ID,
     );
     require_keys_eq!(*ai.address(), expected, VaultError::MergeAccountMismatch);
-    // v2: `data_is_empty()` is gone; `data_len()` is the accessor.
     require!(
         ai.data_len() == 0 && ai.lamports() == 0,
         VaultError::NoteAlreadyConsumed

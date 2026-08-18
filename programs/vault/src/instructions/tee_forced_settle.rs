@@ -155,8 +155,6 @@ pub struct MatchResultPayload {
 /// `release_lock` will look up. Returns an error if the account is
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
-// v2: mutable receivers — CreateAccount's slots are CpiHandleMut, and the
-// post-create discriminator write needs a mutable data borrow.
 pub(crate) fn create_relock_pda(
     note_lock_ai: &mut UncheckedAccount,
     payer: &mut Signer,
@@ -171,7 +169,11 @@ pub(crate) fn create_relock_pda(
 
     let (expected_pda, bump) =
         Address::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
-    require_keys_eq!(*note_lock_ai.address(), expected_pda, VaultError::Unauthorized);
+    require_keys_eq!(
+        *note_lock_ai.address(),
+        expected_pda,
+        VaultError::Unauthorized
+    );
     require!(
         note_lock_ai.data_len() == 0 && note_lock_ai.lamports() == 0,
         VaultError::NoteAlreadyLocked
@@ -213,9 +215,8 @@ pub(crate) fn create_relock_pda(
     // Populate. Discriminator for zero_copy is the first 8 bytes of
     // anchor_lang::solana_program::hash::hash("account:NoteLock").
     {
-        // v2: `UncheckedAccount` exposes the view by `account()` and does not
-        // implement DerefMut, so take a copy of the (Copy) AccountView to get
-        // the mutable data borrow. Writes go through to the same buffer.
+        // `AccountView` is Copy, but a copy still writes through to the same
+        // underlying buffer — this is not a scratch clone.
         let mut view = *note_lock_ai.account();
         let mut data = view.try_borrow_mut()?;
         let disc = NoteLock::DISCRIMINATOR;
