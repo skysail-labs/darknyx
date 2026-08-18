@@ -404,12 +404,15 @@ export function buildSettleBatchedIx(
 
 export interface BuildCloseBatchValidityMarkerIxParams {
   programId: PublicKey;
-  /** Any signer may sweep once the marker reaches `expiry_slot`. */
+  /** Signer AND rent refund target. MUST equal the `marker.payer` recorded by
+   *  `verify_match_batch` — an on-chain constraint enforces it.
+   *
+   *  v2 collapsed the old separate `payer` account into this one. Passing the
+   *  same address in both slots (which every real caller did) is rejected by
+   *  v2's duplicate-mutable-account check before the handler runs. The
+   *  trade-off is deliberate: only the payer can close now, where previously
+   *  any signer could sweep on the payer's behalf. */
   authority: PublicKey;
-  /** Refund target — MUST equal `marker.payer` recorded by
-   *  `verify_match_batch`. Anchor's `has_one = payer` check on the
-   *  marker enforces this. */
-  payer: PublicKey;
   /** The batch's Merkle root — seeds the marker PDA. */
   merkleRoot: Uint8Array;
 }
@@ -419,10 +422,9 @@ export interface BuildCloseBatchValidityMarkerIxParams {
  * land this once per batch at or after marker expiry; the ix refunds the
  * marker's rent (~49 bytes worth) to `marker.payer`.
  *
- * Accounts order MUST match `CloseBatchValidityMarker<'info>`:
- *   0  authority   (signer)
- *   1  payer       (mut — refund recipient; must equal marker.payer)
- *   2  marker      (mut, close = payer)
+ * Accounts order MUST match `CloseBatchValidityMarker`:
+ *   0  authority   (signer, mut — refund recipient; must equal marker.payer)
+ *   1  marker      (mut, close = authority)
  */
 export function buildCloseBatchValidityMarkerIx(
   p: BuildCloseBatchValidityMarkerIxParams,
@@ -443,8 +445,7 @@ export function buildCloseBatchValidityMarkerIx(
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
-      { pubkey: p.authority, isSigner: true, isWritable: false },
-      { pubkey: p.payer, isSigner: false, isWritable: true },
+      { pubkey: p.authority, isSigner: true, isWritable: true },
       { pubkey: marker, isSigner: false, isWritable: true },
     ],
     data: Buffer.from(data),

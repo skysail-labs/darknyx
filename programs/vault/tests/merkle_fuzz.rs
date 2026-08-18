@@ -32,7 +32,7 @@ const DOMAIN_BATCH_ROOT: u64 = 22;
 fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
     let zeros = compute_zero_subtree_roots().unwrap();
     let tree = MerkleTree {
-        leaf_count: 0,
+        leaf_count: 0.into(),
         current_root: empty_root(&zeros).unwrap(),
         roots: [[0u8; 32]; ROOT_HISTORY_SIZE],
         right_path: [[0u8; 32]; MERKLE_DEPTH as usize],
@@ -187,11 +187,11 @@ fn tree_full_boundary_is_rejected() {
     let (mut tree, zsr) = fresh_tree();
 
     // Exactly full → single append rejected.
-    tree.leaf_count = cap;
+    tree.leaf_count = cap.into();
     assert!(append_leaf(&mut tree, &zsr, det_leaf(1)).is_err());
 
     // One short of full → a 2-leaf batch overflows (last_index == cap).
-    tree.leaf_count = cap - 1;
+    tree.leaf_count = (cap - 1).into();
     assert!(append_leaves(&mut tree, &zsr, &[det_leaf(1), det_leaf(2)]).is_err());
 
     // One short of full → a single append fills the last slot (allowed).

@@ -4522,7 +4522,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "serde",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-address 2.6.1",
  "solana-address-lookup-table-interface",
  "solana-builtins",
@@ -6811,19 +6811,6 @@ dependencies = [
 
 [[package]]
 name = "solana-account"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efc0ed36decb689413b9da5d57f2be49eea5bebb3cf7897015167b0c4336e731"
-dependencies = [
- "solana-account-info",
- "solana-clock",
- "solana-instruction-error",
- "solana-pubkey 4.2.1",
- "solana-sdk-ids",
-]
-
-[[package]]
-name = "solana-account"
 version = "4.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26788ba0d7eb5b250edda3e1d393739bafd5daf94882f2261d14f5ab0d6a25e0"
@@ -7037,7 +7024,7 @@ checksum = "405953767b67426780c616218b911d095e00fbf97bdfe7e9d0b83002ec4b0731"
 dependencies = [
  "bincode",
  "qualifier_attr",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-bincode",
  "solana-clock",
  "solana-instruction",
@@ -7312,7 +7299,7 @@ dependencies = [
  "bincode",
  "serde",
  "serde_derive",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-account-info",
  "solana-instruction",
  "solana-program-error",
@@ -7621,7 +7608,7 @@ version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b81bf7e2aa8c443724051507c1007d0b6d9c34b70925d3232dc78f5ca485209e"
 dependencies = [
- "solana-account 4.3.2",
+ "solana-account",
  "solana-hash 4.5.0",
  "solana-nonce",
  "solana-sdk-ids",
@@ -7783,7 +7770,7 @@ dependencies = [
  "percentage",
  "rand 0.9.4",
  "serde",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-account-info",
  "solana-clock",
  "solana-epoch-rewards",
@@ -8120,7 +8107,7 @@ version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3170a3cfc032f3efca975154dee904ecefea5ae11fbd50787c062886196d32c1"
 dependencies = [
- "solana-account 4.3.2",
+ "solana-account",
  "solana-clock",
  "solana-precompile-error",
  "solana-pubkey 4.2.1",
@@ -8190,7 +8177,7 @@ dependencies = [
  "bincode",
  "libsecp256k1",
  "num-traits",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-account-info",
  "solana-big-mod-exp",
  "solana-blake3-hasher",
@@ -8262,7 +8249,7 @@ checksum = "84eaae98e1576c1b490760d102ca15cb0cfc7ed2b52012dc0d06698a2529e093"
 dependencies = [
  "bincode",
  "log",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-bincode",
  "solana-fee-calculator",
  "solana-instruction",
@@ -8387,7 +8374,7 @@ checksum = "168e409c531b6e5b4a4bcf4a0286795acb80e6c6330c21fe6ad5d7e6918a7245"
 dependencies = [
  "bincode",
  "serde",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-instruction",
  "solana-instructions-sysvar 3.0.1",
  "solana-pubkey 4.2.1",
@@ -8443,7 +8430,7 @@ dependencies = [
  "agave-feature-set",
  "bincode",
  "log",
- "solana-account 4.3.2",
+ "solana-account",
  "solana-bincode",
  "solana-bls-signatures",
  "solana-clock",
@@ -9594,11 +9581,12 @@ dependencies = [
  "proptest",
  "serde_json",
  "sha2 0.10.9",
- "solana-account 3.4.0",
+ "solana-account",
  "solana-address 2.6.1",
+ "solana-clock",
  "solana-instruction",
  "solana-keypair",
- "solana-message 3.1.0",
+ "solana-message 4.4.1",
  "solana-poseidon 3.1.12",
  "solana-program-runtime",
  "solana-sdk-ids",

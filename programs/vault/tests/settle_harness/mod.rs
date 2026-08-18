@@ -20,7 +20,32 @@ pub const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 // Must match `declare_id!` in the vault. LiteSVM's
 // `add_program_from_file` reads the declared id baked into the ELF and
 // rejects loads under a different id with InvalidAccountData.
-pub const VAULT_PROGRAM_ID: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+// Derived from the program crate, NOT hand-copied. A literal here silently
+// desynchronises from declare_id!(): the harness then loads the .so at an
+// address the binary does not claim, and every settle-path test fails with
+// IncorrectProgramId. That is exactly what happened when the v2 experiment
+// moved to its own program id.
+pub fn vault_program_id() -> Address {
+    vault::ID
+}
+
+/// Does any log line carry this Anchor error code?
+///
+/// v2 has NO runtime `AnchorError`: `#[msg(...)]` is IDL-only metadata and the
+/// chain reports `ProgramError::Custom(code)` (guide §11.1). So a log match on
+/// the error NAME — which v1 emitted and several tests asserted on — can never
+/// succeed, regardless of whether the program behaved correctly. Match the
+/// numeric code instead, which is also what a real client sees.
+pub fn logs_have_error_code(haystack: &str, code: u32) -> bool {
+    haystack.contains(&format!("custom program error: {:#x}", code))
+}
+
+/// Anchor error codes used by the tests. Mirrors `VaultError`'s ORDER — adding
+/// or reordering a variant renumbers everything after it.
+pub const E_INVALID_PROOF: u32 = 6000;
+pub const E_NOTE_ALREADY_LOCKED: u32 = 6005;
+pub const E_NOTE_ALREADY_CONSUMED: u32 = 6006;
+pub const E_LOCK_NOT_EXPIRED: u32 = 6009;
 
 pub fn repo_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -154,7 +179,25 @@ impl Harness {
         }
 
         let mut svm = LiteSVM::new();
-        let vault_id: Pubkey = VAULT_PROGRAM_ID.parse().unwrap();
+        // Pin the clock to a known LOW slot.
+        //
+        // litesvm 0.13 started near slot 0, and the fixtures across this suite
+        // encode that: absolute expiries like `1_000_000` (note locks) and
+        // `4_000` (relocks, which must land inside MAX_LOCK_TTL_SLOTS = 4_500)
+        // are only "in the future" if the chain starts low. litesvm 0.15 starts
+        // far higher, which silently turned those into PAST slots — locks read
+        // as expired and relock expiries were rejected. The failures pointed at
+        // the vault (InvalidExpirySlot, NoteLockExpired) rather than at the
+        // harness, which is what made it slow to spot.
+        //
+        // Anchoring the clock here keeps every fixture honest in one place
+        // instead of scattering `now + delta` arithmetic across ~12 call sites.
+        {
+            let mut clock: solana_clock::Clock = svm.get_sysvar();
+            clock.slot = 1;
+            svm.set_sysvar(&clock);
+        }
+        let vault_id: Pubkey = vault_program_id();
         svm.add_program_from_file(vault_id, &vault_so).unwrap();
 
         let admin = Keypair::new();
@@ -279,7 +322,10 @@ pub fn compute_budget_ix(cu: u32) -> Instruction {
 /// Byte-for-byte mirror of the on-chain `MatchResultPayload` Borsh shape.
 /// When this diverges the settle test panics early rather than at the
 /// program's deserializer.
-#[derive(BorshSerialize, Clone)]
+// v2: the program decodes instruction args with wincode, so the harness must
+// encode with it too. Borsh and wincode's BORSH_CONFIG are wire-compatible,
+// but the trait bound is what the serialize call needs.
+#[derive(anchor_lang::prelude::SchemaWrite, Clone)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
     pub note_a_use_tag: [u8; 32],
@@ -843,7 +889,8 @@ pub fn build_settle_batched_ix_for(
     //         + 4 × 32-byte siblings.
     let mut data = anchor_disc("tee_forced_settle_batched").to_vec();
     data.push(tree_id);
-    payload.serialize(&mut data).unwrap();
+    // v2: types derive wincode SchemaWrite, not AnchorSerialize.
+    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&payload, anchor_lang::BORSH_CONFIG).unwrap());
     data.push(match_index);
     for s in merkle_proof.iter() {
         data.extend_from_slice(s);
@@ -1061,12 +1108,12 @@ pub fn seed_marker_and_build_settle_batched_ix(
 }
 
 /// Build a `close_batch_validity_marker` ix.
-/// Any authority may sweep at or after expiry; rent always flows to payer.
+/// v2: `authority` is both signer and refund target, and must equal
+/// `marker.payer`. The separate payer slot is gone.
 pub fn build_close_batch_validity_marker_ix(
     h: &Harness,
     merkle_root: &[u8; 32],
     authority: &Pubkey,
-    payer: &Pubkey,
 ) -> Instruction {
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
     let mut data = anchor_disc("close_batch_validity_marker").to_vec();
@@ -1075,8 +1122,9 @@ pub fn build_close_batch_validity_marker_ix(
     Instruction {
         program_id: h.vault_id,
         accounts: vec![
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new(*payer, false),
+            // v2: authority IS the refund target; the separate payer slot is
+            // gone (it aliased and tripped the duplicate-mutable check).
+            AccountMeta::new(*authority, true),
             AccountMeta::new(marker_pda, false),
         ],
         data,
@@ -1300,7 +1348,8 @@ pub fn deposit_note(
     data.extend_from_slice(&amount.to_le_bytes());
     data.extend_from_slice(&commitment);
     data.extend_from_slice(&fr_to_be_bytes(&secret.recovery_nonce));
-    proof.serialize(&mut data).unwrap();
+    // v2: types derive wincode SchemaWrite, not AnchorSerialize.
+    data.extend_from_slice(&anchor_lang::wincode::config::serialize(&proof, anchor_lang::BORSH_CONFIG).unwrap());
 
     let ix = Instruction {
         program_id: h.vault_id,

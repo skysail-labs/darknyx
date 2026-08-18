@@ -12,7 +12,7 @@
 mod common;
 mod settle_harness;
 
-use anchor_lang::prelude::Clock;
+use solana_clock::Clock;
 use settle_harness::*;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -736,7 +736,7 @@ fn test_close_marker_by_payer_requires_expiry_and_refunds_rent() {
     let payer = h.tee.pubkey();
     let before = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
 
-    let close_ix = build_close_batch_validity_marker_ix(&h, &merkle_root, &payer, &payer);
+    let close_ix = build_close_batch_validity_marker_ix(&h, &merkle_root, &payer);
     let early_tx = solana_transaction::Transaction::new(
         &[&h.tee],
         solana_message::Message::new(std::slice::from_ref(&close_ix), Some(&payer)),
@@ -787,7 +787,19 @@ fn test_close_marker_by_payer_requires_expiry_and_refunds_rent() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_close_marker_by_third_party_requires_expiry_and_refunds_payer() {
+fn test_close_marker_by_third_party_is_rejected_even_after_expiry() {
+    // BEHAVIOUR CHANGE, deliberate. Under v1 this instruction took a separate
+    // `payer` refund slot bound by `has_one = payer`, so ANY signer could sweep
+    // an expired marker and the rent still reached the recorded payer. That
+    // shape is rejected by v2: the sweeper always passes
+    // authority == payer == the primary shard key, and one address in two slots
+    // (one of them `mut`) trips the duplicate-mutable-account check before the
+    // handler runs. Collapsing the two slots removes the alias structurally.
+    //
+    // The cost is permissionless cleanup, which this test now pins so nobody
+    // "fixes" it back by accident. The property §8.2 actually rests on — no
+    // close before expiry, by anyone including the payer — is unchanged and is
+    // covered by `test_close_marker_by_payer_requires_expiry_and_refunds_rent`.
     let mut h = Harness::setup();
     let merkle_root = [0xEFu8; 32];
     let expiry = h.svm.get_sysvar::<Clock>().slot + 10;
@@ -797,19 +809,23 @@ fn test_close_marker_by_third_party_requires_expiry_and_refunds_payer() {
         .airdrop(&sweeper.pubkey(), 100_000_000)
         .expect("airdrop sweeper");
 
-    let payer = h.tee.pubkey();
-    let close_ix =
-        build_close_batch_validity_marker_ix(&h, &merkle_root, &sweeper.pubkey(), &payer);
+    // The sweeper is NOT the recorded payer, so it cannot be the refund target.
+    let close_ix = build_close_batch_validity_marker_ix(&h, &merkle_root, &sweeper.pubkey());
+
+    // Before expiry: rejected, as always.
     let early_tx = solana_transaction::Transaction::new(
         &[&sweeper],
         solana_message::Message::new(std::slice::from_ref(&close_ix), Some(&sweeper.pubkey())),
         h.svm.latest_blockhash(),
     );
-    let res = h.svm.send_transaction(early_tx);
-    assert!(res.is_err(), "third-party close pre-expiry must fail");
+    assert!(
+        h.svm.send_transaction(early_tx).is_err(),
+        "third-party close pre-expiry must fail"
+    );
     assert!(batch_validity_marker_exists(&h, &merkle_root));
 
-    let before = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
+    // AT expiry: still rejected, now because the caller is not `marker.payer`.
+    // This is the v1 behaviour that changed.
     h.svm.warp_to_slot(expiry);
     h.svm.expire_blockhash();
     let tx = solana_transaction::Transaction::new(
@@ -817,12 +833,14 @@ fn test_close_marker_by_third_party_requires_expiry_and_refunds_payer() {
         solana_message::Message::new(&[close_ix], Some(&sweeper.pubkey())),
         h.svm.latest_blockhash(),
     );
-    h.svm
-        .send_transaction(tx)
-        .expect("third-party close at expiry");
-    assert!(!batch_validity_marker_exists(&h, &merkle_root));
-    let after = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
-    assert!(after > before, "marker rent must return to recorded payer");
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a non-payer must not be able to close, even after expiry"
+    );
+    assert!(
+        batch_validity_marker_exists(&h, &merkle_root),
+        "a rejected close must leave the marker intact"
+    );
 }
 
 // ---------------------------------------------------------------------------

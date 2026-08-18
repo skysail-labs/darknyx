@@ -34,7 +34,12 @@ fn build_lock_note_ix(h: &Harness, note_commitment: &[u8; 32]) -> Instruction {
     data.push(0u8); // tree_id
     data.extend_from_slice(note_commitment);
     data.extend_from_slice(&[0x22u8; 16]); // order_id
-    data.extend_from_slice(&1_000u64.to_le_bytes()); // expiry_slot (valid: > slot, < slot + TTL)
+    // Relative to the CURRENT slot, not a hardcoded 1_000. litesvm 0.13 started
+    // at slot 0 so the literal happened to satisfy `expiry_slot > clock.slot`;
+    // 0.15 does not, and the ix then failed InvalidExpirySlot (6011) BEFORE
+    // reaching the proof check this test is actually about.
+    let now_slot = h.svm.get_sysvar::<solana_clock::Clock>().slot;
+    data.extend_from_slice(&(now_slot + 1_000).to_le_bytes()); // expiry_slot (> slot, < slot + TTL)
     data.extend_from_slice(&h.test_mint.to_bytes()); // token_mint
     data.extend_from_slice(&tree_current_root(h, 0)); // merkle_root (in the ring)
     data.extend_from_slice(&[0u8; 256]); // proof: pi_a || pi_b || pi_c (dummy → invalid)
@@ -77,7 +82,7 @@ fn lock_note_rejects_already_consumed_commitment() {
 
     let logs = send_lock_note(&mut h, &consumed);
     assert!(
-        logs.iter().any(|l| l.contains("NoteAlreadyConsumed")),
+        logs_have_error_code(&logs.join("\n"), E_NOTE_ALREADY_CONSUMED),
         "expected NoteAlreadyConsumed rejection; logs:\n{}",
         logs.join("\n")
     );
@@ -94,12 +99,12 @@ fn lock_note_allows_unconsumed_commitment_past_the_guard() {
 
     let logs = send_lock_note(&mut h, &fresh);
     assert!(
-        !logs.iter().any(|l| l.contains("NoteAlreadyConsumed")),
+        !logs_have_error_code(&logs.join("\n"), E_NOTE_ALREADY_CONSUMED),
         "U-02 guard must not fire for an unconsumed note; logs:\n{}",
         logs.join("\n")
     );
     assert!(
-        logs.iter().any(|l| l.contains("InvalidProof")),
+        logs_have_error_code(&logs.join("\n"), E_INVALID_PROOF),
         "expected the flow to reach + fail proof verification; logs:\n{}",
         logs.join("\n")
     );

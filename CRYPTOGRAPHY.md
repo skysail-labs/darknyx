@@ -1742,19 +1742,31 @@ pending Tx Ds.
 vault::close_batch_validity_marker(merkle_root: [u8; 32])
 ```
 
-Accounts (3):
-- `authority` (any signer; no signer has a pre-expiry privilege)
-- `payer` (mut — refund recipient, must equal `marker.payer`;
-  Anchor `has_one = payer` enforces this)
-- `marker` (mut, `close = payer`, seeded by `[b"batch_validity",
+Accounts (2):
+- `authority` (mut — signer AND refund recipient; an explicit constraint pins
+  it to `marker.payer`. No signer has a pre-expiry privilege.)
+- `marker` (mut, `close = authority`, seeded by `[b"batch_validity",
   merkle_root]`, validated via `bump = marker.bump`)
+
+> **Changed under Anchor v2.** This used to take three accounts, with a
+> separate `payer` refund slot bound by `has_one = payer`, so ANY signer could
+> sweep an expired marker on the payer's behalf. v2 rejects that shape in
+> practice: the sweeper closes with `authority == payer == the primary shard
+> key`, and one address occupying two slots (one of them `mut`) trips the
+> duplicate-mutable-account check *before the handler runs*
+> (`ConstraintDuplicateMutableAccount`, code 2040 — reproduced against a
+> deployed program, not only in litesvm). Collapsing the slots removes the
+> alias structurally rather than waiving the check with `unsafe(dup)`, and
+> drops an account from the tx. **Permissionless cleanup is lost; only the
+> recorded payer can close.** The property this section actually rests on —
+> nobody, payer included, can close before expiry — is unchanged.
 
 Handler:
 1. Require `clock.slot >= marker.expiry_slot` for every authority, including
    the recorded payer. Tx D already requires `clock.slot < expiry_slot`, so
    the exact boundary is disjoint and safe.
-2. Anchor's `close = payer` constraint moves the marker's lamports
-   to `payer` and zeros the data.
+2. Anchor's `close = authority` constraint moves the marker's lamports
+   to `authority` and zeros the data.
 3. Emit `BatchValidityMarkerClosed { payer, closed_by, expiry_slot }`.
 
 `VaultError::BatchValidityMarkerNotExpired` covers every pre-expiry attempt,
