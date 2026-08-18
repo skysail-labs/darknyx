@@ -254,7 +254,10 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
     );
     // Same `CU_PROFILE` marker the settle/verify tests already use, so the
     // Anchor v1→v2 comparison can scrape one convention across the suite.
-    eprintln!("CU_PROFILE deposit consumed={}", meta.compute_units_consumed);
+    eprintln!(
+        "CU_PROFILE deposit consumed={}",
+        meta.compute_units_consumed
+    );
     assert!(
         meta.compute_units_consumed <= DEPOSIT_CU_GATE,
         "proof deposit used {} CU; gate is {DEPOSIT_CU_GATE}",
