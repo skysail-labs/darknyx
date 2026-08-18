@@ -445,10 +445,14 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
         Message::new(&[unlocked_ix], Some(&unlocked.trader.pubkey())),
         unlocked.svm.latest_blockhash(),
     );
-    unlocked
+    let mmeta = unlocked
         .svm
         .send_transaction(unlocked_tx)
         .expect("merge without locks must succeed");
+    eprintln!(
+        "CU_PROFILE merge_k2 consumed={}",
+        mmeta.compute_units_consumed
+    );
     assert_eq!(tree_leaf_count(&unlocked, 0), 3);
     assert!(consumed_note_exists(&unlocked, &tags[0]));
     assert!(consumed_note_exists(&unlocked, &tags[1]));

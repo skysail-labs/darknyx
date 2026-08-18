@@ -202,8 +202,13 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
     // And the note is now withdrawable.
     h.svm.expire_blockhash();
     let wtx = build_withdraw_tx(&h, &note, &depositor, &dest);
-    h.svm
+    let wmeta = h
+        .svm
         .send_transaction(wtx)
         .expect("withdraw must succeed after release_lock");
+    eprintln!(
+        "CU_PROFILE withdraw consumed={}",
+        wmeta.compute_units_consumed
+    );
     assert!(consumed_note_exists(&h, &note.use_tag));
 }

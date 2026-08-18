@@ -98,8 +98,8 @@ jobs:
         with:
           submodules: recursive # darknyx-tee icicle-snark path dep (see pr-checks.yml)
 
-      - name: Install Rust 1.89.0
-        uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
+      - name: Install Rust 1.93.0
+        uses: dtolnay/rust-toolchain@d8dfd7155fea72af4ad34a8fe97364d210e2d020 # 1.93.0 (a BRANCH upstream, so it moves — pin it)
       - name: Install Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
