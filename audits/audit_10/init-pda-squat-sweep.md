@@ -223,6 +223,34 @@ lamport destination writable but the *authority* need not be the same account).
 Separately, `verify_match_batch`'s caller should detect an already-initialised
 marker and continue rather than failing the batch.
 
+> **Resolved 2026-08-19 — enclave-only, and two things above were wrong.**
+>
+> **S-04 already removed the dangerous half.** `verify_match_batch` DERIVES
+> `expiry_slot` rather than accepting it (`verify_match_batch.rs:83-102`), and
+> its comment describes almost exactly this attack — a front-runner setting
+> `expiry = slot + 1` so every settle fails `BatchValidityMarkerExpired`. That
+> lever is gone. What survived is only the `init` collision, which S-04's
+> comment explicitly notes it does not address.
+>
+> That makes **reconciliation** the right fix: a foreign marker for our root can
+> only exist if a valid Groth16 proof for that exact root and config digest
+> verified on-chain, and its TTL is derived, so it is functionally the marker we
+> would have created — only `payer` differs. `settle/worker.rs` now continues
+> against it instead of failing the batch.
+>
+> **The rent half was worse than written here.** Sweeper closes are packed into
+> ONE atomic tx, so a single un-closable marker failed the whole chunk on every
+> tick, forever — stranding the rent of every LEGITIMATE marker beside it, not
+> just its own. The module header's claim that "a single stale root can never
+> poison a packed close tx" was true only for markers that no longer EXIST.
+> `marker_sweep.rs` now reads `marker.payer` and drops foreign markers.
+>
+> **The on-chain permissionless close was NOT taken.** v2's check is
+> `dups.intersects(&MUT_MASK)` (`anchor-lang-2.0.0-rc.1/src/dispatch.rs:108`) —
+> any duplicated position that is a `mut` field trips 2040, so the three-account
+> shape proposed above would re-break exactly as it did during the port. The
+> enclave fix makes it unnecessary.
+
 > **Correction, 2026-08-18.** This section originally rated PS-02 **Low** and
 > said "the batch still settles". That was wrong: it assumed the worker treats a
 > failed Tx B as recoverable. It does not — the `?` propagates. Raised by
