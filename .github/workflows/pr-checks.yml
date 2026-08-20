@@ -1105,7 +1105,7 @@ jobs:
           path: circuits/build
 
       - name: vault integration tests
-        # Incl. the settle-regression suite migrated from matching_engine:
+        # Incl. the settle-regression suite:
         # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
         # match_batch_verify (real N=16 proof → on-chain verify_match_batch).
         #

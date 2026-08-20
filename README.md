@@ -58,8 +58,8 @@ Three layers:
   is the host-side Rust crypto crate with byte-identical Poseidon / note /
   key derivation that the TS SDK has parity tests against.
 
-There is **no on-chain CLOB and no Ephemeral Rollup** — the only on-chain
-program is `vault`; the only matcher is the in-TEE one.
+There is **no on-chain order book** — the only on-chain program is `vault`;
+the only matcher is the in-TEE one.
 
 ---
 

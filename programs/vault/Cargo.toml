@@ -56,8 +56,8 @@ light-poseidon = { workspace = true }
 [dev-dependencies]
 serde_json = "1.0"
 # `precompiles` loads the Ed25519 program — the settle-regression tests
-# (tee_forced_settle_batched / match_batch_verify, migrated from matching_engine)
-# send the TEE Ed25519 signature-verify ix.
+# (tee_forced_settle_batched / match_batch_verify) send the TEE Ed25519
+# signature-verify ix.
 litesvm = { workspace = true, features = ["precompiles"] }
 # v2 EXPERIMENT: agave 4.2.1 changed ExecutionRecord's fields, which breaks
 # litesvm 0.15.2 even though litesvm asks for "^4.1.1" — an upstream semver
