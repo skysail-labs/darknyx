@@ -1212,7 +1212,9 @@ vault::create_wallet(
 Accounts:
 - `owner` (signer = root_key or Solana wallet)
 - `vault_config` (ro)
-- `wallet_entry` (init, seeded by `[b"wallet", user_commitment]`)
+- `wallet_entry` (init, seeded by `[b"wallet", user_commitment, owner]` — the
+  owner seed is what stops a replayed `(commitment, proof)` from squatting the
+  address; see `audit_9` TR-14)
 - `system_program`
 
 The on-chain handler verifies the proof (1 public input: `user_commitment`)
@@ -1547,7 +1549,7 @@ nullifiers in v9. Amounts remain private circuit witnesses; tag-keyed
 `ConsumedNoteEntry` PDAs provide replay protection without republishing input
 leaf commitments.
 The Rust struct definition is in
-`programs/vault/src/instructions/tee_forced_settle.rs`.
+`programs/vault/src/instructions/settlement_shared.rs`.
 
 Accounts (12 total, in this exact order — must match the Rust struct).
 Post-sharding `vault_config` is **read-only** and the writable tree state is
@@ -1676,7 +1678,7 @@ Handler walkthrough:
 
 10. **Atomic re-lock** (if requested by payload):
     - If `buyer_relock_order_id != [0;16]`: create a `NoteLock` PDA at
-      `[b"note_lock", note_e_commitment]` with the new order ID. Uses
+      `[b"note_lock", note_e_use_tag]` with the new order ID. Uses
       `lock_a.token_mint` as the inherited mint. Done via direct
       `system_program::create_account` CPI (not Anchor `init`) because the
       account info `note_lock_e` is an `UncheckedAccount` (Anchor doesn't
@@ -1887,7 +1889,7 @@ MATCH (in the CVM)
     │  Page cleared matches into ≤ N=16 settle batches
     ▼
 LOCK_NOTE × 2 per match (L1, two VALID_INPUT proofs)
-    │  NoteLock PDAs at [b"note_lock", commitment]
+    │  NoteLock PDAs at [b"note_lock", note_use_tag]
     │  Each lock bound to (order_id, mint); amount stays private in proof
     ▼
 VERIFY_MATCH_BATCH (L1, 1 Groth16 per batch)
@@ -2184,7 +2186,7 @@ The amounts (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/
 clearing_price) are GONE from the signed message — they're proven in-circuit
 and bound by the note commitments, so the TEE no longer signs over them.
 
-Reference: `programs/vault/src/instructions/tee_forced_settle.rs::canonical_payload_hash`,
+Reference: `programs/vault/src/instructions/settlement_shared.rs::canonical_payload_hash`,
 mirror in `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash`.
 Cross-environment parity is locked down by a fixed-vector test in both:
 

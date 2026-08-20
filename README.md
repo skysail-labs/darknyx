@@ -43,7 +43,7 @@ circuits, lifecycle, settlement mechanics) see
 Three layers:
 
 * **L1 (Solana)** — `programs/vault/` is the only on-chain program
-  (Anchor 0.32). It owns custody, the incremental Merkle tree of note
+  (Anchor 2.0.0-rc.1). It owns custody, the incremental Merkle tree of note
   commitments, the nullifier / consumed-note sets, the Groth16 verifier,
   and the atomic batched settlement path (`lock_note → verify_match_batch
   → tee_forced_settle_batched → close_batch_validity_marker`, N=16
