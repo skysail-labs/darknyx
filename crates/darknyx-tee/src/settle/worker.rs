@@ -45,6 +45,7 @@ use super::alt::{
 use super::alt_pool::{AltPlan, AltPool};
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleFailureKind, SettleJobId, SettleJobStage, SettlementOutcome};
+use super::marker_sweep::marker_expiry_slot as read_marker_expiry;
 use super::metrics::{
     emit_batch_record, BatchMetricsCompletion, SettlementOutcomeCounts, SettlementStageTimings,
 };
@@ -842,13 +843,59 @@ async fn run_batch_settle_inner(
         );
         let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
         verify_ixs.push(verify_ix);
-        let verify_sig = submit_ixs(&ctx.rpc, ctx.primary_keypair(), &verify_ixs).await?;
-        confirm_signatures(
-            &ctx.rpc,
-            std::slice::from_ref(&verify_sig),
-            ctx.confirm_timeout,
-        )
-        .await?;
+        // PS-02 — a failed Tx B is NOT automatically fatal.
+        //
+        // `verify_match_batch`'s `payer` is deliberately unauthenticated ("anyone
+        // can push a valid proof" is a real liveness property) and the marker is
+        // `init` on the root alone, so an observer can replay our own proof and
+        // land first. Our Tx B then fails on the `init` collision. Propagating
+        // that killed the batch BEFORE Tx D — and the 2N `lock_note` txs have
+        // already landed, so both sides' notes sat pinned until lock expiry. One
+        // transaction fee bought a deterministic, repeatable settlement stall
+        // against maker orders the attacker chose.
+        //
+        // Reconcile instead. Two properties make that safe, and neither is
+        // incidental:
+        //
+        //   1. The marker can only EXIST if a valid Groth16 proof for this exact
+        //      root and config digest verified on-chain. Its presence is
+        //      cryptographic evidence that this batch was verified — an attacker
+        //      cannot fabricate one for our root.
+        //   2. Its `expiry_slot` is DERIVED on-chain, never supplied (S-04). A
+        //      front-runner cannot hand us a marker with a uselessly short TTL;
+        //      that lever was exactly the S-04 finding. So a marker created by
+        //      someone else is functionally the one we would have created —
+        //      only `payer` differs, which costs us its rent and nothing else.
+        //
+        // We still verify it is present, well-formed, and has runway left,
+        // because "someone else's marker" and "a stale marker from a previous
+        // attempt" are indistinguishable from the error alone.
+        let verify_sig = match submit_ixs(&ctx.rpc, ctx.primary_keypair(), &verify_ixs).await {
+            Ok(sig) => Some(sig),
+            Err(e) => {
+                let (marker_pda, _) = super::vault::batch_validity_marker_pda(&merkle_root);
+                let usable = match ctx.rpc.get_account_info(&marker_pda).await {
+                    Ok(Some(account)) => match read_marker_expiry(&account) {
+                        Some(expiry) => expiry > marker_slot,
+                        None => false,
+                    },
+                    _ => false,
+                };
+                if !usable {
+                    return Err(e.into());
+                }
+                tracing::warn!(
+                    error = %e,
+                    marker = %marker_pda,
+                    "verify_match_batch did not land, but a valid unexpired marker \
+                     exists for this root — continuing to settle against it"
+                );
+                None
+            }
+        };
+        if let Some(sig) = verify_sig.as_ref() {
+            confirm_signatures(&ctx.rpc, std::slice::from_ref(sig), ctx.confirm_timeout).await?;
+        }
         {
             let mut st = ctx.settle_state.write().await;
             for idx in 0..n {
@@ -856,7 +903,7 @@ async fn run_batch_settle_inner(
                     batch_id,
                     match_idx: idx as u8,
                 };
-                st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
+                st.update(&id, |j| j.verify_sig = verify_sig.clone());
             }
         }
         Ok::<_, WorkerError>((
