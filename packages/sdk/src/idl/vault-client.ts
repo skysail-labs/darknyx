@@ -145,12 +145,27 @@ export function staticSettleAltAddresses(
   return out;
 }
 
+/**
+ * `WalletEntry` PDA — seeded by (commitment, OWNER).
+ *
+ * The owner is a REQUIRED seed, not an optimisation. VALID_WALLET_CREATE's only
+ * public input is the commitment, so a landed `create_wallet` transaction can be
+ * replayed by anyone; without the owner in the seeds a front-runner takes the
+ * address permanently (`init` is one-shot, there is no `close_wallet`) and the
+ * legitimate registration can never land. See
+ * `programs/vault/src/instructions/create_wallet.rs`.
+ *
+ * Mirrors the on-chain `seeds` exactly. A drift here surfaces only at runtime,
+ * as `ConstraintSeeds (2006)` or `AccountNotFound` — CI does not catch it
+ * (CLAUDE.md §8.3).
+ */
 export function walletEntryPda(
   programId: PublicKey,
   commitment: Uint8Array,
+  owner: PublicKey,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [WALLET_SEED, fixed32(commitment)],
+    [WALLET_SEED, fixed32(commitment), owner.toBytes()],
     programId,
   );
 }
@@ -624,7 +639,7 @@ export interface BuildCreateWalletParams {
 export function buildCreateWalletInstruction(
   p: BuildCreateWalletParams,
 ): TransactionInstruction {
-  const [walletPda] = walletEntryPda(p.programId, p.commitment);
+  const [walletPda] = walletEntryPda(p.programId, p.commitment, p.owner);
   const data = cat(
     anchorDiscriminator("create_wallet"),
     fixed32(p.commitment),

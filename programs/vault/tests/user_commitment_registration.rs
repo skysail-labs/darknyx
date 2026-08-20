@@ -83,8 +83,11 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"vault_config"], program_id)
 }
 
-fn wallet_entry_pda(program_id: &Pubkey, commitment: &[u8; 32]) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"wallet", commitment.as_ref()], program_id)
+fn wallet_entry_pda(program_id: &Pubkey, commitment: &[u8; 32], owner: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"wallet", commitment.as_ref(), owner.as_ref()],
+        program_id,
+    )
 }
 
 #[test]
@@ -192,7 +195,7 @@ fn test_user_commitment_registration() {
     assert_eq!(public_inputs[0], commitment_bytes);
 
     // --- Submit `create_wallet` ---
-    let (wallet_pda, _) = wallet_entry_pda(&program_id, &commitment_bytes);
+    let (wallet_pda, _) = wallet_entry_pda(&program_id, &commitment_bytes, &admin.pubkey());
 
     let mut cw_data = common::anchor_disc("create_wallet").to_vec();
     let args = CreateWalletArgs {
@@ -219,7 +222,7 @@ fn test_user_commitment_registration() {
             AccountMeta::new(wallet_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
-        data: cw_data,
+        data: cw_data.clone(),
     };
     let tx = Transaction::new(
         &[&admin],
@@ -250,4 +253,62 @@ fn test_user_commitment_registration() {
         stored_commitment, commitment_bytes,
         "on-chain WalletEntry.commitment must equal derived User Commitment"
     );
+
+    // ---------------------------------------------------------------------
+    // TR-14: a squatter replaying the SAME (commitment, proof) must not be
+    // able to block this registration.
+    //
+    // The proof's only public input is the commitment, so the pair is fully
+    // replayable by anyone who reads the landed transaction. Before the owner
+    // joined the PDA seeds, the squatter's `init` took the one address the
+    // legitimate owner needed and every retry failed forever — `init` is
+    // one-shot and there is no `close_wallet`.
+    //
+    // Order matters: the legitimate registration ABOVE has already landed, so
+    // this asserts the harder direction — the squat lands afterwards and the
+    // real entry is still intact and still owned by the real owner. The
+    // reverse order is covered structurally: the two PDAs simply differ.
+    // ---------------------------------------------------------------------
+    let squatter = Keypair::new();
+    svm.airdrop(&squatter.pubkey(), 10_000_000_000).unwrap();
+
+    let (squat_pda, _) = wallet_entry_pda(&program_id, &commitment_bytes, &squatter.pubkey());
+    assert_ne!(
+        squat_pda, wallet_pda,
+        "the owner MUST be part of the seeds — identical PDAs means the squat \
+         still collides and this test proves nothing"
+    );
+
+    let squat_ix = Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(squatter.pubkey(), true),
+            AccountMeta::new(squat_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        // Byte-identical instruction data — the same commitment and the same
+        // proof the honest client published.
+        data: cw_data,
+    };
+    svm.expire_blockhash();
+    svm.send_transaction(Transaction::new(
+        &[&squatter],
+        Message::new(&[squat_ix], Some(&squatter.pubkey())),
+        svm.latest_blockhash(),
+    ))
+    .expect("the replay itself still succeeds — it just lands at a DIFFERENT address");
+
+    // The honest entry is untouched: same commitment, still owned by the
+    // original registrant. This is the property that was violated before.
+    let honest = svm
+        .get_account(&wallet_pda)
+        .expect("the honest WalletEntry must survive the squat");
+    let honest_owner: [u8; 32] = honest.data[40..72].try_into().unwrap();
+    assert_eq!(
+        honest_owner,
+        admin.pubkey().to_bytes(),
+        "the honest entry's owner must not have been replaced by the squatter"
+    );
+    let honest_commitment: [u8; 32] = honest.data[8..40].try_into().unwrap();
+    assert_eq!(honest_commitment, commitment_bytes);
 }
