@@ -2318,8 +2318,7 @@ paths burn the same layer-2 commitment guard.
 | `tee_forced_settle_batched.rs` | 1:N `BatchValidityMarker` lifecycle (two matches share one marker; the close-after-every-match regression) |
 | `match_batch_verify.rs` | real N=16 proof → on-chain `verify_match_batch` acceptance (committed fixture) |
 
-(The last two + the `settle_harness/` were migrated from the deleted
-`matching_engine` crate.)
+(The last two + the `settle_harness/` predate the current settle path.)
 
 ### `darknyx-tee` tests (`cargo test -p darknyx-tee`)
 
@@ -2556,6 +2555,4 @@ program) + the multi-market in-CVM matcher/settler (`crates/darknyx-tee`),
 validated end-to-end on devnet through Phala CPU and H200 CVMs. v2
 `inner_hash` note model, VALID_DEPOSIT privacy, recipient-bound withdrawals,
 proof-verified intake, consumed-input-derived outputs, and canonical order v5.
-The `matching_engine` / MagicBlock-ER /
-PER path and the standalone `VALID_CREATE` / `VALID_PRICE` circuits have been
-removed.*
+The standalone `VALID_CREATE` / `VALID_PRICE` circuits have been removed.*

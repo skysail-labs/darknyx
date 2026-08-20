@@ -13,8 +13,7 @@ order intake, uniform-price matching, match proving, and settlement
 orchestration run inside an attested Intel TDX confidential VM (CVM). The
 Solana vault is the sole custody and settlement authority.
 
-There is no on-chain order book, MagicBlock/Ephemeral Rollup path, or
-`matching_engine` program.
+There is no on-chain order book: `vault` is the only program.
 
 ## System overview
 

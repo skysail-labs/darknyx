@@ -14,7 +14,7 @@ Baseline: **anchor-lang / anchor-spl 1.1.2**, solana-program 3, one program crat
 One: `programs/vault`. `crate-type = ["cdylib", "lib"]`, so integration tests can
 import `vault::ID` — see §5.
 
-There is no second on-chain program. `matching_engine` was deleted long ago.
+There is no second on-chain program.
 
 ---
 

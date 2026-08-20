@@ -2,8 +2,7 @@
 
 > **What this covers.** Matching and settlement run **inside a TDX CVM**
 > (`crates/darknyx-tee/`) on Phala Cloud, driving the on-chain `vault` program
-> (the only on-chain program) over real devnet. There is no legacy
-> matching_engine / Ephemeral-Rollup path anymore.
+> (the only on-chain program) over real devnet.
 
 All commands assume the repo root as the working directory:
 

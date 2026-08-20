@@ -1,33 +1,21 @@
 # Devnet E2E runner — fires on three triggers:
 #
 #   1. Nightly cron at 03:00 UTC (catches overnight regressions).
-#   2. workflow_dispatch (manual button in the Actions UI; supports
-#      `run_partial_fill` + `skip_er` toggles).
+#   2. workflow_dispatch (manual button in the Actions UI).
 #   3. PR comment `/test-devnet` from a repo owner / member / collaborator.
-#      Supports the same toggles as flags:
-#      `/test-devnet --partial-fill --skip-er`.
 #
-# Phase 1c-hard note: the `batched` workflow_dispatch input + the
-# `--batched` PR-comment flag (which used to set USE_BATCHED_PROOF=1)
-# are vestigial. v3.5 is the only on-chain settle path now; every
-# devnet flow takes it unconditionally. The flag is kept to avoid
-# breaking old `/test-devnet --batched` comments, but it no longer
-# toggles anything.
-#
-# Runs the env-gated devnet / ER / CN / PER SDK flows against the
+# Runs the env-gated devnet SDK flows against the
 # already-deployed programs on Solana devnet. INFORMATIONAL — it does
 # NOT gate PRs (no branch-protection coupling). The point is to catch
 # the class of regressions that only surface when wire format meets a
-# real RPC: tx size, blockhash freshness, account-existence races,
-# PER rollups, etc.
+# real RPC: tx size, blockhash freshness, account-existence races, etc.
 #
-# Scope:
-#   - devnet-setup.test.ts             (RUN_DEVNET_E2E=1)
-#   - devnet-trade-flow.test.ts        (RUN_DEVNET_E2E=1)
-#   - change-note-flow.test.ts         (RUN_CN_E2E=1)
-#   - er-trade-flow.test.ts            (RUN_ER_E2E=1)
-#   - orders-submit.devnet.test.ts     (RUN_PER_TESTS=1)
-#   - partial-fill block in devnet-trade-flow (opt-in via flag)
+# Scope — the job runs the whole `packages/sdk` vitest root with
+# RUN_DEVNET_E2E=1, so the devnet-gated files are what execute:
+#   - devnet-setup.test.ts
+#   - devnet-deposit-withdraw.test.ts
+#   - devnet-merge.test.ts
+#   - devnet-leaf-index.test.ts
 #
 # Out of scope:
 #   - cargo build-sbf / program deploy. The workflow assumes the
@@ -55,20 +43,9 @@ on:
     # 03:00 UTC ≈ quiet pre-work window. Cron is in UTC; daylight
     # savings does not shift it.
     - cron: '0 3 * * *'
+  # No inputs: the partial-fill / skip-er / batched toggles are gone with the
+  # subsystems they gated.
   workflow_dispatch:
-    inputs:
-      run_partial_fill:
-        description: 'Also run the partial-fill / re-lock devnet flow (RUN_DEVNET_PARTIAL_FILL=1)'
-        type: boolean
-        default: false
-      skip_er:
-        description: 'Skip the ER (Ephemeral Rollup) tests — useful when MagicBlock devnet is flaky'
-        type: boolean
-        default: false
-      batched:
-        description: '(vestigial post-Phase 1c-hard — v3.5 is now the only path)'
-        type: boolean
-        default: false
   issue_comment:
     # PRs are issues in GitHub's data model, so this also fires on PR
     # comments. The `preflight` job below filters down to the
@@ -128,9 +105,6 @@ jobs:
       ref: ${{ steps.resolve.outputs.ref }}
       sha: ${{ steps.resolve.outputs.sha }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
-      run_partial_fill: ${{ steps.resolve.outputs.run_partial_fill }}
-      skip_er: ${{ steps.resolve.outputs.skip_er }}
-      batched: ${{ steps.resolve.outputs.batched }}
     steps:
       # Acknowledge the comment immediately with a 🚀 reaction so the
       # commenter sees confirmation before the (long) test run starts.
@@ -143,14 +117,13 @@ jobs:
             "/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
             -f content='rocket'
 
-      # Resolve the target ref + parse flags. The comment body is
-      # passed through an env var (NOT YAML-interpolated into the
-      # script) to avoid shell-injection from arbitrary comment text.
-      - name: Resolve target ref + flags
+      # Resolve the target ref. There are no flags to parse any more, so the
+      # comment body is no longer read at all — which also retires the
+      # shell-injection surface it used to carry.
+      - name: Resolve target ref
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == 'issue_comment' ]]; then
@@ -163,36 +136,11 @@ jobs:
             echo "ref=$head_ref"        >> "$GITHUB_OUTPUT"
             echo "sha=$head_sha"        >> "$GITHUB_OUTPUT"
             echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-
-            # Flag parsing — supports any combination of:
-            #   /test-devnet
-            #   /test-devnet --partial-fill
-            #   /test-devnet --skip-er
-            #   /test-devnet --batched
-            #   /test-devnet --partial-fill --skip-er --batched
-            run_partial_fill=0
-            skip_er=0
-            batched=0
-            if grep -qE -- '(^|[[:space:]])--partial-fill([[:space:]]|$)' <<< "$COMMENT_BODY"; then
-              run_partial_fill=1
-            fi
-            if grep -qE -- '(^|[[:space:]])--skip-er([[:space:]]|$)' <<< "$COMMENT_BODY"; then
-              skip_er=1
-            fi
-            if grep -qE -- '(^|[[:space:]])--batched([[:space:]]|$)' <<< "$COMMENT_BODY"; then
-              batched=1
-            fi
-            echo "run_partial_fill=$run_partial_fill" >> "$GITHUB_OUTPUT"
-            echo "skip_er=$skip_er"                   >> "$GITHUB_OUTPUT"
-            echo "batched=$batched"                   >> "$GITHUB_OUTPUT"
           else
             # schedule or workflow_dispatch
             echo "ref=${{ github.ref }}"  >> "$GITHUB_OUTPUT"
             echo "sha=${{ github.sha }}"  >> "$GITHUB_OUTPUT"
             echo "pr_number="             >> "$GITHUB_OUTPUT"
-            echo "run_partial_fill=${{ inputs.run_partial_fill && '1' || '0' }}" >> "$GITHUB_OUTPUT"
-            echo "skip_er=${{ inputs.skip_er && '1' || '0' }}"                   >> "$GITHUB_OUTPUT"
-            echo "batched=${{ inputs.batched && '1' || '0' }}"                   >> "$GITHUB_OUTPUT"
           fi
 
       # Tell the PR author the run is starting so they can find it
@@ -203,15 +151,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REF: ${{ steps.resolve.outputs.ref }}
           SHA: ${{ steps.resolve.outputs.sha }}
-          PARTIAL: ${{ steps.resolve.outputs.run_partial_fill }}
-          SKIP_ER: ${{ steps.resolve.outputs.skip_er }}
-          BATCHED: ${{ steps.resolve.outputs.batched }}
         run: |
           set -euo pipefail
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh pr comment '${{ github.event.issue.number }}' \
             --repo "${{ github.repository }}" \
-            --body "🚀 \`/test-devnet\` ack'd — running devnet E2E against \`$REF\` @ \`${SHA:0:7}\`. Flags: partial_fill=$PARTIAL skip_er=$SKIP_ER batched=$BATCHED. [Watch the run]($run_url)."
+            --body "🚀 \`/test-devnet\` ack'd — running devnet E2E against \`$REF\` @ \`${SHA:0:7}\`. [Watch the run]($run_url)."
 
   # ------------------------------------------------------------------
   # The actual devnet E2E run. Same recipe as before, plus:
@@ -232,29 +177,10 @@ jobs:
       TEE_AUTHORITY_KEYPAIR: .devnet/keypairs/tee_authority.json
       ROOT_KEY_KEYPAIR: .devnet/keypairs/root_key.json
       TRADER_KEYPAIR: .devnet/keypairs/trader.json
-      # RUN_DEVNET_E2E is the only live gate here (6 consumers under packages/).
-      #
-      # DEAD: RUN_CN_E2E, RUN_PER_TESTS, RUN_ER_E2E and RUN_DEVNET_PARTIAL_FILL
-      # have ZERO consumers — they gate the MagicBlock-ER / PER path that was
-      # deleted (CLAUDE.md §0). They, plus the `skip_er` / `run_partial_fill`
-      # preflight inputs, outputs and comment-parsing that feed them, are ~14
-      # sites of plumbing that decide nothing. Left in place here only to keep
-      # this change scoped to the K-mismatch fix; slated for removal with the
-      # rest of the stale-ER sweep.
-      #
-      # NOT set on purpose: DARKNYX_NUM_TREES. devnet-setup now adopts the
-      # DEPLOYED K when it is unset, so this workflow cannot drift out of sync
-      # with a re-foundation again — which is what broke it here.
+      # NOT set on purpose: DARKNYX_NUM_TREES. devnet-setup adopts the DEPLOYED
+      # K when it is unset, so this workflow cannot drift out of sync with a
+      # re-foundation.
       RUN_DEVNET_E2E: '1'
-      RUN_CN_E2E: '1'
-      RUN_PER_TESTS: '1'
-      RUN_ER_E2E: ${{ needs.preflight.outputs.skip_er == '1' && '0' || '1' }}
-      RUN_DEVNET_PARTIAL_FILL: ${{ needs.preflight.outputs.run_partial_fill }}
-      # Phase 1c-hard removed the v3.1 fallback — every devnet test
-      # now takes the v3.5 batched path unconditionally. The
-      # `--batched` flag + workflow_dispatch `batched` input are
-      # vestigial; left in place so old `/test-devnet --batched`
-      # comments don't error, but they no longer toggle anything.
     steps:
       # For issue_comment, github.ref is the default branch — we need
       # the PR's head SHA explicitly. preflight resolved it for us.
