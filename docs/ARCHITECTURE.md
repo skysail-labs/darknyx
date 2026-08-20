@@ -170,10 +170,10 @@ root.
 | `VaultConfig` | `[b"vault_config"]` | global authorities, signers, fee config, shard count |
 | `MarketConfig` | `[b"market_config", base_mint, quote_mint]` | one governed market |
 | `MerkleTree` | `[b"merkle_tree", tree_id]` | one append-only note tree shard |
-| `WalletEntry` | `[b"wallet", user_commitment]` | registered public wallet commitment |
+| `WalletEntry` | `[b"wallet", user_commitment, owner]` | registered public wallet commitment. **The owner is a required seed** — the proof binds only the commitment, so without it a replayed `(commitment, proof)` squats the address permanently (`audit_9` TR-14) |
 | `DepositedNoteEntry` | `[b"deposited_note", note_commitment]` | strict deposit-once guard |
-| `ConsumedNoteEntry` | `[b"consumed_note", note_commitment]` | shared settle/withdraw consume-once guard |
-| `NoteLock` | `[b"note_lock", note_commitment]` | bounded order lock; amount remains private |
+| `ConsumedNoteEntry` | `[b"consumed_note", note_use_tag]` | shared settle/withdraw consume-once guard |
+| `NoteLock` | `[b"note_lock", note_use_tag]` | bounded order lock; amount remains private |
 | `OutstandingMint` | `[b"outstanding_mint", mint]` | live-note liability counter |
 | `BatchValidityMarker` | `[b"batch_validity", batch_root]` | one verified N=16 batch |
 | vault token account | `[b"vault_token", mint]` | SPL custody for one mint |

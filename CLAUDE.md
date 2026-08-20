@@ -17,7 +17,7 @@ Solana. Matching and settlement run **inside an Intel TDX confidential
 VM (a "CVM") on Phala Cloud**. Three layers:
 
 * **L1 (Solana)** — `programs/vault/` is the only on-chain program
-  (Anchor 0.32). It owns custody, the incremental Merkle tree of note
+  (Anchor 2.0.0-rc.1). It owns custody, the incremental Merkle tree of note
   commitments (now **sharded into K per-shard `MerkleTree` accounts** —
   `VaultConfig` holds the global state incl. the K-key `tee_pubkeys` set
   + `num_trees`), the nullifier / consumed-note sets, the Groth16
@@ -1074,10 +1074,13 @@ it after; never commit a secret).**
 
 ---
 
-*Last updated: 2026-08-16 — current architecture: vault (only on-chain
-program) + the in-CVM matcher/settler (`crates/darknyx-tee`) on Phala, validated
-end-to-end on devnet (`cvm-settle-e2e` real settle + loadgen). The
-`matching_engine` / MagicBlock-ER / PER path has been removed. Note model is
-v2 `inner_hash`; canonical orders sign the viewing key, boot session, and a
-strictly increasing per-trading-key nonce. Output inners derive from consumed
-input inners, with no continuation anchor pool.*
+*Last updated: 2026-08-20 — current architecture: vault (only on-chain
+program, **Anchor 2.0.0-rc.1** since the port merged 2026-08-18) + the in-CVM
+matcher/settler (`crates/darknyx-tee`) on Phala, validated end-to-end on devnet
+(`cvm-settle-e2e` real settle + loadgen). The `matching_engine` /
+MagicBlock-ER / PER path has been removed. Note model is v2 `inner_hash`;
+canonical orders sign the viewing key, boot session, and a strictly increasing
+per-trading-key nonce. Output inners derive from consumed input inners, with no
+continuation anchor pool. `WalletEntry` is seeded by (commitment, owner) since
+`audit_9` TR-14; the shared settle helpers live in `settlement_shared.rs`
+(renamed from `tee_forced_settle.rs` — there is no per-match settle ix).*
