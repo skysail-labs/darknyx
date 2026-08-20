@@ -120,11 +120,10 @@ wallet-wide owner commitment cannot recompute a user's whole tag history.
 Full rationale, and an exact statement of what is and is not unlinkable, in
 **[`CRYPTOGRAPHY.md` §2.1](CRYPTOGRAPHY.md)**.
 
-> **There is no legacy CLOB / MagicBlock-ER / `matching_engine` program
-> anymore.** It was deleted. If you find a reference to `matching_engine`,
-> `run_batch`, `submit_order` (on-chain), PER sessions, or ER delegation
-> in any doc or comment, it is stale — fix it. The only on-chain program
-> is `vault`; the only matcher is the in-TEE one.
+> **`vault` is the ONLY on-chain program, and the in-TEE matcher is the only
+> matcher.** There is no on-chain order book and no second program. If you find
+> a doc, comment, config key or CI gate implying otherwise, it is stale — delete
+> it rather than updating it.
 
 ---
 
@@ -1077,8 +1076,7 @@ it after; never commit a secret).**
 *Last updated: 2026-08-20 — current architecture: vault (only on-chain
 program, **Anchor 2.0.0-rc.1** since the port merged 2026-08-18) + the in-CVM
 matcher/settler (`crates/darknyx-tee`) on Phala, validated end-to-end on devnet
-(`cvm-settle-e2e` real settle + loadgen). The `matching_engine` /
-MagicBlock-ER / PER path has been removed. Note model is v2 `inner_hash`;
+(`cvm-settle-e2e` real settle + loadgen). Note model is v2 `inner_hash`;
 canonical orders sign the viewing key, boot session, and a strictly increasing
 per-trading-key nonce. Output inners derive from consumed input inners, with no
 continuation anchor pool. `WalletEntry` is seeded by (commitment, owner) since

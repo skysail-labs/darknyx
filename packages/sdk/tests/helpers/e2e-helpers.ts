@@ -17,8 +17,11 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { anchorDiscriminator } from "../../src/idl/vault-client.js";
 
 // ── Role tags for deterministic note derivation in the test relayer ─────────
-// `CHANGE_ROLE_*` must match the on-chain constants in
-// `programs/matching_engine/src/state/change_note.rs`.
+// `CHANGE_ROLE_*` must match the Rust constants in
+// `crates/darkpool-matcher/src/change_note.rs` (CHANGE_ROLE_BUYER = 0xB1,
+// CHANGE_ROLE_SELLER = 0x5E). That crate is the single source of truth for the
+// role tags; the pointer here used to name a program that no longer exists,
+// which is a bad place for a parity contract to send a reader.
 export const CHANGE_ROLE_BUYER = 0xb1;
 export const CHANGE_ROLE_SELLER = 0x5e;
 
