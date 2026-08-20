@@ -95,10 +95,27 @@ const VAULT_PROGRAM_ID = new PublicKey(
 const PROTOCOL_FEE_BPS = Number(process.env.PROTOCOL_FEE_BPS ?? "30");
 const PRICE_SCALE = BigInt(process.env.DARKNYX_PRICE_SCALE ?? "100000000");
 
+/** Was K pinned by the caller, or are we falling back to the default?
+ *
+ *  The distinction is load-bearing. A PINNED K that disagrees with the deployed
+ *  `VaultConfig` is an operator error worth refusing (see `tryReadVaultConfig`).
+ *  An UNPINNED one carries no intent, so refusing on it turns an unrelated
+ *  re-foundation into a permanent failure of every caller that never set the
+ *  variable — which is exactly what happened: devnet was re-founded with K=4,
+ *  `nightly-devnet.yml` sets no `DARKNYX_NUM_TREES`, and the nightly failed
+ *  every night from then on with "existing VaultConfig has 4 trees/signers but
+ *  DARKNYX_NUM_TREES=1". */
+const NUM_TREES_PINNED = (process.env.DARKNYX_NUM_TREES ?? "").trim() !== "";
+
 /** Number of Merkle-tree shards to provision. The CVM settle worker
  *  round-robins settles across K shards + K fee-payer keys; this must equal
- *  the CVM's `DARKNYX_TEE_NUM_TREES`. Default 1 (single shard). */
-const NUM_TREES = (() => {
+ *  the CVM's `DARKNYX_TEE_NUM_TREES`.
+ *
+ *  `let`, not `const`: when unpinned, it is reconciled to the DEPLOYED value in
+ *  `tryReadVaultConfig` before anything downstream (tree init, the settle ALT,
+ *  the written `e2e-config.json`) uses it. Adopting reality cannot cause a wrong
+ *  re-foundation — `initialize` is skipped whenever a valid config exists. */
+let NUM_TREES = (() => {
   const n = Number(process.env.DARKNYX_NUM_TREES ?? "1");
   if (!Number.isInteger(n) || n < 1 || n > 16) {
     throw new Error("DARKNYX_NUM_TREES must be an integer 1..16");
@@ -245,9 +262,21 @@ async function tryReadVaultConfig(
   }
   const teePubkeys = vaultConfigTeePubkeys(info.data);
   if (teePubkeys.length !== NUM_TREES) {
-    throw new Error(
-      `existing VaultConfig has ${teePubkeys.length} trees/signers but DARKNYX_NUM_TREES=${NUM_TREES}; close and re-found it`,
+    if (NUM_TREES_PINNED) {
+      // The caller asked for a specific K and the chain disagrees. That is a
+      // real conflict: proceeding would provision shards the deployed config
+      // does not know about.
+      throw new Error(
+        `existing VaultConfig has ${teePubkeys.length} trees/signers but DARKNYX_NUM_TREES=${NUM_TREES}; close and re-found it`,
+      );
+    }
+    // Unpinned: adopt what is deployed. This runs BEFORE the tree-init loops,
+    // the settle ALT, and the e2e-config.json write, so every downstream
+    // consumer sees the reconciled value.
+    bullet(
+      `adopting deployed K=${teePubkeys.length} (DARKNYX_NUM_TREES unset; default was ${NUM_TREES})`,
     );
+    NUM_TREES = teePubkeys.length;
   }
   const storedAdmin = new PublicKey(info.data.subarray(8, 40));
   const storedRootKey = new PublicKey(info.data.subarray(552, 584));
@@ -355,10 +384,10 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       );
 
       // ────────────────────────────────────────────────────────────────────
-      step(
-        2,
-        `Initialise vault_config + ${NUM_TREES} Merkle-tree shard(s) (idempotent)`,
-      );
+      // K is deliberately NOT printed here: when unpinned it is reconciled to the
+      // deployed value inside `tryReadVaultConfig` below, so naming a count now
+      // would state the default and then silently act on a different number.
+      step(2, "Initialise vault_config + Merkle-tree shards (idempotent)");
       // ────────────────────────────────────────────────────────────────────
       const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);

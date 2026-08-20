@@ -232,8 +232,19 @@ jobs:
       TEE_AUTHORITY_KEYPAIR: .devnet/keypairs/tee_authority.json
       ROOT_KEY_KEYPAIR: .devnet/keypairs/root_key.json
       TRADER_KEYPAIR: .devnet/keypairs/trader.json
-      # Default the four RUN_* gates on. The preflight job's outputs
-      # decide whether ER is skipped and partial-fill is enabled.
+      # RUN_DEVNET_E2E is the only live gate here (6 consumers under packages/).
+      #
+      # DEAD: RUN_CN_E2E, RUN_PER_TESTS, RUN_ER_E2E and RUN_DEVNET_PARTIAL_FILL
+      # have ZERO consumers — they gate the MagicBlock-ER / PER path that was
+      # deleted (CLAUDE.md §0). They, plus the `skip_er` / `run_partial_fill`
+      # preflight inputs, outputs and comment-parsing that feed them, are ~14
+      # sites of plumbing that decide nothing. Left in place here only to keep
+      # this change scoped to the K-mismatch fix; slated for removal with the
+      # rest of the stale-ER sweep.
+      #
+      # NOT set on purpose: DARKNYX_NUM_TREES. devnet-setup now adopts the
+      # DEPLOYED K when it is unset, so this workflow cannot drift out of sync
+      # with a re-foundation again — which is what broke it here.
       RUN_DEVNET_E2E: '1'
       RUN_CN_E2E: '1'
       RUN_PER_TESTS: '1'
