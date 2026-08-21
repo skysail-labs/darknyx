@@ -101,8 +101,19 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const ata = await associatedTokenAddress(mint, admin.publicKey);
 
-    // Deterministic per-run keys (admin is the only signer on devnet).
-    const masterSeed = new Uint8Array(64).map((_, i) => (i * 31 + 7) & 0xff);
+    // Salted per run. A FIXED seed derives the same note commitment every
+    // time, and `reset_merkle_tree` clears the tree but NOT the replay PDAs —
+    // so the second run of this test re-deposits a commitment whose
+    // `DepositedNoteEntry` already exists and is correctly rejected on-chain
+    // ("Allocate: account ... already in use"). That made the test
+    // single-use per devnet foundation, which reads as a migration failure
+    // rather than the deposit-once guard doing its job.
+    // Mirrors devnet-deposit-withdraw, which has always salted for this reason.
+    const runSalt = BigInt(Date.now());
+    const masterSeed = new Uint8Array(64).map(
+      (_, i) =>
+        (i * 31 + 7 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
+    );
     const ownerBlinding = 99n;
     const spendingKey = deriveSpendingKey(masterSeed);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);

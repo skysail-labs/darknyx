@@ -976,6 +976,8 @@ this — only the integration tests do, with `AccountNotFound` /
 | Upgraded a running CVM across the journal v1→v2 bump without draining | Boot reports the journal `Damaged` and demands an operator | `POST /admin/drain`, confirm `safe_to_stop`, THEN redeploy |
 | Forgot the tree reset after a wipe/migration | `StaleMerkleRoot (6004)` on first withdraw | §2.4 |
 | Loadgen run is 100% 4xx | CVM is in the wrong mint regime | match the regime: real mints for `cvm-settle-e2e`, omit mints for loadgen (§3.2) |
+| Probed the RPC with `getHealth`, got 200, then every call 401s | **`getHealth` is UNAUTHENTICATED on Helius** — it answers 200 for a revoked or wrong key, so it is worthless as a key check | probe with a real method (`getSlot`/`getVersion`); a dead key returns `-32401 "Invalid API key"` |
+| A devnet test passes once, then fails with `Allocate: account ... already in use` | The note commitment is derived from a FIXED seed, so the re-run re-deposits it and the `DepositedNoteEntry` deposit-once guard correctly rejects it | salt the master seed per run (`runSalt = BigInt(Date.now())`) as `devnet-deposit-withdraw` and `devnet-leaf-index` do |
 | `phala cvms start` on a code change | CVM runs stale code | bump the tag + `phala deploy` re-pulls (§3.1) |
 | Closed `BatchValidityMarker` in the settle | `test_two_matches_share_one_marker` fails | §8.2 |
 
