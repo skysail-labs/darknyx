@@ -17,6 +17,7 @@ import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
   getMintToInstruction,
+  AccountState,
   getTokenDecoder,
   TOKEN_PROGRAM_ADDRESS,
 } from "@solana-program/token";
@@ -87,7 +88,20 @@ export async function getTokenAccount(
   if (info === null) {
     throw new Error(`token account ${address.toBase58()} not found`);
   }
-  return getTokenDecoder().decode(info.data);
+  // spl-token's getAccount checked ownership and initialisation before
+  // decoding. The raw decoder does not: any account whose data happens to be
+  // token-shaped decodes cleanly, and an Uninitialized account decodes to a
+  // zero balance -- which would read as a legitimate "0 tokens" assertion.
+  if (!info.owner.equals(TOKEN_PROGRAM_ID)) {
+    throw new Error(
+      `account ${address.toBase58()} is not owned by the token program`,
+    );
+  }
+  const decoded = getTokenDecoder().decode(info.data);
+  if (decoded.state === AccountState.Uninitialized) {
+    throw new Error(`token account ${address.toBase58()} is uninitialized`);
+  }
+  return decoded;
 }
 
 /** ATA for (mint, owner), returned as the v3 class the SDK expects. */

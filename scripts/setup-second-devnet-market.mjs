@@ -193,7 +193,7 @@ if (existing) {
     "confirmed",
   );
   const marketAccount = await connection.getAccountInfo(
-    marketPda(programId, secondBaseMint, quoteMint),
+    await marketPda(programId, secondBaseMint, quoteMint),
     "confirmed",
   );
   if (!mintAccount || !mintAccount.owner.equals(TOKEN_PROGRAM_ID)) {
@@ -207,10 +207,8 @@ if (existing) {
     );
   }
   console.log(
-    `reusing BTC-USDC base=${secondBaseMint.toBase58()} market=${marketPda(
-      programId,
-      secondBaseMint,
-      quoteMint,
+    `reusing BTC-USDC base=${secondBaseMint.toBase58()} market=${(
+      await marketPda(programId, secondBaseMint, quoteMint)
     ).toBase58()}`,
   );
 } else {
@@ -257,10 +255,8 @@ if (existing) {
     { commitment: "confirmed" },
   );
   console.log(
-    `initialized BTC-USDC MarketConfig ${marketPda(
-      programId,
-      secondBaseMint.publicKey,
-      quoteMint,
+    `initialized BTC-USDC MarketConfig ${(
+      await marketPda(programId, secondBaseMint.publicKey, quoteMint)
     ).toBase58()} (${marketSignature})`,
   );
   secondBaseMint = secondBaseMint.publicKey;
@@ -324,7 +320,7 @@ const config = {
         pubkey: primary.quoteMint.pubkey,
         decimals: primary.quoteMint.decimals,
       },
-      marketConfigPda: marketPda(
+      marketConfigPda: await marketPda(
         programId,
         secondBaseMint,
         quoteMint,

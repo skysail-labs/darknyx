@@ -15,6 +15,10 @@
       "types": "./dist/api-url.d.ts",
       "default": "./dist/api-url.js"
     },
+    "./slot": {
+      "types": "./dist/types/slot.d.ts",
+      "default": "./dist/types/slot.js"
+    },
     "./browser-recovery": {
       "types": "./dist/browser-recovery.d.ts",
       "default": "./dist/browser-recovery.js"

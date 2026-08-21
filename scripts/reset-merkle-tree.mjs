@@ -56,10 +56,12 @@ const [vaultConfig] = await PublicKey.findProgramAddress(
   VAULT,
 );
 
-const merkleTreePda = (treeId) =>
-  PublicKey.findProgramAddress(
-    [Buffer.from("merkle_tree"), Buffer.from([treeId & 0xff])],
-    VAULT,
+const merkleTreePda = async (treeId) =>
+  (
+    await PublicKey.findProgramAddress(
+      [Buffer.from("merkle_tree"), Buffer.from([treeId & 0xff])],
+      VAULT,
+    )
   )[0];
 
 // Anchor ix discriminator = sha256("global:reset_merkle_tree")[..8].
@@ -68,13 +70,17 @@ const disc = createHash("sha256")
   .digest()
   .subarray(0, 8);
 
-function resetIx(treeId) {
+async function resetIx(treeId) {
   return new TransactionInstruction({
     programId: VAULT,
     keys: [
       { pubkey: admin.publicKey, isSigner: true, isWritable: false },
       { pubkey: vaultConfig, isSigner: false, isWritable: false },
-      { pubkey: merkleTreePda(treeId), isSigner: false, isWritable: true },
+      {
+        pubkey: await merkleTreePda(treeId),
+        isSigner: false,
+        isWritable: true,
+      },
     ],
     // data = disc(8) || tree_id(1)
     data: Buffer.concat([disc, Buffer.from([treeId & 0xff])]),
@@ -109,7 +115,7 @@ if (treeFlag !== -1) {
 for (const treeId of treeIds) {
   const sig = await sendAndConfirmTransaction(
     conn,
-    new Transaction().add(resetIx(treeId)),
+    new Transaction().add(await resetIx(treeId)),
     [admin],
   );
   console.log(`reset_merkle_tree(tree ${treeId}) ok: ${sig}`);

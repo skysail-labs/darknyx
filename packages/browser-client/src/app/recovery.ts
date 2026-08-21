@@ -11,7 +11,7 @@ import type {
   TrustedVenueSession,
   VenueReleaseConfig,
 } from "../venue/types.js";
-import { slotToNumber } from "@darknyx/sdk";
+import { slotToNumber } from "@darknyx/sdk/slot";
 
 export type VenueRecovery = (
   vault: BrowserVault,

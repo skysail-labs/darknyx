@@ -49,7 +49,7 @@ const recoveryProgramId = new PublicKey(
 const recoveryPayer = new PublicKey(new Uint8Array(32).fill(0x52));
 const recoveryBaseMint = new Uint8Array(32).fill(0xb1);
 const recoveryQuoteMint = new Uint8Array(32).fill(0x9e);
-const browserWallet = await Keypair.generate().publicKey;
+const browserWallet = (await Keypair.generate()).publicKey;
 
 const concatBytes = (...parts) => {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));

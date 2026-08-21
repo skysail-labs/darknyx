@@ -262,7 +262,7 @@ export function buildEd25519VerifyIx(params: {
   return new TransactionInstruction({
     programId: ED25519_PROGRAM_ID,
     keys: [],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -394,7 +394,7 @@ export async function buildSettleBatchedIx(
       { pubkey: batchMarker, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -448,7 +448,7 @@ export async function buildCloseBatchValidityMarkerIx(
       { pubkey: p.authority, isSigner: true, isWritable: true },
       { pubkey: marker, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 

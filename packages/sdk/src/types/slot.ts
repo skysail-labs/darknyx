@@ -13,8 +13,15 @@
  * and that is what this actually guards.
  */
 export function slotToNumber(slot: bigint | number): number {
-  if (typeof slot === "number") return slot;
-  if (slot > BigInt(Number.MAX_SAFE_INTEGER) || slot < 0n) {
+  if (typeof slot === "number") {
+    // NaN, Infinity, fractions and negatives would otherwise pass straight
+    // through and land in a recovery floor or a chain-history row.
+    if (!Number.isSafeInteger(slot) || slot < 0) {
+      throw new RangeError(`slot ${slot} is not a non-negative safe integer`);
+    }
+    return slot;
+  }
+  if (slot < 0n || slot > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new RangeError(`slot ${slot} is outside the safe integer range`);
   }
   return Number(slot);

@@ -14,13 +14,20 @@ const FULL_VERIFICATION_LEVEL = 1;
 const MESSAGE_OFFSET = 8 + 32 + 1;
 const POSTED_SLOT_OFFSET = MESSAGE_OFFSET + 84;
 
-const normalizeFeedId = (feedId: string): Buffer => {
+const normalizeFeedId = (feedId: string): Uint8Array => {
   const normalized = feedId.replace(/^0x/i, "").toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(normalized)) {
     throw new Error("Pyth feed id must be 32-byte hex");
   }
-  return Buffer.from(normalized, "hex");
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number.parseInt(normalized.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
 };
+
+const toHex = (b: Uint8Array): string =>
+  Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
@@ -28,8 +35,10 @@ const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
 export async function derivePythCorePushAccount(
   feedId: string,
 ): Promise<PublicKey> {
-  const shard = Buffer.alloc(2);
-  shard.writeUInt16LE(PYTH_PUSH_SHARD_ID);
+  // Browser-native bytes: this module is bundled for the browser client, so
+  // PDA seeds must not depend on Buffer.
+  const shard = new Uint8Array(2);
+  new DataView(shard.buffer).setUint16(0, PYTH_PUSH_SHARD_ID, true);
   return (
     await PublicKey.findProgramAddress(
       [shard, normalizeFeedId(feedId)],
@@ -105,7 +114,7 @@ export async function decodePythCorePushAccount(args: {
   }
   return {
     account: expectedAccount,
-    feedId: expectedFeed.toString("hex"),
+    feedId: toHex(expectedFeed),
     price,
     confidence,
     emaPrice,
