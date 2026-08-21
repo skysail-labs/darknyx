@@ -14,6 +14,7 @@
 import type { NoteStore, StoredNote } from "../utxo/note-store.js";
 import { isDepositNote } from "../utxo/note-store.js";
 import type { NoteStatus } from "../client.js";
+import { bn254ToBE32 } from "../keys/key-generators.js";
 
 // Re-export so consumers (and tests) can import the status union from the
 // wallet surface without reaching into ../client.js.
@@ -42,11 +43,28 @@ export type CollateralSelection =
 
 export interface WalletDeps {
   store: NoteStore;
-  /** On-chain status of a note by its commitment hex. */
-  noteStatus: (commitmentHex: string) => Promise<NoteStatus> | NoteStatus;
+  /**
+   * On-chain status of a note.
+   *
+   * Takes the note, not just its commitment hex: the guard PDAs are keyed by
+   * the note-use tag, which needs the inner hash as well.
+   */
+  noteStatus: (
+    note: Pick<StoredNote, "commitment" | "innerHash">,
+  ) => Promise<NoteStatus> | NoteStatus;
 }
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const fromHex = (h: string): Uint8Array => {
+  if (!/^[0-9a-f]{64}$/i.test(h)) {
+    throw new Error(`note commitment must be 32-byte hex, got "${h}"`);
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number.parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
 const ascending = (a: StoredNote, b: StoredNote) =>
   a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0;
 
@@ -79,7 +97,7 @@ export class Wallet {
     const out: WalletNoteView[] = [];
     for (const n of await this.deps.store.list()) {
       if (mintHex && hex(n.tokenMint) !== mintHex) continue;
-      const status = await this.deps.noteStatus(n.commitment);
+      const status = await this.deps.noteStatus(n);
       if (opts.spendableOnly && status !== "active") continue;
       out.push({
         commitment: n.commitment,
@@ -205,7 +223,7 @@ export class Wallet {
     const out: StoredNote[] = [];
     for (const n of await this.deps.store.list()) {
       if (hex(n.tokenMint) !== mintHex) continue;
-      if ((await this.deps.noteStatus(n.commitment)) === "active") out.push(n);
+      if ((await this.deps.noteStatus(n)) === "active") out.push(n);
     }
     return out;
   }
@@ -213,7 +231,10 @@ export class Wallet {
 
 /** Structural view of `DarkPoolClient.getNoteStatus` — avoids an import cycle. */
 export interface NoteStatusProvider {
-  getNoteStatus(noteCommitment: Uint8Array): Promise<{ status: NoteStatus }>;
+  getNoteStatus(
+    noteCommitment: Uint8Array,
+    innerHash: Uint8Array,
+  ): Promise<{ status: NoteStatus }>;
 }
 
 /** Build a `Wallet` backed by a client's on-chain note-status lookup. */
@@ -223,10 +244,11 @@ export function walletFromClient(
 ): Wallet {
   return new Wallet({
     store,
-    noteStatus: async (commitmentHex) =>
+    noteStatus: async (note) =>
       (
         await provider.getNoteStatus(
-          Uint8Array.from(Buffer.from(commitmentHex, "hex")),
+          fromHex(note.commitment),
+          bn254ToBE32(note.innerHash),
         )
       ).status,
   });

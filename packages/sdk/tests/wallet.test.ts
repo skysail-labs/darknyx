@@ -48,7 +48,10 @@ function walletWith(
 ): Wallet {
   const store = new InMemoryNoteStore();
   for (const n of notes) store.put(n);
-  return new Wallet({ store, noteStatus: (c) => status[c] ?? "active" });
+  return new Wallet({
+    store,
+    noteStatus: (n) => status[n.commitment] ?? "active",
+  });
 }
 
 describe("Wallet", () => {
