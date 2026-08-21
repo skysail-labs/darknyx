@@ -22,7 +22,7 @@ import {
   pubkeyToFrPair,
 } from "../src/utxo/note.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
-import { be32ToBigInt } from "./helpers/e2e-helpers.js";
+import { be32ToBigInt, dummyAddress } from "./helpers/e2e-helpers.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { nodeValidInputProver } from "../src/zk/valid-input-prover.js";
@@ -49,7 +49,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       const ownerBlinding = 92n;
       const innerHash = 93n;
       const amount = 94n;
-      const tokenMint = Keypair.generate().publicKey.toBytes();
+      const tokenMint = dummyAddress().toBytes();
       const owner = await ownerCommitment(spendingKey, ownerBlinding);
       const commitment = await noteCommitmentV2({
         tokenMint,
@@ -89,7 +89,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       const ownerBlinding = 42n;
       const innerHash = 7n;
       const amount = 1_000_000n;
-      const tokenMint = Keypair.generate().publicKey.toBytes();
+      const tokenMint = dummyAddress().toBytes();
 
       // Build the note commitment + drop it into a fresh shadow tree.
       const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
@@ -161,7 +161,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     const ownerBlinding = 2n;
     const innerHash = 3n;
     const amount = 5n;
-    const tokenMint = Keypair.generate().publicKey.toBytes();
+    const tokenMint = dummyAddress().toBytes();
 
     const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
 
@@ -201,7 +201,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       const spendingKey = 11n;
       const ownerBlinding = 12n;
       const innerHash = 13n;
-      const tokenMint = Keypair.generate().publicKey.toBytes();
+      const tokenMint = dummyAddress().toBytes();
       const owner = await ownerCommitment(spendingKey, ownerBlinding);
       const commitment = await noteCommitmentV2({
         tokenMint,

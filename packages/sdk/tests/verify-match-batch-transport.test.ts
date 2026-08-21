@@ -7,6 +7,7 @@ import {
   marketConfigPda,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -16,7 +17,7 @@ const filled = (length: number, byte: number): Uint8Array =>
 
 describe("verify_match_batch v3 transport", () => {
   it("adds the governed market as a read-only account without changing Tx B data", async () => {
-    const payer = Keypair.generate().publicKey;
+    const payer = dummyAddress();
     const baseMint = new PublicKey(filled(32, 0x44));
     const quoteMint = new PublicKey(filled(32, 0x55));
     const root = filled(32, 0x66);

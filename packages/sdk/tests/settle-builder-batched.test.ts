@@ -50,6 +50,7 @@ import {
   batchValidityMarkerPda,
   noteLockPda,
 } from "../src/idl/vault-client.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -90,7 +91,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_accounts_layout] account ordering matches TeeForcedSettleBatched", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const payload = exactFillFixture();
     const merkleRoot = filled(32, 0xf0);
     const ix = await buildSettleBatchedIx({
@@ -151,14 +152,14 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = await buildSettleBatchedIx({
       ...args,
       treeId: 0,
-      teeAuthority: Keypair.generate().publicKey,
+      teeAuthority: dummyAddress(),
       payload: payload0,
       matchIndex: 0,
     });
     const ix1 = await buildSettleBatchedIx({
       ...args,
       treeId: 1,
-      teeAuthority: Keypair.generate().publicKey,
+      teeAuthority: dummyAddress(),
       payload: payload1,
       matchIndex: 1,
     });
@@ -174,7 +175,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_anchor_discriminator_present] data starts with sha256('global:tee_forced_settle_batched')[..8]", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const ix = await buildSettleBatchedIx({
       programId: PROGRAM_ID,
       treeId: 0,
@@ -191,7 +192,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_data_size] data length matches disc + payload + match_index + 4×32 siblings", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const payload = exactFillFixture();
     const ix = await buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -211,7 +212,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const siblings = fourSiblings();
     const ix = await buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -238,7 +239,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_match_index_encoding] match_index byte sits between payload and siblings", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const args = {
       programId: PROGRAM_ID,
       treeId: 0,
@@ -262,7 +263,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it('[settle_batched_marker_pda_derivation] account 10 = PDA([b"batch_validity", merkleRoot])', async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const merkleRoot = filled(32, 0x77);
     const ix = await buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -292,7 +293,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_lock_e_f_pdas] note_lock_e / note_lock_f derive from the relock TAGS, not the change commitments", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
 
     // Exact-fill: noteE / noteF tags both zero → both locks derive from
     // ZERO_COMMITMENT and therefore collide on the same PDA. That dedup is
@@ -367,7 +368,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_match_index_validation] rejects matchIndex < 0 or > 15", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
       treeId: 0,
@@ -392,7 +393,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_tree_id_validation] rejects negative, non-integer, or out-of-byte treeId", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
       teeAuthority: tee.publicKey,
@@ -420,7 +421,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_merkle_proof_validation] rejects wrong sibling count or wrong sibling length", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
       treeId: 0,
@@ -458,7 +459,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[settle_batched_merkle_root_validation] rejects merkleRoot of wrong length", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
       treeId: 0,
@@ -476,7 +477,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[close_marker_accounts_layout] account ordering: authority, marker", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const merkleRoot = filled(32, 0x55);
     const ix = await buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
@@ -505,7 +506,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[close_marker_discriminator_and_data_size] disc + 32-byte merkle_root arg", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const merkleRoot = filled(32, 0xab);
     const ix = await buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
@@ -524,7 +525,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   });
 
   it("[close_marker_root_validation] rejects merkleRoot of wrong length", async () => {
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
       authority: tee.publicKey,
@@ -555,7 +556,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // The builder now has ONE slot, so "sweeper distinct from payer" is not
     // representable at all — the on-chain constraint pins authority to
     // marker.payer. This test exists so the property is not quietly restored.
-    const sweeper = Keypair.generate();
+    const sweeper = await Keypair.generate();
     const merkleRoot = filled(32, 0x99);
     const ix = await buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
@@ -578,7 +579,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // re-lock buyer/seller change notes against the continuing order)
     // round-trip byte-for-byte. Build with non-default relock metadata
     // and inspect the payload region of ix.data.
-    const tee = Keypair.generate();
+    const tee = await Keypair.generate();
     const base = exactFillFixture();
     const relock: MatchResultPayload = {
       ...base,

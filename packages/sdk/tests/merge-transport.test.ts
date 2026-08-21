@@ -8,6 +8,7 @@ import {
   noteLockPda,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const filled = (length: number, byte: number): Uint8Array =>
   new Uint8Array(length).fill(byte);
@@ -18,8 +19,8 @@ const PROGRAM_ID = new PublicKey(
 
 describe("merge transport lifecycle accounts", () => {
   it("passes consumed PDAs then absent NoteLock PDAs for active inputs only", async () => {
-    const payer = Keypair.generate().publicKey;
-    const mint = Keypair.generate().publicKey;
+    const payer = dummyAddress();
+    const mint = dummyAddress();
     // Handles, not leaves: the merge ix carries note-use tags.
     const t0 = filled(32, 0x11);
     const t1 = filled(32, 0x12);
@@ -80,10 +81,10 @@ describe("merge transport lifecycle accounts", () => {
       buildMergeInstruction({
         programId: PROGRAM_ID,
         treeId: 0,
-        payer: Keypair.generate().publicKey,
+        payer: dummyAddress(),
         inputUseTags: [new Uint8Array(32), new Uint8Array(32)],
         outputCommitment: filled(32, 0x21),
-        tokenMint: Keypair.generate().publicKey,
+        tokenMint: dummyAddress(),
         merkleRoot: filled(32, 0x31),
         k: 2,
         proof: {

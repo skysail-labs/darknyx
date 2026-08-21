@@ -2,7 +2,7 @@
   "name": "@darknyx/daemon",
   "version": "0.1.0",
   "private": true,
-  "description": "Darknyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order lifecycle, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
+  "description": "Darknyx reference daemon \u2014 long-running client for market makers + funds. Wraps the SDK: order lifecycle, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
@@ -23,10 +23,12 @@
     "@darknyx/sdk": "0.1.0",
     "@phala/dcap-qvl": "^0.3.9",
     "@solana/web3.js": "3.0.0-rc.2",
-    "tweetnacl": "1.0.3"
+    "tweetnacl": "1.0.3",
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@types/ws": "8.18.1",
     "typescript": "^5.4.0",
     "vitest": "^4.1.7"
   }

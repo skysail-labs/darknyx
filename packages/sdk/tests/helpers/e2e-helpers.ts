@@ -16,6 +16,25 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 
 import { anchorDiscriminator } from "../../src/idl/vault-client.js";
 
+// ── Unique throwaway addresses for tests ───────────────────────────────────
+// v3 made `Keypair.generate()` async (WebCrypto), so the old
+// `Keypair.generate().publicKey` shorthand for "some unique address" would
+// force `await` into tests that are otherwise synchronous -- and it always
+// discarded the secret key anyway. `dummyAddress()` is the sync replacement.
+//
+// Use it ONLY where the address is an opaque identity (account-ordering
+// assertions, PDA seeds, config fields). Anything that has to SIGN needs a
+// real `await Keypair.generate()`.
+//
+// The counter starts at 1, so a dummy address is never `PublicKey.default`
+// (all-zero) -- several builders reject that explicitly.
+let dummyAddressCounter = 0;
+export function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
+
 // ── Role tags for deterministic note derivation in the test relayer ─────────
 // `CHANGE_ROLE_*` must match the Rust constants in
 // `crates/darkpool-matcher/src/change_note.rs` (CHANGE_ROLE_BUYER = 0xB1,
@@ -87,20 +106,23 @@ export function u64ToBe32(x: bigint): Uint8Array {
 }
 
 /** Load a Solana keypair from a JSON array file. */
-export function loadKeypairFile(absPath: string): Keypair {
+export async function loadKeypairFile(absPath: string): Promise<Keypair> {
   if (!existsSync(absPath)) throw new Error(`keypair missing: ${absPath}`);
   const raw = JSON.parse(readFileSync(absPath, "utf8")) as number[];
-  return Keypair.fromSecretKey(new Uint8Array(raw));
+  return await Keypair.fromSecretKey(new Uint8Array(raw));
 }
 
-export function loadKeypairRel(repoRoot: string, relPath: string): Keypair {
-  return loadKeypairFile(resolve(repoRoot, relPath));
+export async function loadKeypairRel(
+  repoRoot: string,
+  relPath: string,
+): Promise<Keypair> {
+  return await loadKeypairFile(resolve(repoRoot, relPath));
 }
 
 /** Load a keypair from an absolute path, expanding a leading `~` to `$HOME`. */
-export function loadKeypairFileExpand(p: string): Keypair {
+export async function loadKeypairFileExpand(p: string): Promise<Keypair> {
   if (p.startsWith("~/") || p === "~") p = p.replace(/^~/, homedir());
-  return loadKeypairFile(p);
+  return await loadKeypairFile(p);
 }
 
 /** Save a Solana keypair as a JSON array (Solana-CLI-compatible). */
@@ -110,9 +132,9 @@ export function saveKeypairFile(absPath: string, kp: Keypair): void {
 }
 
 /** Load a keypair from disk if it exists, else generate a fresh one + persist. */
-export function loadOrCreateKeypair(absPath: string): Keypair {
-  if (existsSync(absPath)) return loadKeypairFile(absPath);
-  const kp = Keypair.generate();
+export async function loadOrCreateKeypair(absPath: string): Promise<Keypair> {
+  if (existsSync(absPath)) return await loadKeypairFile(absPath);
+  const kp = await Keypair.generate();
   saveKeypairFile(absPath, kp);
   return kp;
 }

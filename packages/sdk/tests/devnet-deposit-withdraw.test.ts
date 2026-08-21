@@ -92,8 +92,8 @@ const READY =
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
-function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(
+async function loadKp(rel: string): Promise<Keypair> {
+  return await Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
   );
 }
@@ -106,7 +106,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     // mints/config, and the runbook explicitly supplies this override.
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(".devnet/keypairs/admin.json");
 
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const AMOUNT = 7_000_000n; // 7 tokens @ 6 decimals

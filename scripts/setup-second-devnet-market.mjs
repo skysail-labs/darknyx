@@ -52,9 +52,9 @@ const BTC_USD_FEED =
 const SOL_USD_FEED =
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 
-function loadKeypair(path) {
+async function loadKeypair(path) {
   const absolute = resolve(REPO_ROOT, path);
-  return Keypair.fromSecretKey(
+  return await Keypair.fromSecretKey(
     new Uint8Array(JSON.parse(readFileSync(absolute, "utf8"))),
   );
 }
@@ -69,14 +69,16 @@ function u64(value) {
   return out;
 }
 
-function marketPda(programId, baseMint, quoteMint) {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("market_config"), baseMint.toBuffer(), quoteMint.toBuffer()],
-    programId,
+async function marketPda(programId, baseMint, quoteMint) {
+  return (
+    await PublicKey.findProgramAddress(
+      [Buffer.from("market_config"), baseMint.toBytes(), quoteMint.toBytes()],
+      programId,
+    )
   )[0];
 }
 
-function initializeMarketIx({
+async function initializeMarketIx({
   programId,
   admin,
   baseMint,
@@ -86,11 +88,11 @@ function initializeMarketIx({
   minOrderSize,
   circuitBreakerBps,
 }) {
-  const [vaultConfig] = PublicKey.findProgramAddressSync(
+  const [vaultConfig] = await PublicKey.findProgramAddress(
     [Buffer.from("vault_config")],
     programId,
   );
-  const market = marketPda(programId, baseMint, quoteMint);
+  const market = await marketPda(programId, baseMint, quoteMint);
   const data = Buffer.concat([
     discriminator("initialize_market"),
     u64(priceScale),
@@ -112,7 +114,7 @@ function initializeMarketIx({
   });
 }
 
-function updateMarketIx({
+async function updateMarketIx({
   programId,
   admin,
   baseMint,
@@ -123,11 +125,11 @@ function updateMarketIx({
   minOrderSize,
   circuitBreakerBps,
 }) {
-  const [vaultConfig] = PublicKey.findProgramAddressSync(
+  const [vaultConfig] = await PublicKey.findProgramAddress(
     [Buffer.from("vault_config")],
     programId,
   );
-  const market = marketPda(programId, baseMint, quoteMint);
+  const market = await marketPda(programId, baseMint, quoteMint);
   const data = Buffer.concat([
     discriminator("update_market_config"),
     Buffer.from([enabled ? 1 : 0]),
@@ -156,7 +158,7 @@ if (!existsSync(PRIMARY_CONFIG_PATH)) {
 const primary = JSON.parse(readFileSync(PRIMARY_CONFIG_PATH, "utf8"));
 const programId = new PublicKey(primary.vaultProgramId);
 const quoteMint = new PublicKey(primary.quoteMint.pubkey);
-const admin = loadKeypair(ADMIN_KEYPAIR);
+const admin = await loadKeypair(ADMIN_KEYPAIR);
 const connection = new Connection(RPC, "confirmed");
 
 let existing;
@@ -209,7 +211,7 @@ if (existing) {
     ).toBase58()}`,
   );
 } else {
-  secondBaseMint = Keypair.generate();
+  secondBaseMint = await Keypair.generate();
   const rent = await getMinimumBalanceForRentExemptMint(connection);
   const decimals = Number(primary.baseMint.decimals);
   const mintSignature = await sendAndConfirmTransaction(
@@ -240,7 +242,7 @@ if (existing) {
   const marketSignature = await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
-      initializeMarketIx({
+      await initializeMarketIx({
         programId,
         admin: admin.publicKey,
         baseMint: secondBaseMint.publicKey,
@@ -271,7 +273,7 @@ if (process.env.MARKET_ENABLED !== undefined) {
   const signature = await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
-      updateMarketIx({
+      await updateMarketIx({
         programId,
         admin: admin.publicKey,
         baseMint: secondBaseMint,

@@ -191,12 +191,12 @@ maybeDescribe(
         process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
         "confirmed",
       );
-      const admin = loadKeypairRel(
+      const admin = await loadKeypairRel(
         REPO_ROOT,
         process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
       );
       const funder = process.env.FUNDER_KEYPAIR
-        ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+        ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       const programId = new PublicKey(cfg.vaultProgramId);
       vaultConfigPda(programId);

@@ -185,25 +185,25 @@ async function oracleAnchor(): Promise<bigint> {
     await fetchPythCorePushPrice(new Connection(RPC, "finalized"), SOL_USD_FEED)
   ).emaPrice;
 }
-const loadKp = (rel: string) =>
-  Keypair.fromSecretKey(
+const loadKp = async (rel: string) =>
+  await Keypair.fromSecretKey(
     Uint8Array.from(
       JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8")) as number[],
     ),
   );
 
 /**
- * The buyer/seller fee payers used to be `loadKp(...)` on two files nothing in
+ * The buyer/seller fee payers used to be `await loadKp(...)` on two files nothing in
  * the repo creates. They existed only on the machine of whoever last ran this
  * by hand, so the suite threw in `beforeAll` anywhere else — which is a large
  * part of why it sat unrunnable while CI stayed green. Generate and persist
  * them on first use instead: they are throwaway devnet fee payers, not
  * protocol identities.
  */
-const loadOrCreateKp = (rel: string): Keypair => {
+const loadOrCreateKp = async (rel: string): Promise<Keypair> => {
   const abs = resolve(REPO_ROOT, rel);
-  if (existsSync(abs)) return loadKp(rel);
-  const kp = Keypair.generate();
+  if (existsSync(abs)) return await loadKp(rel);
+  const kp = await Keypair.generate();
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600 });
   return kp;
@@ -461,10 +461,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     );
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
     conn = new Connection(RPC, "confirmed");
-    admin = loadKp(process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json");
-    buyerPayer = loadOrCreateKp(".devnet/keypairs/cvm-buyer-payer.json");
-    sellerPayer = loadOrCreateKp(".devnet/keypairs/cvm-seller-payer.json");
-    const funder = loadKp(
+    admin = await loadKp(
+      process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
+    );
+    buyerPayer = await loadOrCreateKp(".devnet/keypairs/cvm-buyer-payer.json");
+    sellerPayer = await loadOrCreateKp(
+      ".devnet/keypairs/cvm-seller-payer.json",
+    );
+    const funder = await loadKp(
       process.env.FUNDER_KEYPAIR ?? ".devnet/keypairs/funder.json",
     );
     await ensureFunded(conn, funder, buyerPayer.publicKey);

@@ -93,7 +93,9 @@ const maybeDescribe = READY ? describe : describe.skip;
 // How long to watch for a (forbidden) self-match before concluding it was
 // correctly prevented. The matcher ticks within seconds; a generous window
 // keeps the negative assertion robust without waiting a full settle timeout.
-const NO_MATCH_WINDOW_MS = Number(process.env.DARKNYX_CVM_NO_MATCH_MS ?? "25000");
+const NO_MATCH_WINDOW_MS = Number(
+  process.env.DARKNYX_CVM_NO_MATCH_MS ?? "25000",
+);
 // How long to wait for the positive-control cross-owner settle to land.
 const SETTLE_TIMEOUT_MS = Number(
   process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "90000",
@@ -116,12 +118,12 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
       "confirmed",
     );
-    admin = loadKeypairRel(
+    admin = await loadKeypairRel(
       REPO_ROOT,
       process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
     );
     funder = process.env.FUNDER_KEYPAIR
-      ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+      ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
       : admin;
     vaultProgramId = new PublicKey(cfg.vaultProgramId);
     baseMint = new PublicKey(cfg.baseMint.pubkey);
@@ -135,7 +137,8 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
     "refuses to match a same-owner crossing pair, then matches a cross-owner ask",
     async () => {
       const QTY = BigInt(
-        process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+        process.env.DARKNYX_CVM_BASE_QTY ??
+          String((Date.now() % 250_000) + 1000),
       );
       const N = Number(
         process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),

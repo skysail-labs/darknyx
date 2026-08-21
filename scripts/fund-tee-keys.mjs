@@ -30,7 +30,10 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-const raw = [...process.argv.slice(2), ...(process.env.TEE_PUBKEYS ?? "").split(",")]
+const raw = [
+  ...process.argv.slice(2),
+  ...(process.env.TEE_PUBKEYS ?? "").split(","),
+]
   .flatMap((s) => s.split(","))
   .map((s) => s.trim())
   .filter(Boolean);
@@ -48,21 +51,28 @@ try {
 }
 
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
-const FUNDER_KP = process.env.FUNDER_KEYPAIR ?? join(homedir(), ".config/solana/id.json");
+const FUNDER_KP =
+  process.env.FUNDER_KEYPAIR ?? join(homedir(), ".config/solana/id.json");
 const TARGET_SOL = Number(process.env.FUND_TARGET_SOL ?? "2");
 if (!Number.isFinite(TARGET_SOL) || TARGET_SOL <= 0) {
-  console.error(`FUND_TARGET_SOL must be a positive number, got "${process.env.FUND_TARGET_SOL}"`);
+  console.error(
+    `FUND_TARGET_SOL must be a positive number, got "${process.env.FUND_TARGET_SOL}"`,
+  );
   process.exit(1);
 }
 const TARGET_LAMPORTS = Math.round(TARGET_SOL * LAMPORTS_PER_SOL);
 
-const funder = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(FUNDER_KP, "utf8"))));
+const funder = await Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(readFileSync(FUNDER_KP, "utf8"))),
+);
 const conn = new Connection(RPC, "confirmed");
 
 for (const [j, target] of targets.entries()) {
   const have = await conn.getBalance(target, "confirmed");
   if (have >= TARGET_LAMPORTS) {
-    console.log(`shard ${j} ${target.toBase58()} already has ${(have / LAMPORTS_PER_SOL).toFixed(3)} SOL — skip`);
+    console.log(
+      `shard ${j} ${target.toBase58()} already has ${(have / LAMPORTS_PER_SOL).toFixed(3)} SOL — skip`,
+    );
     continue;
   }
   const topUp = TARGET_LAMPORTS - have;
@@ -71,7 +81,9 @@ for (const [j, target] of targets.entries()) {
     toPubkey: target,
     lamports: topUp,
   });
-  const sig = await sendAndConfirmTransaction(conn, new Transaction().add(ix), [funder]);
+  const sig = await sendAndConfirmTransaction(conn, new Transaction().add(ix), [
+    funder,
+  ]);
   console.log(
     `shard ${j} ${target.toBase58()} += ${(topUp / LAMPORTS_PER_SOL).toFixed(3)} SOL  (${sig})`,
   );

@@ -96,8 +96,8 @@ const READY =
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
-function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(
+async function loadKp(rel: string): Promise<Keypair> {
+  return await Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
   );
 }
@@ -117,7 +117,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
 

@@ -565,7 +565,7 @@ match the CVM's `DARKNYX_TEE_FEE_RATE_BPS`), `DARKNYX_CVM_SETTLE_TIMEOUT_MS`.
 shard 0, settle outputs round-robin so sum across shards for the pool total):
 
 ```sh
-node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c=new Connection(process.env.SOLANA_RPC_URL,"confirmed");const P=new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");const[t0]=PublicKey.findProgramAddressSync([Buffer.from("merkle_tree"),Buffer.from([0])],P);const i=await c.getAccountInfo(t0);console.log("shard0 leaf_count",new DataView(i.data.buffer,i.data.byteOffset+8,8).getBigUint64(0,true))})'
+node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c=new Connection(process.env.SOLANA_RPC_URL,"confirmed");const P=new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");const[t0]=await PublicKey.findProgramAddress([Buffer.from("merkle_tree"),Buffer.from([0])],P);const i=await c.getAccountInfo(t0);console.log("shard0 leaf_count",new DataView(i.data.buffer,i.data.byteOffset+8,8).getBigUint64(0,true))})'
 ```
 
 **Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/darknyx.env`.

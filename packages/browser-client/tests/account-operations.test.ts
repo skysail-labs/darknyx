@@ -9,6 +9,16 @@ import {
   BrowserAccountOperations,
 } from "../src/internal.js";
 
+// v3 made `Keypair.generate()` async, and this call site only ever wanted a
+// unique opaque address -- the secret key was discarded. Keep it synchronous.
+// Counter starts at 1 so the result is never the all-zero default address.
+let dummyAddressCounter = 0;
+function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
+
 const be32 = (value: bigint): Uint8Array => {
   const out = new Uint8Array(32);
   let remaining = value;
@@ -37,8 +47,8 @@ class ReplyWorker {
 }
 
 function withdrawalHarness(outcome: "finalized" | "ambiguous") {
-  const mint = Keypair.generate().publicKey;
-  const wallet = Keypair.generate().publicKey;
+  const mint = dummyAddress();
+  const wallet = dummyAddress();
   const root = new Uint8Array(32).fill(3);
   const tag = new Uint8Array(32).fill(4);
   const nullifier = new Uint8Array(32).fill(5);
@@ -153,8 +163,8 @@ describe("browser account operations", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps an exact-note reservation when wallet broadcast is uncertain", async () => {
-    const mint = Keypair.generate().publicKey;
-    const wallet = Keypair.generate().publicKey;
+    const mint = dummyAddress();
+    const wallet = dummyAddress();
     const root = new Uint8Array(32).fill(3);
     const tag = new Uint8Array(32).fill(4);
     const nullifier = new Uint8Array(32).fill(5);

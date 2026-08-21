@@ -71,8 +71,10 @@ export function keypairForwarder(
         : (txOrIxs as Transaction);
       tx.feePayer = payer.publicKey;
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      tx.sign(payer, ...(signers as Keypair[]));
-      const sig = await connection.sendRawTransaction(tx.serialize());
+      // v3: both are async. `sign` MUST complete before `serialize`, or an
+      // unsigned transaction goes on the wire.
+      await tx.sign(payer, ...(signers as Keypair[]));
+      const sig = await connection.sendRawTransaction(await tx.serialize());
       await connection.confirmTransaction(sig, "confirmed");
       return sig;
     },

@@ -8,6 +8,7 @@ import {
   noteLockPda,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -21,7 +22,7 @@ describe("lock_note v3 amount-private transport", () => {
     const ix = await buildLockNoteInstruction({
       programId: PROGRAM_ID,
       treeId: 3,
-      teeAuthority: Keypair.generate().publicKey,
+      teeAuthority: dummyAddress(),
       noteUseTag: filled(32, 0x11),
       orderId: filled(16, 0x22),
       expirySlot: 0x0102_0304_0506_0708n,
@@ -46,7 +47,7 @@ describe("lock_note v3 amount-private transport", () => {
   });
 
   it("pins the account order incl. the U-02 consumed_note guard", async () => {
-    const teeAuthority = Keypair.generate().publicKey;
+    const teeAuthority = dummyAddress();
     const noteUseTag = filled(32, 0x11);
     const ix = await buildLockNoteInstruction({
       programId: PROGRAM_ID,

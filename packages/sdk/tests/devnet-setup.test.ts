@@ -140,7 +140,7 @@ function rpcHostLabel(url: string): string {
   }
 }
 
-function loadKeypair(relPath: string): Keypair {
+async function loadKeypair(relPath: string): Promise<Keypair> {
   const abs = resolve(REPO_ROOT, relPath);
   if (!existsSync(abs)) {
     throw new Error(
@@ -148,7 +148,7 @@ function loadKeypair(relPath: string): Keypair {
     );
   }
   const raw = JSON.parse(readFileSync(abs, "utf8")) as number[];
-  return Keypair.fromSecretKey(new Uint8Array(raw));
+  return await Keypair.fromSecretKey(new Uint8Array(raw));
 }
 
 function requireEnv(k: string): string {
@@ -301,9 +301,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
 
   beforeAll(async () => {
     connection = new Connection(L1_RPC_URL, "confirmed");
-    admin = loadKeypair(requireEnv("ADMIN_KEYPAIR"));
-    tee = loadKeypair(requireEnv("TEE_AUTHORITY_KEYPAIR"));
-    rootKey = loadKeypair(requireEnv("ROOT_KEY_KEYPAIR"));
+    admin = await loadKeypair(requireEnv("ADMIN_KEYPAIR"));
+    tee = await loadKeypair(requireEnv("TEE_AUTHORITY_KEYPAIR"));
+    rootKey = await loadKeypair(requireEnv("ROOT_KEY_KEYPAIR"));
 
     banner("DARKNYX DARKPOOL — DEVNET E2E SETUP");
     bullet(`RPC:                   ${rpcHostLabel(L1_RPC_URL)}`);
@@ -335,8 +335,8 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         `Create BASE + QUOTE SPL mints (${DEMO_MINT_DECIMALS} decimals each)`,
       );
       // ────────────────────────────────────────────────────────────────────
-      const baseMint = Keypair.generate();
-      const quoteMint = Keypair.generate();
+      const baseMint = await Keypair.generate();
+      const quoteMint = await Keypair.generate();
       bullet(`BASE mint pubkey:   ${baseMint.publicKey.toBase58()}`);
       bullet(`QUOTE mint pubkey:  ${quoteMint.publicKey.toBase58()}`);
 
@@ -572,7 +572,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // bytes to a 1-byte index. With sharding the worker references its
       // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
       // the Rust static_alt_addresses).
-      const altAddresses = staticSettleAltAddresses(
+      const altAddresses = await staticSettleAltAddresses(
         VAULT_PROGRAM_ID,
         NUM_TREES,
       );
@@ -582,7 +582,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const slot = (await connection.getLatestBlockhashAndContext()).context
         .slot;
       const [createAltIx, settleLookupTable] =
-        AddressLookupTableProgram.createLookupTable({
+        await AddressLookupTableProgram.createLookupTable({
           authority: admin.publicKey,
           payer: admin.publicKey,
           recentSlot: slot,

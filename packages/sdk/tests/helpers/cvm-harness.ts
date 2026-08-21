@@ -402,10 +402,10 @@ export async function makePersona(
   name: string,
   seed0: number,
 ): Promise<Persona> {
-  const payer = loadOrCreateKeypair(
+  const payer = await loadOrCreateKeypair(
     resolve(repoRoot, `.devnet/keypairs/${name}-payer.json`),
   );
-  const trading = loadOrCreateKeypair(
+  const trading = await loadOrCreateKeypair(
     resolve(repoRoot, `.devnet/keypairs/${name}-trading.json`),
   );
   const masterSeed = new Uint8Array(64);

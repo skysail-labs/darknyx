@@ -105,9 +105,9 @@ function streamTokenProvider(
 }
 
 /** Load a Solana keypair from a `solana-keygen` JSON file (array of bytes). */
-function loadKeypair(path: string): Keypair {
+async function loadKeypair(path: string): Promise<Keypair> {
   const bytes = JSON.parse(readFileSync(path, "utf8")) as number[];
-  return Keypair.fromSecretKey(Uint8Array.from(bytes));
+  return await Keypair.fromSecretKey(Uint8Array.from(bytes));
 }
 
 /**
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
   let depositor;
   let mergeRunner;
   if (config.payerKeypairPath) {
-    const payer = loadKeypair(config.payerKeypairPath);
+    const payer = await loadKeypair(config.payerKeypairPath);
     depositor = payer.publicKey;
     depositFn = getDepositFunction({
       client: createDaemonClient({
@@ -337,7 +337,10 @@ async function main(): Promise<void> {
     depositFn,
     depositor,
     mergeRunner,
-    streamTokenProvider: streamTokenProvider(config.gatewayUrl, transport.fetch),
+    streamTokenProvider: streamTokenProvider(
+      config.gatewayUrl,
+      transport.fetch,
+    ),
     verifyAttestation: skipAttest ? false : undefined,
     quoteVerifier: skipAttest
       ? undefined

@@ -165,12 +165,12 @@ maybeDescribe(
         process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
         "confirmed",
       );
-      admin = loadKeypairRel(
+      admin = await loadKeypairRel(
         REPO_ROOT,
         process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
       );
       funder = process.env.FUNDER_KEYPAIR
-        ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+        ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       vaultProgramId = new PublicKey(cfg.vaultProgramId);
       [vaultPda] = await vaultConfigPda(vaultProgramId);

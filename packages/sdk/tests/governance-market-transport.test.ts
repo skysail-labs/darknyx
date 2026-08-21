@@ -15,6 +15,7 @@ import {
   MARKET_CONFIG_ACCOUNT_LEN,
   decodeMarketConfig,
 } from "../src/tee/market-config.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -37,13 +38,10 @@ function readU64(data: Uint8Array, offset: number): bigint {
 
 describe("governance initialization transport", () => {
   it("serializes a distinct operations admin and complete shard signer set", async () => {
-    const initializer = Keypair.generate().publicKey;
-    const operationsAdmin = Keypair.generate().publicKey;
-    const teePubkeys = [
-      Keypair.generate().publicKey,
-      Keypair.generate().publicKey,
-    ];
-    const rootKey = Keypair.generate().publicKey;
+    const initializer = dummyAddress();
+    const operationsAdmin = dummyAddress();
+    const teePubkeys = [dummyAddress(), dummyAddress()];
+    const rootKey = dummyAddress();
     const ix = await buildInitializeInstruction({
       programId: PROGRAM_ID,
       initializer,
@@ -78,13 +76,13 @@ describe("governance initialization transport", () => {
   });
 
   it("adds the program and ProgramData accounts for mainnet initialization", async () => {
-    const programData = Keypair.generate().publicKey;
+    const programData = dummyAddress();
     const ix = await buildInitializeInstruction({
       programId: PROGRAM_ID,
-      initializer: Keypair.generate().publicKey,
-      operationsAdmin: Keypair.generate().publicKey,
-      teePubkeys: [Keypair.generate().publicKey],
-      rootKey: Keypair.generate().publicKey,
+      initializer: dummyAddress(),
+      operationsAdmin: dummyAddress(),
+      teePubkeys: [dummyAddress()],
+      rootKey: dummyAddress(),
       numTrees: 1,
       programData,
     });
@@ -97,12 +95,12 @@ describe("governance initialization transport", () => {
   it("rejects default, partial, and duplicate authority sets", async () => {
     const common = {
       programId: PROGRAM_ID,
-      initializer: Keypair.generate().publicKey,
-      operationsAdmin: Keypair.generate().publicKey,
-      rootKey: Keypair.generate().publicKey,
+      initializer: dummyAddress(),
+      operationsAdmin: dummyAddress(),
+      rootKey: dummyAddress(),
       numTrees: 2,
     };
-    const tee = Keypair.generate().publicKey;
+    const tee = dummyAddress();
     await expect(
       buildInitializeInstruction({ ...common, teePubkeys: [tee] }),
     ).rejects.toThrow(/must equal numTrees/);
@@ -113,14 +111,14 @@ describe("governance initialization transport", () => {
       buildInitializeInstruction({
         ...common,
         operationsAdmin: PublicKey.default,
-        teePubkeys: [tee, Keypair.generate().publicKey],
+        teePubkeys: [tee, dummyAddress()],
       }),
     ).rejects.toThrow(/operationsAdmin/);
     await expect(
       buildInitializeInstruction({
         ...common,
         operationsAdmin: common.rootKey,
-        teePubkeys: [tee, Keypair.generate().publicKey],
+        teePubkeys: [tee, dummyAddress()],
       }),
     ).rejects.toThrow(/distinct from rootKey/);
     await expect(
@@ -133,9 +131,9 @@ describe("governance initialization transport", () => {
 });
 
 describe("MarketConfig transport", () => {
-  const admin = Keypair.generate().publicKey;
-  const baseMint = Keypair.generate().publicKey;
-  const quoteMint = Keypair.generate().publicKey;
+  const admin = dummyAddress();
+  const baseMint = dummyAddress();
+  const quoteMint = dummyAddress();
   const market = {
     programId: PROGRAM_ID,
     admin,
@@ -242,10 +240,10 @@ describe("MarketConfig transport", () => {
 
 describe("TEE signer rotation transport", () => {
   it("serializes exactly numTrees unique keys", async () => {
-    const keys = [Keypair.generate().publicKey, Keypair.generate().publicKey];
+    const keys = [dummyAddress(), dummyAddress()];
     const ix = await buildSetTeePubkeyInstruction({
       programId: PROGRAM_ID,
-      admin: Keypair.generate().publicKey,
+      admin: dummyAddress(),
       teePubkeys: keys,
       numTrees: 2,
     });
@@ -254,7 +252,7 @@ describe("TEE signer rotation transport", () => {
     await expect(
       buildSetTeePubkeyInstruction({
         programId: PROGRAM_ID,
-        admin: Keypair.generate().publicKey,
+        admin: dummyAddress(),
         teePubkeys: [keys[0]],
         numTrees: 2,
       }),
@@ -264,7 +262,7 @@ describe("TEE signer rotation transport", () => {
 
 describe("root rotation transport", () => {
   it("rejects default and no-op successors before submission", async () => {
-    const currentRootKey = Keypair.generate().publicKey;
+    const currentRootKey = dummyAddress();
     await expect(
       buildRotateRootKeyInstruction({
         programId: PROGRAM_ID,
