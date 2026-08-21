@@ -332,9 +332,13 @@ node scripts/check-script-awaits.mjs                # .mjs get no typecheck; a f
 # ALL SIX packages that HAVE a tsconfig.test.json are listed. This block used to
 # name three; browser-client and client-core were checked by nothing, locally or
 # in CI, and browser-client is the SIGNED RELEASE surface.
-# The SDK must be BUILT first — daemon/indexer/browser-client typecheck against
-# its emitted declarations, and `npm ci` does not build workspace packages.
+# The SDK and client-core must be BUILT first — daemon/indexer/browser-client
+# typecheck against their emitted DECLARATIONS, and neither `npm ci` nor
+# `npm install` builds workspace packages. Skip these and browser-client alone
+# reports ~15 "Cannot find module '@darknyx/client-core'" errors. It is easy to
+# miss locally, because a stale dist/ from an earlier build is usually on disk.
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json          # emits dist/
+./node_modules/.bin/tsc -p packages/client-core/tsconfig.json  # emits dist/
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/daemon/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.test.json --noEmit

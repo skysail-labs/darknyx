@@ -528,6 +528,13 @@ jobs:
           done
           if [ "$missing" -eq 1 ]; then
             echo "parity helpers absent (rust job skipped or artefact missing) — building"
+            # cargo resolves the ENTIRE workspace even for `-p darkpool-crypto`,
+            # and darknyx-tee has path deps on these submodules. Without their
+            # manifests the build dies with "failed to load source for
+            # dependency `icicle-snark`". Shallow init — only the manifests are
+            # needed for resolution, and this only runs on the fallback path.
+            git submodule update --init --depth 1 \
+              third_party/icicle-snark third_party/rapidsnark
             cargo build --examples -p darkpool-crypto
           else
             echo "parity helpers restored from the rust job artefact"
@@ -609,6 +616,20 @@ jobs:
           node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.json
           test -f packages/sdk/dist/index.d.ts \
             || { echo "::error::sdk build produced no dist/index.d.ts"; exit 1; }
+
+      # Same reason, one package further out: browser-client imports
+      # `@darknyx/client-core` and `@darknyx/client-core/internal`, which
+      # resolve through that package's emitted declarations. `npm ci` does not
+      # build workspace packages, so without this the browser-client typecheck
+      # fails with ~15 "Cannot find module '@darknyx/client-core'" errors plus
+      # the implicit-any cascade they cause. Missed locally because a stale
+      # client-core/dist was already on disk — the same trap this job's SDK
+      # step was written to document.
+      - name: Build client-core (browser-client typechecks against it)
+        run: |
+          node node_modules/typescript/bin/tsc -p packages/client-core/tsconfig.json
+          test -f packages/client-core/dist/index.d.ts \
+            || { echo "::error::client-core build produced no dist/index.d.ts"; exit 1; }
 
       - name: tsc --noEmit (sdk, tests included)
         run: node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
