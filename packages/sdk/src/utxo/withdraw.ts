@@ -186,7 +186,7 @@ export function getWithdrawFunction({
     // --- Stage: instruction-build ---
     await params.callbacks?.pre?.("instruction-build");
     const tokenMintPk = new PublicKey(params.tokenMint);
-    const ix = buildWithdrawInstruction({
+    const ix = await buildWithdrawInstruction({
       programId: client.programId,
       treeId: params.treeId ?? 0,
       payer: params.payer,

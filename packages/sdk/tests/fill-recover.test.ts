@@ -188,7 +188,9 @@ describe("recoverFillFromChain recovery v3", () => {
     fill.tradeNoteCommitment = fill.tradeNoteCommitment.toUpperCase();
     fill.changeNoteCommitment = fill.changeNoteCommitment!.toUpperCase();
     const outputs = await recoverFillFromChain(fill, params([input]));
-    expect(outputs?.trade.commitment).toBe(fill.tradeNoteCommitment.toLowerCase());
+    expect(outputs?.trade.commitment).toBe(
+      fill.tradeNoteCommitment.toLowerCase(),
+    );
     expect(outputs?.change?.commitment).toBe(
       fill.changeNoteCommitment.toLowerCase(),
     );
@@ -251,6 +253,8 @@ describe("recoverFillFromChain recovery v3", () => {
       change: 0n,
     });
     inconsistent.changeNoteCommitment = "11".repeat(32);
-    expect(await recoverFillFromChain(inconsistent, params([input]))).toBeNull();
+    expect(
+      await recoverFillFromChain(inconsistent, params([input])),
+    ).toBeNull();
   });
 });

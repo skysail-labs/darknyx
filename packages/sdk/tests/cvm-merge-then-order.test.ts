@@ -155,7 +155,8 @@ maybeDescribe(
         // Q (= ask qty). The merged note must equal withFee(Q) so it exactly
         // covers the ask's fee-inclusive collateral. Per-run-unique commitments.
         const Q = BigInt(
-          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 200_000) + 2000),
+          process.env.DARKNYX_CVM_BASE_QTY ??
+            String((Date.now() % 200_000) + 2000),
         );
         const mergedAmt = withFee(Q); // = A0 + A1
         const A1 = mergedAmt / 2n;
@@ -198,7 +199,7 @@ maybeDescribe(
         );
 
         // ── 2. mint collateral: seller's two base notes + buyer's quote note ──
-        await t.step("mint collateral", () =>
+        await t.step("mint collateral", async () =>
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
@@ -232,13 +233,13 @@ maybeDescribe(
         );
 
         // ── 3. deposit (all to shard 0 for deterministic merge witness) ──
-        const sellerNote0 = await t.step("deposit seller note 0", () =>
+        const sellerNote0 = await t.step("deposit seller note 0", async () =>
           harness.deposit(seller, baseMint, sellerBaseAta, A0, 0),
         );
-        const sellerNote1 = await t.step("deposit seller note 1", () =>
+        const sellerNote1 = await t.step("deposit seller note 1", async () =>
           harness.deposit(seller, baseMint, sellerBaseAta, A1, 0),
         );
-        const buyerNote = await t.step("deposit buyer note", () =>
+        const buyerNote = await t.step("deposit buyer note", async () =>
           harness.deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt, 0),
         );
         expect(await harness.leafCount()).toBe(3);
@@ -248,7 +249,7 @@ maybeDescribe(
         const w0 = await shadow.witness(sellerNote0.leafIndex);
         const w1 = await shadow.witness(sellerNote1.leafIndex);
         const root = await shadow.computeRoot();
-        const mergeRes = await t.step("VALID_MERGE prove (K=2)", () =>
+        const mergeRes = await t.step("VALID_MERGE prove (K=2)", async () =>
           proveValidMerge({
             repoRoot: REPO_ROOT,
             k: 2,
@@ -272,12 +273,12 @@ maybeDescribe(
             ],
           }),
         );
-        const mergeSig = await t.step("merge ix submit", () =>
+        const mergeSig = await t.step("merge ix submit", async () =>
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
               ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-              buildMergeInstruction({
+              await buildMergeInstruction({
                 programId: vaultProgramId,
                 treeId: 0,
                 payer: seller.payer.publicKey,
@@ -318,7 +319,7 @@ maybeDescribe(
           "VALID_INPUT prove seller (merged note)",
           () => harness.viProof(REPO_ROOT, seller, mergedNote),
         );
-        const buyerVI = await t.step("VALID_INPUT prove buyer", () =>
+        const buyerVI = await t.step("VALID_INPUT prove buyer", async () =>
           harness.viProof(REPO_ROOT, buyer, buyerNote),
         );
 
@@ -415,8 +416,9 @@ maybeDescribe(
             );
           return r.status;
         }
-        const sAsk = await t.step("submit ask (merged-note collateral)", () =>
-          submit(sellerOrder),
+        const sAsk = await t.step(
+          "submit ask (merged-note collateral)",
+          async () => submit(sellerOrder),
         );
         const sBid = await t.step("submit bid", () => submit(buyerOrder));
         expect(String(sAsk).startsWith("2"), `ask rejected (${sAsk})`).toBe(

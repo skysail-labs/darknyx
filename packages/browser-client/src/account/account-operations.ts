@@ -294,7 +294,7 @@ export class BrowserAccountOperations {
       bn254ToBE32(params.amount),
       prepared.recoveryNonce,
     ]);
-    const instruction = buildDepositInstruction({
+    const instruction = await buildDepositInstruction({
       programId: this.#programId,
       treeId,
       depositor,
@@ -361,7 +361,7 @@ export class BrowserAccountOperations {
         bn254ToBE32(destinationLo),
         bn254ToBE32(destinationHi),
       ]);
-      const instruction = buildWithdrawInstruction({
+      const instruction = await buildWithdrawInstruction({
         programId: this.#programId,
         treeId: held.note.treeId,
         payer: this.#walletAddress(),
@@ -427,7 +427,7 @@ export class BrowserAccountOperations {
         bn254ToBE32(mintLo),
         bn254ToBE32(mintHi),
       ]);
-      const instruction = buildMergeInstruction({
+      const instruction = await buildMergeInstruction({
         programId: this.#programId,
         treeId: held[0].note.treeId,
         payer: this.#walletAddress(),

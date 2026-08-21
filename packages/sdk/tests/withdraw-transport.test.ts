@@ -83,7 +83,10 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
         ],
       };
       return this.corruptPublicInputs
-        ? { ...proof, publicInputs: this.corruptPublicInputs(proof.publicInputs) }
+        ? {
+            ...proof,
+            publicInputs: this.corruptPublicInputs(proof.publicInputs),
+          }
         : proof;
     },
   };
@@ -255,9 +258,9 @@ describe("getWithdrawFunction", () => {
         innerHash: 9n,
       };
       prover.expectedNoteUseTag = await deriveNoteUseTag(
-      await noteCommitmentV2(notePlaintext),
-      bn254ToBE32(notePlaintext.innerHash),
-    );
+        await noteCommitmentV2(notePlaintext),
+        bn254ToBE32(notePlaintext.innerHash),
+      );
       prover.corruptPublicInputs = corrupt;
 
       let error: Error | null = null;
@@ -277,7 +280,9 @@ describe("getWithdrawFunction", () => {
     }
 
     it("refuses a public-input vector of the wrong length", async () => {
-      const { error, sent } = await withdrawWith((v) => v.slice(0, v.length - 1));
+      const { error, sent } = await withdrawWith((v) =>
+        v.slice(0, v.length - 1),
+      );
       expect(error?.message).toMatch(/public inputs/i);
       expect(sent).toHaveLength(0);
     });

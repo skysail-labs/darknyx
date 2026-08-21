@@ -202,9 +202,9 @@ describe("getDepositFunction", () => {
     const disc = Buffer.from(anchorDiscriminator("deposit"));
     expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
     // [1] vault_config (read-only), [2] merkle_tree[0] (the leaf-append shard).
-    const [vaultPda] = vaultConfigPda(PROGRAM_ID);
+    const [vaultPda] = await vaultConfigPda(PROGRAM_ID);
     expect(ix.keys[1].pubkey.toBase58()).toBe(vaultPda.toBase58());
-    const [treePda] = merkleTreePda(PROGRAM_ID, 0);
+    const [treePda] = await merkleTreePda(PROGRAM_ID, 0);
     expect(ix.keys[2].pubkey.toBase58()).toBe(treePda.toBase58());
     // tree_id(1) at offset 8, then amount (u64 LE) at offset 9.
     expect((ix.data as NodeBuffer)[8]).toBe(0);

@@ -173,7 +173,7 @@ maybeDescribe(
         ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       vaultProgramId = new PublicKey(cfg.vaultProgramId);
-      [vaultPda] = vaultConfigPda(vaultProgramId);
+      [vaultPda] = await vaultConfigPda(vaultProgramId);
       baseMint = new PublicKey(cfg.baseMint.pubkey);
       quoteMint = new PublicKey(cfg.quoteMint.pubkey);
       buyer = await makePersona(REPO_ROOT, "cvm-buyer", 0x40);
@@ -197,7 +197,8 @@ maybeDescribe(
         // intake rejects it as 1 below the required floor. 2×250k×bidPrice(~7.4e9)
         // ≈ 3.7e15 — comfortably exact even if SOL's price doubles.
         const BASE_QTY = BigInt(
-          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+          process.env.DARKNYX_CVM_BASE_QTY ??
+            String((Date.now() % 250_000) + 1000),
         );
         // Run-unique order-id index. Order ids are now DETERMINISTIC
         // (`deriveOrderId(seed, n)`) so fills mode can query the indexer by the
@@ -223,7 +224,8 @@ maybeDescribe(
         // (BUY_QTY=BASE_QTY).
         // Override the multiplier with DARKNYX_CVM_BUY_MULT.
         const BUY_MULT = BigInt(
-          process.env.DARKNYX_CVM_BUY_MULT ?? (FILLS || CHAIN_RECOVERY ? "2" : "1"),
+          process.env.DARKNYX_CVM_BUY_MULT ??
+            (FILLS || CHAIN_RECOVERY ? "2" : "1"),
         );
         const BUY_QTY = BASE_QTY * BUY_MULT;
         console.log(
@@ -296,7 +298,9 @@ maybeDescribe(
         // needs (DARKNYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
         // collateral_amount; intake accepts note ≥ required and the matcher returns
         // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
-        const BUYER_SURPLUS = BigInt(process.env.DARKNYX_CVM_BUYER_SURPLUS ?? "0");
+        const BUYER_SURPLUS = BigInt(
+          process.env.DARKNYX_CVM_BUYER_SURPLUS ?? "0",
+        );
         const buyerNoteAmt =
           withFee(scaledQuote(BUY_QTY, bidPrice, PRICE_SCALE)) + BUYER_SURPLUS;
         const sellerNoteAmt = withFee(BASE_QTY);
@@ -423,9 +427,7 @@ maybeDescribe(
           // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
           // the same n yields distinct ids. Recoverable by the fills gap-scan.
           const orderId = deriveOrderId(p.masterSeed, orderIndex);
-          const viewingPubkey = deriveViewingEncKeypair(
-            p.masterSeed,
-          ).publicKey;
+          const viewingPubkey = deriveViewingEncKeypair(p.masterSeed).publicKey;
           const digest = orderCanonicalDigest({
             symbol: new TextEncoder().encode(SYMBOL),
             side,
@@ -891,9 +893,7 @@ maybeDescribe(
           }
 
           // The memo must name the exact deposited input that v3 consumed.
-          expect(memoRec!.consumedCommitment).toBe(
-            hex(buyerNote.commitment),
-          );
+          expect(memoRec!.consumedCommitment).toBe(hex(buyerNote.commitment));
           console.log(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, consumed ${memoRec!.consumedCommitment!.slice(0, 12)}…)`,
           );
@@ -906,42 +906,39 @@ maybeDescribe(
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
-          await t.step(
-            "on-chain trade + change recovery v3",
-            async () => {
-              const coldStore = new InMemoryNoteStore();
-              const inputRecord = {
-                commitment: hex(buyerNote.commitment),
-                tokenMint: buyerNote.mint.toBytes(),
-                amount: buyerNote.amount,
-                ownerCommitment: buyer.ownerCommit,
-                innerHash: buyerNote.innerHash,
-                leafIndex: BigInt(buyerNote.leafIndex),
-              };
-              await coldStore.put(inputRecord);
-              const recovered = await recoverFillFromChain(change!, {
-                masterSeed: buyer.masterSeed,
-                candidateInputs: [inputRecord],
-                baseMint: baseMint.toBytes(),
-                quoteMint: quoteMint.toBytes(),
-              });
-              expect(
-                recovered,
-                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v3 image?)",
-              ).toBeTruthy();
-              expect(recovered!.trade.amount).toBe(BASE_QTY);
-              // The chain-recovered amount must match the live memo byte-for-byte.
-              expect(recovered!.change!.amount).toBe(memoRec!.amount);
-              // And it lands spendable in a cold store.
-              await coldStore.put(recovered!.trade);
-              await coldStore.put(recovered!.change!);
-              const stored = await coldStore.get(change!.changeNoteCommitment!);
-              expect(stored?.amount).toBe(memoRec!.amount);
-              console.log(
-                `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
-              );
-            },
-          );
+          await t.step("on-chain trade + change recovery v3", async () => {
+            const coldStore = new InMemoryNoteStore();
+            const inputRecord = {
+              commitment: hex(buyerNote.commitment),
+              tokenMint: buyerNote.mint.toBytes(),
+              amount: buyerNote.amount,
+              ownerCommitment: buyer.ownerCommit,
+              innerHash: buyerNote.innerHash,
+              leafIndex: BigInt(buyerNote.leafIndex),
+            };
+            await coldStore.put(inputRecord);
+            const recovered = await recoverFillFromChain(change!, {
+              masterSeed: buyer.masterSeed,
+              candidateInputs: [inputRecord],
+              baseMint: baseMint.toBytes(),
+              quoteMint: quoteMint.toBytes(),
+            });
+            expect(
+              recovered,
+              "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v3 image?)",
+            ).toBeTruthy();
+            expect(recovered!.trade.amount).toBe(BASE_QTY);
+            // The chain-recovered amount must match the live memo byte-for-byte.
+            expect(recovered!.change!.amount).toBe(memoRec!.amount);
+            // And it lands spendable in a cold store.
+            await coldStore.put(recovered!.trade);
+            await coldStore.put(recovered!.change!);
+            const stored = await coldStore.get(change!.changeNoteCommitment!);
+            expect(stored?.amount).toBe(memoRec!.amount);
+            console.log(
+              `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
+            );
+          });
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
           // The buyer's output-derived residual was relocked in batch 1 and

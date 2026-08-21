@@ -217,7 +217,7 @@ export function getMergeFunction({
 
     // --- submit ---
     await params.callbacks?.pre?.("instruction-build");
-    const ix = buildMergeInstruction({
+    const ix = await buildMergeInstruction({
       programId: client.programId,
       treeId,
       payer: params.payer,

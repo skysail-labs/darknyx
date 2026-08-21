@@ -63,12 +63,10 @@ export async function buildCvmFetch(
     throw new Error("DARKNYX_TRADER_EXPECT_SIGNER_SET must be 32 bytes of hex");
   }
 
-  const { TransportAgent, createVerifiedFetch } = await import(
-    "@darknyx/sdk/transport-node"
-  );
-  const { createDcapQuoteVerifier, parseEventLog } = await import(
-    "@darknyx/sdk"
-  );
+  const { TransportAgent, createVerifiedFetch } =
+    await import("@darknyx/sdk/transport-node");
+  const { createDcapQuoteVerifier, parseEventLog } =
+    await import("@darknyx/sdk");
   const dcap = createDcapQuoteVerifier({});
   return createVerifiedFetch({
     baseUrl: gateway!,

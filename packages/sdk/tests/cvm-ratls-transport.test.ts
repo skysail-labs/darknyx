@@ -117,7 +117,10 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     const res = await uf(`${URL_}/health`, { dispatcher: agent } as never);
     expect(res.status).toBe(200);
     const socket = agent.currentSocket();
-    expect(socket, "no socket was captured — the dispatcher is not wired").toBeDefined();
+    expect(
+      socket,
+      "no socket was captured — the dispatcher is not wired",
+    ).toBeDefined();
     const spki = agent.spkiFor(socket!);
     expect(spki.length).toBe(32);
     console.log("live socket SPKI:", toHex(spki));
@@ -128,7 +131,10 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     const sink: { rd?: string; log?: string } = {};
     // Capture the served report_data so the injected verifier echoes it.
     const capturing: typeof fetch = (async (i: never, init: never) => {
-      const r = await uf(i, { ...(init as object), dispatcher: agent } as never);
+      const r = await uf(i, {
+        ...(init as object),
+        dispatcher: agent,
+      } as never);
       const t = await r.text();
       try {
         const parsed = JSON.parse(t) as {
@@ -160,7 +166,9 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     console.log("signer set     :", toHex(verified.manifest.signerSetSha256));
 
     // The attested SPKI is the one on the socket the adapter is holding.
-    expect(toHex(verified.spkiSha256)).toBe(toHex(agent.spkiFor(verified.socket)));
+    expect(toHex(verified.spkiSha256)).toBe(
+      toHex(agent.spkiFor(verified.socket)),
+    );
     expect(agent.isVerified(verified.socket)).toBe(true);
     expect(toHex(verified.manifest.signerSetSha256)).toBe(SIGNERS_HEX);
   }, 90_000);
@@ -171,7 +179,10 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     const agent = new TransportAgent();
     const sink: { rd?: string; log?: string } = {};
     const capturing: typeof fetch = (async (i: never, init: never) => {
-      const r = await uf(i, { ...(init as object), dispatcher: agent } as never);
+      const r = await uf(i, {
+        ...(init as object),
+        dispatcher: agent,
+      } as never);
       const t = await r.text();
       try {
         const parsed = JSON.parse(t) as {
@@ -211,7 +222,10 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     const agent = new TransportAgent();
     const sink: { rd?: string; log?: string } = {};
     const capturing: typeof fetch = (async (i: never, init: never) => {
-      const r = await uf(i, { ...(init as object), dispatcher: agent } as never);
+      const r = await uf(i, {
+        ...(init as object),
+        dispatcher: agent,
+      } as never);
       const t = await r.text();
       try {
         const parsed = JSON.parse(t) as {
@@ -250,11 +264,11 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
         const t = await r.text();
         try {
           const parsed = JSON.parse(t) as {
-          report_data: string;
-          event_log: string;
-        };
-        sink.rd = parsed.report_data;
-        sink.log = parsed.event_log;
+            report_data: string;
+            event_log: string;
+          };
+          sink.rd = parsed.report_data;
+          sink.log = parsed.event_log;
         } catch {
           /* ignore */
         }
@@ -308,7 +322,9 @@ describe.skipIf(!RUN)("RA-TLS transport against a live CVM", () => {
     // Warm up so one-time module/TLS-context allocation is not counted as growth.
     for (let i = 0; i < 3; i += 1) {
       const a = new TransportAgent();
-      await uf(`${URL_}/health`, { dispatcher: a } as never).then((r) => r.text());
+      await uf(`${URL_}/health`, { dispatcher: a } as never).then((r) =>
+        r.text(),
+      );
       await a.close();
     }
     global.gc?.();

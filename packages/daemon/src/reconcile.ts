@@ -35,7 +35,11 @@ import { recoverNotesFromChain, type StoredNote } from "@darknyx/sdk";
 
 import type { DaemonStore } from "./store.js";
 import type { TeeReadClient } from "./tee-read.js";
-import { TERMINAL_PHASES, type ManagedOrder, type OrderPhase } from "./types.js";
+import {
+  TERMINAL_PHASES,
+  type ManagedOrder,
+  type OrderPhase,
+} from "./types.js";
 
 /**
  * Server `status` → local `OrderPhase`.
@@ -109,9 +113,7 @@ export interface ReconcileResult {
  * a partially reconciled daemon is strictly better than one that gave up, and
  * the caller keeps placement paused until this returns either way.
  */
-export async function reconcile(
-  deps: ReconcileDeps,
-): Promise<ReconcileResult> {
+export async function reconcile(deps: ReconcileDeps): Promise<ReconcileResult> {
   const log = deps.log ?? (() => {});
   const result: ReconcileResult = {
     ordersRephased: 0,
@@ -165,7 +167,8 @@ export async function reconcile(
 
   // ── 3. Note openings, from the chain ───────────────────────────────────
   try {
-    const connect = deps.connectionFactory ?? ((u: string) => new Connection(u, "finalized"));
+    const connect =
+      deps.connectionFactory ?? ((u: string) => new Connection(u, "finalized"));
     const recovered = await recoverNotesFromChain({
       connection: connect(deps.rpcUrl),
       programId: new PublicKey(deps.programId),
@@ -174,7 +177,9 @@ export async function reconcile(
       quoteMint: deps.quoteMint,
       sinceSlot: deps.sinceSlot,
     });
-    const known = new Set(deps.store.list().map((n: StoredNote) => n.commitment));
+    const known = new Set(
+      deps.store.list().map((n: StoredNote) => n.commitment),
+    );
     for (const note of recovered.notes as StoredNote[]) {
       if (known.has(note.commitment)) continue;
       deps.store.put(note);

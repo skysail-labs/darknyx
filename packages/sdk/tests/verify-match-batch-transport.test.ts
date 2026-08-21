@@ -15,12 +15,12 @@ const filled = (length: number, byte: number): Uint8Array =>
   new Uint8Array(length).fill(byte);
 
 describe("verify_match_batch v3 transport", () => {
-  it("adds the governed market as a read-only account without changing Tx B data", () => {
+  it("adds the governed market as a read-only account without changing Tx B data", async () => {
     const payer = Keypair.generate().publicKey;
     const baseMint = new PublicKey(filled(32, 0x44));
     const quoteMint = new PublicKey(filled(32, 0x55));
     const root = filled(32, 0x66);
-    const ix = buildVerifyMatchBatchInstruction({
+    const ix = await buildVerifyMatchBatchInstruction({
       programId: PROGRAM_ID,
       payer,
       baseMint,
@@ -41,17 +41,17 @@ describe("verify_match_batch v3 transport", () => {
     expect(ix.keys).toEqual([
       { pubkey: payer, isSigner: true, isWritable: true },
       {
-        pubkey: vaultConfigPda(PROGRAM_ID)[0],
+        pubkey: (await vaultConfigPda(PROGRAM_ID))[0],
         isSigner: false,
         isWritable: false,
       },
       {
-        pubkey: marketConfigPda(PROGRAM_ID, baseMint, quoteMint)[0],
+        pubkey: (await marketConfigPda(PROGRAM_ID, baseMint, quoteMint))[0],
         isSigner: false,
         isWritable: false,
       },
       {
-        pubkey: batchValidityMarkerPda(PROGRAM_ID, root)[0],
+        pubkey: (await batchValidityMarkerPda(PROGRAM_ID, root))[0],
         isSigner: false,
         isWritable: true,
       },

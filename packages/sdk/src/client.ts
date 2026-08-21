@@ -83,8 +83,8 @@ export class DarkPoolClient {
     return this.connectionProvider.perRpcUrl;
   }
 
-  vaultConfigPda(): PublicKey {
-    const [pda] = PublicKey.findProgramAddressSync(
+  async vaultConfigPda(): Promise<PublicKey> {
+    const [pda] = await PublicKey.findProgramAddress(
       [new TextEncoder().encode("vault_config")],
       this.programId,
     );
@@ -118,8 +118,8 @@ export class DarkPoolClient {
    */
   async getNoteStatus(noteCommitment: Uint8Array): Promise<NoteStatusInfo> {
     try {
-      const [consumed] = consumedNotePda(this.programId, noteCommitment);
-      const [locked] = noteLockPda(this.programId, noteCommitment);
+      const [consumed] = await consumedNotePda(this.programId, noteCommitment);
+      const [locked] = await noteLockPda(this.programId, noteCommitment);
       const consumedInfo =
         await this.providers.accountInfoProvider.getAccountInfo(consumed);
       if (consumedInfo !== null) return { status: "consumed" };

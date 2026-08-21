@@ -83,7 +83,8 @@ const DEPOSIT_ZKEY = resolve(
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -136,11 +137,11 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const t = new StepTimer();
 
     // ── 1. reset → deposit two notes at leaves 0,1 ──
-    await t.step("reset_merkle_tree", () =>
+    await t.step("reset_merkle_tree", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          buildResetMerkleTreeInstruction({
+          await buildResetMerkleTreeInstruction({
             programId: VAULT_ID,
             admin: admin.publicKey,
             treeId: 0,
@@ -150,7 +151,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         { commitment: "confirmed" },
       ),
     );
-    const [treePda] = merkleTreePda(VAULT_ID, 0);
+    const [treePda] = await merkleTreePda(VAULT_ID, 0);
     expect(
       leafCount((await conn.getAccountInfo(treePda))!),
       "tree empty after reset",
@@ -193,7 +194,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         ownerCommitmentBlinding: ownerBlinding,
         noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
       });
-      await t.step(`deposit note ${i}`, () =>
+      await t.step(`deposit note ${i}`, async () =>
         sendAndConfirmTransaction(
           conn,
           new Transaction().add(
@@ -205,7 +206,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
               mint,
             ),
             createMintToInstruction(mint, ata, admin.publicKey, amount),
-            buildDepositInstruction({
+            await buildDepositInstruction({
               programId: VAULT_ID,
               treeId: 0,
               depositor: admin.publicKey,
@@ -251,12 +252,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         slots,
       }),
     );
-    const mergeSig = await t.step("merge ix submit + confirm", () =>
+    const mergeSig = await t.step("merge ix submit + confirm", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-          buildMergeInstruction({
+          await buildMergeInstruction({
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,
@@ -319,12 +320,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       mergeRes.outputCommitmentBE,
       bn254ToBE32(mergeRes.outputInnerHash),
     );
-    await t.step("withdraw ix submit + confirm", () =>
+    await t.step("withdraw ix submit + confirm", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-          buildWithdrawInstruction({
+          await buildWithdrawInstruction({
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,

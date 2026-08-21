@@ -80,7 +80,8 @@ const DEPOSIT_ZKEY = resolve(
 // experiment this run looked like a no-op against the new program while
 // actually depositing and withdrawing on the old one.
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -127,7 +128,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const resetSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({
+        await buildResetMerkleTreeInstruction({
           programId: VAULT_ID,
           admin: admin.publicKey,
           treeId: 0,
@@ -143,7 +144,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     // first field, at byte offset 8 after the 8-byte discriminator), NOT in
     // `VaultConfig` — which has no leaf field at all (offset 104 there is
     // `tee_pubkeys[2]`). After resetting shard 0 this must be 0.
-    const [tree0Pda] = merkleTreePda(VAULT_ID, 0);
+    const [tree0Pda] = await merkleTreePda(VAULT_ID, 0);
     const tinfo = await conn.getAccountInfo(tree0Pda);
     if (!tinfo) throw new Error("merkle_tree(0) missing");
     const leafIndex = Number(
@@ -199,7 +200,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
           mint,
         ),
         createMintToInstruction(mint, ata, admin.publicKey, AMOUNT),
-        buildDepositInstruction({
+        await buildDepositInstruction({
           programId: VAULT_ID,
           treeId: 0,
           depositor: admin.publicKey,
@@ -252,7 +253,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       conn,
       new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        buildWithdrawInstruction({
+        await buildWithdrawInstruction({
           programId: VAULT_ID,
           treeId: 0,
           payer: admin.publicKey,
@@ -261,7 +262,10 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
           tokenProgramId: TOKEN_PROGRAM_ID,
           // VALID_SPEND's public output 0 is now the tag; the commitment
           // stays a private intermediate inside the proof.
-          noteUseTag: await deriveNoteUseTag(commitment, bn254ToBE32(innerHash)),
+          noteUseTag: await deriveNoteUseTag(
+            commitment,
+            bn254ToBE32(innerHash),
+          ),
           nullifier: nulli,
           merkleRoot: w.root,
           amount: AMOUNT,
@@ -271,9 +275,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       [admin],
       { commitment: "confirmed" },
     );
-    console.log(
-      `  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`,
-    );
+    console.log(`  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`);
 
     // ── 4. assert the tokens round-tripped back ──
     const balFinal = (await getAccount(conn, ata)).amount;

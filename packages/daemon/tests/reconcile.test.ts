@@ -86,7 +86,10 @@ describe("reconcile", () => {
     s.putOrder(order("aa", { phase: "open" }));
     const r = reads({ aa: { order_id: "aa", status: "empty" } });
 
-    const out = await reconcile({ ...deps(s, r), connectionFactory: undefined });
+    const out = await reconcile({
+      ...deps(s, r),
+      connectionFactory: undefined,
+    });
 
     expect(out.ordersRephased).toBe(1);
     expect(s.getOrder("aa")!.phase).toBe("filled");

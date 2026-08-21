@@ -85,7 +85,7 @@ async function recoveryFixture() {
     ownerCommitment: owner,
     innerHash,
   });
-  const instruction = buildDepositInstruction({
+  const instruction = await buildDepositInstruction({
     programId: recoveryProgramId,
     treeId: 0,
     depositor: recoveryPayer,

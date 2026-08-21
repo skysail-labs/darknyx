@@ -255,10 +255,12 @@ maybeDescribe(
         ).then(() => undefined),
       );
 
-      const anchors = await timer.step("fetch both finalized Pyth push anchors", () =>
-        Promise.all(
-          cfg.markets.map((market) => fetchAnchor(market.oracleFeedId)),
-        ),
+      const anchors = await timer.step(
+        "fetch both finalized Pyth push anchors",
+        () =>
+          Promise.all(
+            cfg.markets.map((market) => fetchAnchor(market.oracleFeedId)),
+          ),
       );
       const quantities = [
         BigInt((Date.now() % 150_000) + 10_000),
@@ -646,7 +648,7 @@ maybeDescribe(
         const signature = await sendAndConfirmTransaction(
           connection,
           new Transaction().add(
-            buildUpdateMarketConfigInstruction({
+            await buildUpdateMarketConfigInstruction({
               programId,
               admin: admin.publicKey,
               baseMint: secondBase,

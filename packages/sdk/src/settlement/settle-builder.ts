@@ -315,9 +315,9 @@ export interface BuildSettleBatchedIxParams {
  *
  * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */
-export function buildSettleBatchedIx(
+export async function buildSettleBatchedIx(
   p: BuildSettleBatchedIxParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (!Number.isInteger(p.treeId) || p.treeId < 0 || p.treeId > 255) {
     // treeId is a u8 shard id (PDA seed byte + first ix-data byte). A negative
     // or non-integer value would silently mask to a bogus shard via `& 0xff`.
@@ -346,18 +346,18 @@ export function buildSettleBatchedIx(
     throw new Error("buildSettleBatchedIx: merkleRoot must be 32 bytes");
   }
 
-  const [vaultConfig] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [lockA] = noteLockPda(p.programId, p.payload.noteAuseTag);
-  const [lockB] = noteLockPda(p.programId, p.payload.noteBuseTag);
-  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAuseTag);
-  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBuseTag);
+  const [vaultConfig] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
+  const [lockA] = await noteLockPda(p.programId, p.payload.noteAuseTag);
+  const [lockB] = await noteLockPda(p.programId, p.payload.noteBuseTag);
+  const [consumedA] = await consumedNotePda(p.programId, p.payload.noteAuseTag);
+  const [consumedB] = await consumedNotePda(p.programId, p.payload.noteBuseTag);
   // The relock locks are seeded on the TAGS, not the change commitments the
   // adjacent fields carry. An exact fill leaves both zero, and the encoder
   // dedups the two identical PDAs into one account slot (CLAUDE.md §6).
-  const [lockE] = noteLockPda(p.programId, p.payload.noteEuseTag);
-  const [lockF] = noteLockPda(p.programId, p.payload.noteFuseTag);
-  const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+  const [lockE] = await noteLockPda(p.programId, p.payload.noteEuseTag);
+  const [lockF] = await noteLockPda(p.programId, p.payload.noteFuseTag);
+  const [batchMarker] = await batchValidityMarkerPda(p.programId, p.merkleRoot);
   const buyerRelock = p.payload.buyerRelockOrderId.some((x) => x !== 0);
   const sellerRelock = p.payload.sellerRelockOrderId.some((x) => x !== 0);
 
@@ -426,15 +426,15 @@ export interface BuildCloseBatchValidityMarkerIxParams {
  *   0  authority   (signer, mut — refund recipient; must equal marker.payer)
  *   1  marker      (mut, close = authority)
  */
-export function buildCloseBatchValidityMarkerIx(
+export async function buildCloseBatchValidityMarkerIx(
   p: BuildCloseBatchValidityMarkerIxParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (p.merkleRoot.length !== 32) {
     throw new Error(
       "buildCloseBatchValidityMarkerIx: merkleRoot must be 32 bytes",
     );
   }
-  const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+  const [marker] = await batchValidityMarkerPda(p.programId, p.merkleRoot);
 
   // Anchor ix data: 8-byte discriminator + 32-byte merkle_root arg.
   const data = cat(

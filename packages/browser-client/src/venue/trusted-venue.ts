@@ -151,7 +151,7 @@ export async function bootstrapTrustedVenue(
   // finalized-governance and attestation check below succeeds.
   await broker.establish(options.signal);
   const programId = new PublicKey(release.vaultProgramId);
-  const [vaultConfig] = vaultConfigPda(programId);
+  const [vaultConfig] = await vaultConfigPda(programId);
   const governance = await finalizedAccount(
     release.rpcUrl,
     vaultConfig,
@@ -179,56 +179,58 @@ export async function bootstrapTrustedVenue(
     options.signal,
   );
   const seen = new Set<string>();
-  const parsed = wireInstruments.map((wire) => {
-    if (
-      typeof wire.symbol !== "string" ||
-      !/^[A-Z0-9]{2,16}-[A-Z0-9]{2,16}$/.test(wire.symbol) ||
-      typeof wire.base_mint !== "string" ||
-      typeof wire.quote_mint !== "string" ||
-      typeof wire.tick_size !== "string" ||
-      typeof wire.min_order_size !== "string" ||
-      typeof wire.trading_enabled !== "boolean" ||
-      (wire.oracle?.type !== "pyth_pull_v2" &&
-        wire.oracle?.type !== "pyth_push_v2") ||
-      typeof wire.oracle.pubkey !== "string" ||
-      !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey) ||
-      (wire.oracle.source !== "pyth-router-quorum-v1" &&
-        wire.oracle.source !== "pyth-solana-push-v1")
-    ) {
-      throw new Error("venue returned a malformed instrument");
-    }
-    if (wire.oracle.source !== release.expectedOracleMode) {
-      throw new Error(
-        "venue oracle source does not match the client release pin",
-      );
-    }
-    const expectedOracleType =
-      wire.oracle.source === "pyth-solana-push-v1"
-        ? "pyth_push_v2"
-        : "pyth_pull_v2";
-    if (wire.oracle.type !== expectedOracleType) {
-      throw new Error("venue oracle adapter type contradicts its source");
-    }
-    if (seen.has(wire.symbol))
-      throw new Error(`duplicate instrument ${wire.symbol}`);
-    seen.add(wire.symbol);
-    const base = new PublicKey(wire.base_mint);
-    const quote = new PublicKey(wire.quote_mint);
-    const [marketAddress] = marketConfigPda(programId, base, quote);
-    return {
-      wire: {
-        symbol: wire.symbol,
-        tickSize: wire.tick_size,
-        minOrderSize: wire.min_order_size,
-        tradingEnabled: wire.trading_enabled,
-        oracleFeed: wire.oracle.pubkey,
-        oracleSource: wire.oracle.source,
-      } satisfies ValidatedWireInstrument,
-      base,
-      quote,
-      marketAddress,
-    };
-  });
+  const parsed = await Promise.all(
+    wireInstruments.map(async (wire) => {
+      if (
+        typeof wire.symbol !== "string" ||
+        !/^[A-Z0-9]{2,16}-[A-Z0-9]{2,16}$/.test(wire.symbol) ||
+        typeof wire.base_mint !== "string" ||
+        typeof wire.quote_mint !== "string" ||
+        typeof wire.tick_size !== "string" ||
+        typeof wire.min_order_size !== "string" ||
+        typeof wire.trading_enabled !== "boolean" ||
+        (wire.oracle?.type !== "pyth_pull_v2" &&
+          wire.oracle?.type !== "pyth_push_v2") ||
+        typeof wire.oracle.pubkey !== "string" ||
+        !/^[0-9a-f]{64}$/.test(wire.oracle.pubkey) ||
+        (wire.oracle.source !== "pyth-router-quorum-v1" &&
+          wire.oracle.source !== "pyth-solana-push-v1")
+      ) {
+        throw new Error("venue returned a malformed instrument");
+      }
+      if (wire.oracle.source !== release.expectedOracleMode) {
+        throw new Error(
+          "venue oracle source does not match the client release pin",
+        );
+      }
+      const expectedOracleType =
+        wire.oracle.source === "pyth-solana-push-v1"
+          ? "pyth_push_v2"
+          : "pyth_pull_v2";
+      if (wire.oracle.type !== expectedOracleType) {
+        throw new Error("venue oracle adapter type contradicts its source");
+      }
+      if (seen.has(wire.symbol))
+        throw new Error(`duplicate instrument ${wire.symbol}`);
+      seen.add(wire.symbol);
+      const base = new PublicKey(wire.base_mint);
+      const quote = new PublicKey(wire.quote_mint);
+      const [marketAddress] = await marketConfigPda(programId, base, quote);
+      return {
+        wire: {
+          symbol: wire.symbol,
+          tickSize: wire.tick_size,
+          minOrderSize: wire.min_order_size,
+          tradingEnabled: wire.trading_enabled,
+          oracleFeed: wire.oracle.pubkey,
+          oracleSource: wire.oracle.source,
+        } satisfies ValidatedWireInstrument,
+        base,
+        quote,
+        marketAddress,
+      };
+    }),
+  );
   const accounts = await Promise.all(
     parsed.map(({ marketAddress }) =>
       finalizedAccount(

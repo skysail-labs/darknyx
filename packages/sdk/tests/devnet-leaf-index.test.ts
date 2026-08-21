@@ -59,7 +59,8 @@ const DEPOSIT_ZKEY = resolve(
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -81,7 +82,7 @@ async function onChainLeafCount(
   conn: Connection,
   treeId: number,
 ): Promise<bigint> {
-  const [treePda] = merkleTreePda(VAULT_ID, treeId);
+  const [treePda] = await merkleTreePda(VAULT_ID, treeId);
   const info = await conn.getAccountInfo(treePda, "confirmed");
   if (!info) throw new Error(`merkle_tree shard ${treeId} not found`);
   return new DataView(
@@ -111,7 +112,7 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({
+        await buildResetMerkleTreeInstruction({
           programId: VAULT_ID,
           admin: admin.publicKey,
           treeId: 0,

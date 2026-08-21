@@ -45,7 +45,8 @@ vi.mock("../src/tee/transport-agent.node.js", async (importOriginal) => {
   };
 });
 
-const { createVerifiedTransport } = await import("../src/tee/transport.node.js");
+const { createVerifiedTransport } =
+  await import("../src/tee/transport.node.js");
 
 const SPKI_PREIMAGE = new Uint8Array(32).fill(0x22);
 const spkiHash = new Uint8Array(

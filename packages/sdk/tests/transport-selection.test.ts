@@ -51,8 +51,14 @@ describe("cvm transport selection", () => {
     // missing-pin error this test exists to prove did NOT happen. Assert the
     // discriminating negative instead: whatever failed, it was not the
     // verified-transport construction path.
-    const err = await gwFetch("https://example.invalid/health", undefined, 1)
-      .then(() => null, (e: unknown) => e as Error);
+    const err = await gwFetch(
+      "https://example.invalid/health",
+      undefined,
+      1,
+    ).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
     expect(err, "the call unexpectedly succeeded").not.toBeNull();
     expect(
       (err as Error).message,
@@ -90,8 +96,6 @@ describe("cvm transport selection", () => {
 });
 
 describe("the NODE_TLS_REJECT_UNAUTHORIZED shortcut is not how this suite passes", () => {
-
-
   it("is not set by the suite itself", () => {
     // If this ever becomes set, a "passing" cvm run proves nothing about the
     // certificate the enclave served.

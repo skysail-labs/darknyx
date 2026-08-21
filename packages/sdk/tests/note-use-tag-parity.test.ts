@@ -51,7 +51,9 @@ describe("note-use tag", () => {
       encoding: "utf8",
     });
     expect(rust.status, rust.stderr).toBe(0);
-    expect(rust.stdout.trim()).toBe(hex(await deriveNoteUseTag(commitment, inner)));
+    expect(rust.stdout.trim()).toBe(
+      hex(await deriveNoteUseTag(commitment, inner)),
+    );
   });
 
   /**
@@ -90,12 +92,18 @@ describe("note-use tag", () => {
 
     // Amount — the substitution attack: same inner, larger claimed value.
     expect(
-      await deriveNoteUseTag(await commit(mint, 10_000n, owner, inner), innerBytes),
+      await deriveNoteUseTag(
+        await commit(mint, 10_000n, owner, inner),
+        innerBytes,
+      ),
     ).not.toEqual(base);
 
     // Owner — otherwise one user could spend against another's lock.
     expect(
-      await deriveNoteUseTag(await commit(mint, amount, 0x23n, inner), innerBytes),
+      await deriveNoteUseTag(
+        await commit(mint, amount, 0x23n, inner),
+        innerBytes,
+      ),
     ).not.toEqual(base);
 
     // Mint — otherwise a quote note could be consumed as a base note.

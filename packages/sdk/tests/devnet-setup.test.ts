@@ -389,7 +389,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // would state the default and then silently act on a different number.
       step(2, "Initialise vault_config + Merkle-tree shards (idempotent)");
       // ────────────────────────────────────────────────────────────────────
-      const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
+      const [vaultPda] = await vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
       const alreadyInit = await tryReadVaultConfig(
         connection,
@@ -415,7 +415,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           return raw;
         })();
         const initTx = new Transaction().add(
-          buildInitializeInstruction({
+          await buildInitializeInstruction({
             programId: VAULT_PROGRAM_ID,
             initializer: admin.publicKey,
             operationsAdmin: admin.publicKey,
@@ -440,7 +440,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // before the CVM can settle to any non-zero shard.
       const merkleTreePdas: PublicKey[] = [];
       for (let treeId = 0; treeId < NUM_TREES; treeId++) {
-        const [treePda] = merkleTreePda(VAULT_PROGRAM_ID, treeId);
+        const [treePda] = await merkleTreePda(VAULT_PROGRAM_ID, treeId);
         merkleTreePdas.push(treePda);
         const exists = await connection.getAccountInfo(treePda);
         if (exists) {
@@ -448,7 +448,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           continue;
         }
         const treeTx = new Transaction().add(
-          buildInitializeTreeInstruction({
+          await buildInitializeTreeInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             treeId,
@@ -487,7 +487,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // Idempotent + admin-gated. See programs/vault/src/instructions/reset_merkle_tree.rs.
       for (let treeId = 0; treeId < NUM_TREES; treeId++) {
         const resetTx = new Transaction().add(
-          buildResetMerkleTreeInstruction({
+          await buildResetMerkleTreeInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             treeId,
@@ -518,7 +518,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const ON_CHAIN_TICK_SIZE = 5n;
       const ON_CHAIN_MIN_ORDER_SIZE = 1_000n;
       const ON_CHAIN_CIRCUIT_BREAKER_BPS = 5_000n;
-      const [marketPda] = marketConfigPda(
+      const [marketPda] = await marketConfigPda(
         VAULT_PROGRAM_ID,
         baseMint.publicKey,
         quoteMint.publicKey,
@@ -526,7 +526,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const marketExists = await connection.getAccountInfo(marketPda);
       if (!marketExists) {
         const marketTx = new Transaction().add(
-          buildInitializeMarketInstruction({
+          await buildInitializeMarketInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             baseMint: baseMint.publicKey,
@@ -546,7 +546,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         tx("initialize_market(base/quote)", marketSig);
       }
       const spcTx = new Transaction().add(
-        buildSetProtocolConfigInstruction({
+        await buildSetProtocolConfigInstruction({
           programId: VAULT_PROGRAM_ID,
           admin: admin.publicKey,
           protocolOwnerCommitment,

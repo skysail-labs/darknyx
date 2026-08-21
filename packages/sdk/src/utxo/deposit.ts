@@ -21,7 +21,9 @@ import type { TransactionCallbacks } from "../providers.js";
 import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
-import { bn254ToBE32, deriveBlindingFactor,
+import {
+  bn254ToBE32,
+  deriveBlindingFactor,
   deriveNoteSecret,
 } from "../keys/key-generators.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
@@ -112,7 +114,7 @@ export function getDepositFunction({
     // its MerkleTree account). We no longer read leaf_count to PREDICT the
     // index — the actual index is read back from the NoteCreated event after
     // confirm, which is immune to concurrent appends.
-    const [treePda] = merkleTreePda(client.programId, treeId);
+    const [treePda] = await merkleTreePda(client.programId, treeId);
     const info =
       await client.providers.accountInfoProvider.getAccountInfo(treePda);
     if (!info) {
@@ -124,10 +126,7 @@ export function getDepositFunction({
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    const recoveryNonce = deriveBlindingFactor(
-      masterSeed,
-      params.depositIndex,
-    );
+    const recoveryNonce = deriveBlindingFactor(masterSeed, params.depositIndex);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
     const ownerBytes = bn254ToBE32(owner);
     const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
@@ -181,7 +180,7 @@ export function getDepositFunction({
     // --- Stage: instruction-build ---
     await params.callbacks?.pre?.("instruction-build");
     const tokenMintPk = new PublicKey(params.tokenMint);
-    const ix = buildDepositInstruction({
+    const ix = await buildDepositInstruction({
       programId: client.programId,
       treeId,
       depositor: params.depositor,

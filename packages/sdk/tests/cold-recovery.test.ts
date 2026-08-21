@@ -117,10 +117,7 @@ function tradeSettledLog(matchId: Uint8Array): string {
   );
 }
 
-function noteMergedLog(
-  commitment: Uint8Array,
-  mint: Uint8Array,
-): string {
+function noteMergedLog(commitment: Uint8Array, mint: Uint8Array): string {
   return event(
     "NoteMerged",
     new Uint8Array([0]),
@@ -175,32 +172,34 @@ describe("recoverNotesFromChain", () => {
       ownerCommitment: owner,
       innerHash: baseInner,
     });
-    const depositTx = (
+    const depositTx = async (
       mint: Uint8Array,
       amount: bigint,
       recoveryNonce: bigint,
       commitment: Uint8Array,
       leaf: bigint,
-    ): RawSettleTx => ({
+    ): Promise<RawSettleTx> => ({
       signature: `deposit-${leaf}`,
       slot: Number(leaf + 1n),
       ixDatas: [
-        buildDepositInstruction({
-          programId: PROGRAM_ID,
-          treeId: 0,
-          depositor: PAYER,
-          tokenMint: new PublicKey(mint),
-          depositorTokenAccount: PAYER,
-          tokenProgramId: PROGRAM_ID,
-          amount,
-          noteCommitment: commitment,
-          recoveryNonce: bn254ToBE32(recoveryNonce),
-          proof: {
-            piA: bytes(64, 1),
-            piB: bytes(128, 2),
-            piC: bytes(64, 3),
-          },
-        }).data,
+        (
+          await buildDepositInstruction({
+            programId: PROGRAM_ID,
+            treeId: 0,
+            depositor: PAYER,
+            tokenMint: new PublicKey(mint),
+            depositorTokenAccount: PAYER,
+            tokenProgramId: PROGRAM_ID,
+            amount,
+            noteCommitment: commitment,
+            recoveryNonce: bn254ToBE32(recoveryNonce),
+            proof: {
+              piA: bytes(64, 1),
+              piB: bytes(128, 2),
+              piC: bytes(64, 3),
+            },
+          })
+        ).data,
       ],
       logMessages: vaultLogs(
         noteCreatedLog({ treeId: 0, leaf, commitment, mint, amount }),
@@ -295,21 +294,23 @@ describe("recoverNotesFromChain", () => {
       signature: "merge",
       slot: 4,
       ixDatas: [
-        buildMergeInstruction({
-          programId: PROGRAM_ID,
-          treeId: 0,
-          payer: PAYER,
-          inputUseTags: mergeInputTags,
-          outputCommitment: merged,
-          tokenMint: new PublicKey(BASE_MINT),
-          merkleRoot: bytes(32, 0),
-          k: 2,
-          proof: {
-            piA: bytes(64, 1),
-            piB: bytes(128, 2),
-            piC: bytes(64, 3),
-          },
-        }).data,
+        (
+          await buildMergeInstruction({
+            programId: PROGRAM_ID,
+            treeId: 0,
+            payer: PAYER,
+            inputUseTags: mergeInputTags,
+            outputCommitment: merged,
+            tokenMint: new PublicKey(BASE_MINT),
+            merkleRoot: bytes(32, 0),
+            k: 2,
+            proof: {
+              piA: bytes(64, 1),
+              piB: bytes(128, 2),
+              piC: bytes(64, 3),
+            },
+          })
+        ).data,
       ],
       logMessages: vaultLogs(noteMergedLog(merged, BASE_MINT)),
     };
@@ -319,8 +320,8 @@ describe("recoverNotesFromChain", () => {
     const scan = async (): Promise<RawSettleTx[]> => [
       mergeTx,
       settleTx,
-      depositTx(BASE_MINT, 300n, baseNonce, baseDeposit, 1n),
-      depositTx(QUOTE_MINT, 2_000n, quoteNonce, quoteDeposit, 0n),
+      await depositTx(BASE_MINT, 300n, baseNonce, baseDeposit, 1n),
+      await depositTx(QUOTE_MINT, 2_000n, quoteNonce, quoteDeposit, 0n),
     ];
     const result = await recoverNotesFromChain({
       connection: undefined as unknown as Connection,
@@ -339,7 +340,9 @@ describe("recoverNotesFromChain", () => {
     });
     expect(result.unresolvedSettlements).toBe(0);
     expect(result.unresolvedMerges).toBe(0);
-    const byCommitment = new Map(result.notes.map((note) => [note.commitment, note]));
+    const byCommitment = new Map(
+      result.notes.map((note) => [note.commitment, note]),
+    );
     expect(byCommitment.get(hex(trade))?.amount).toBe(400n);
     expect(byCommitment.get(hex(trade))?.leafIndex).toBe(10n);
     expect(byCommitment.get(hex(change))?.leafIndex).toBe(12n);

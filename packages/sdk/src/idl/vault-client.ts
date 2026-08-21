@@ -96,28 +96,30 @@ function serializeProof(p: Groth16OnChainProof): Uint8Array {
 // PDA derivations (must match `state.rs` SEED constants)
 // ============================================================================
 
-export function vaultConfigPda(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([VAULT_CONFIG_SEED], programId);
+export async function vaultConfigPda(
+  programId: PublicKey,
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress([VAULT_CONFIG_SEED], programId);
 }
 
 /** One market per ordered base/quote mint pair. */
-export function marketConfigPda(
+export async function marketConfigPda(
   programId: PublicKey,
   baseMint: PublicKey,
   quoteMint: PublicKey,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [MARKET_CONFIG_SEED, baseMint.toBytes(), quoteMint.toBytes()],
     programId,
   );
 }
 
 /** Per-shard `MerkleTree` PDA. Seed `[b"merkle_tree", &[treeId]]`. */
-export function merkleTreePda(
+export async function merkleTreePda(
   programId: PublicKey,
   treeId: number,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [MERKLE_TREE_SEED, new Uint8Array([treeId & 0xff])],
     programId,
   );
@@ -129,18 +131,18 @@ export function merkleTreePda(
  * `[vault_config, instructions_sysvar, system_program, merkle_tree(0..K-1)]`.
  * Used by `devnet-setup` to build the ALT the CVM settle worker references.
  */
-export function staticSettleAltAddresses(
+export async function staticSettleAltAddresses(
   programId: PublicKey,
   numTrees: number,
-): PublicKey[] {
-  const [vaultConfig] = vaultConfigPda(programId);
+): Promise<PublicKey[]> {
+  const [vaultConfig] = await vaultConfigPda(programId);
   const out = [
     vaultConfig,
     SYSVAR_INSTRUCTIONS_PUBKEY,
     SystemProgram.programId,
   ];
   for (let treeId = 0; treeId < Math.max(1, numTrees); treeId++) {
-    out.push(merkleTreePda(programId, treeId)[0]);
+    out.push((await merkleTreePda(programId, treeId))[0]);
   }
   return out;
 }
@@ -159,12 +161,12 @@ export function staticSettleAltAddresses(
  * as `ConstraintSeeds (2006)` or `AccountNotFound` — CI does not catch it
  * (CLAUDE.md §8.3).
  */
-export function walletEntryPda(
+export async function walletEntryPda(
   programId: PublicKey,
   commitment: Uint8Array,
   owner: PublicKey,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [WALLET_SEED, fixed32(commitment), owner.toBytes()],
     programId,
   );
@@ -177,11 +179,11 @@ export function walletEntryPda(
  * instruction will ever write, so the failure surfaces on-chain as
  * `AccountNotFound`. See `utxo/note-use.ts`.
  */
-export function noteLockPda(
+export async function noteLockPda(
   programId: PublicKey,
   noteUseTag: Uint8Array,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [NOTE_LOCK_SEED, fixed32(noteUseTag)],
     programId,
   );
@@ -192,43 +194,43 @@ export function noteLockPda(
  * It guards leaf CREATION, and the leaf is the commitment; a deposit has no
  * tag to key on because the depositor's inner hash is private at that point.
  */
-export function depositedNotePda(
+export async function depositedNotePda(
   programId: PublicKey,
   noteCommitment: Uint8Array,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [DEPOSITED_NOTE_SEED, fixed32(noteCommitment)],
     programId,
   );
 }
 
 /** Consume-once guard, shared by withdraw / settle / merge — tag-keyed. */
-export function consumedNotePda(
+export async function consumedNotePda(
   programId: PublicKey,
   noteUseTag: Uint8Array,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
     [CONSUMED_NOTE_SEED, fixed32(noteUseTag)],
     programId,
   );
 }
 
-export function vaultTokenAccountPda(
+export async function vaultTokenAccountPda(
   programId: PublicKey,
   mint: PublicKey,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [VAULT_TOKEN_SEED, mint.toBuffer()],
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [VAULT_TOKEN_SEED, mint.toBytes()],
     programId,
   );
 }
 
-export function outstandingMintPda(
+export async function outstandingMintPda(
   programId: PublicKey,
   mint: PublicKey,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [OUTSTANDING_MINT_SEED, mint.toBuffer()],
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [OUTSTANDING_MINT_SEED, mint.toBytes()],
     programId,
   );
 }
@@ -244,12 +246,12 @@ export function outstandingMintPda(
  * the verify_match_batch proof's first public input. Created by
  * `verify_match_batch` and consumed by `tee_forced_settle_batched`.
  */
-export function batchValidityMarkerPda(
+export async function batchValidityMarkerPda(
   programId: PublicKey,
   merkleRoot: Uint8Array,
-): [PublicKey, number] {
+): Promise<[PublicKey, number]> {
   if (merkleRoot.length !== 32) throw new Error("merkleRoot must be 32 bytes");
-  return PublicKey.findProgramAddressSync(
+  return PublicKey.findProgramAddress(
     [BATCH_VALIDITY_MARKER_SEED, merkleRoot],
     programId,
   );
@@ -275,9 +277,9 @@ export interface BuildInitializeParams {
   programData?: PublicKey;
 }
 
-export function buildInitializeInstruction(
+export async function buildInitializeInstruction(
   p: BuildInitializeParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (p.numTrees < 1 || p.numTrees > 16) {
     throw new Error(`numTrees must be in 1..=16, got ${p.numTrees}`);
   }
@@ -314,7 +316,7 @@ export function buildInitializeInstruction(
       "teePubkeys must be non-default, unique, and distinct from governance keys",
     );
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
+  const [vaultPda] = await vaultConfigPda(p.programId);
   const lenLE = new Uint8Array(4);
   new DataView(lenLE.buffer).setUint32(0, p.teePubkeys.length, true);
   const data = cat(
@@ -375,15 +377,19 @@ function validateMarketParams(p: {
   }
 }
 
-export function buildInitializeMarketInstruction(
+export async function buildInitializeMarketInstruction(
   p: BuildInitializeMarketParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   validateMarketParams(p);
   if (p.baseMint.equals(p.quoteMint)) {
     throw new Error("baseMint and quoteMint must be distinct");
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [marketPda] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [marketPda] = await marketConfigPda(
+    p.programId,
+    p.baseMint,
+    p.quoteMint,
+  );
   const data = cat(
     anchorDiscriminator("initialize_market"),
     u64LE(p.priceScale),
@@ -417,12 +423,16 @@ export interface BuildUpdateMarketConfigParams {
   circuitBreakerBps: bigint;
 }
 
-export function buildUpdateMarketConfigInstruction(
+export async function buildUpdateMarketConfigInstruction(
   p: BuildUpdateMarketConfigParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   validateMarketParams(p);
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [marketPda] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [marketPda] = await marketConfigPda(
+    p.programId,
+    p.baseMint,
+    p.quoteMint,
+  );
   const data = cat(
     anchorDiscriminator("update_market_config"),
     new Uint8Array([p.enabled ? 1 : 0]),
@@ -456,11 +466,11 @@ export interface BuildInitializeTreeParams {
  *   data = disc(8) || tree_id(1)
  *   accounts: [admin(signer,mut), vault_config(ro), merkle_tree(init,mut), system(ro)]
  */
-export function buildInitializeTreeInstruction(
+export async function buildInitializeTreeInstruction(
   p: BuildInitializeTreeParams,
-): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
+): Promise<TransactionInstruction> {
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
   const data = cat(
     anchorDiscriminator("initialize_tree"),
     new Uint8Array([p.treeId & 0xff]),
@@ -490,13 +500,13 @@ function u16LE(v: number): Uint8Array {
   return out;
 }
 
-export function buildSetProtocolConfigInstruction(
+export async function buildSetProtocolConfigInstruction(
   p: BuildSetProtocolConfigParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (p.feeRateBps < 0 || p.feeRateBps > 10_000) {
     throw new Error(`feeRateBps out of range: ${p.feeRateBps}`);
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
+  const [vaultPda] = await vaultConfigPda(p.programId);
   // Arg order MUST match the on-chain handler.
   const data = cat(
     anchorDiscriminator("set_protocol_config"),
@@ -529,9 +539,9 @@ export interface BuildSetTeePubkeyParams {
  *
  *   data = disc(8) || keys(Vec<Pubkey>: u32 LE len ++ len*32)
  */
-export function buildSetTeePubkeyInstruction(
+export async function buildSetTeePubkeyInstruction(
   p: BuildSetTeePubkeyParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (
     p.teePubkeys.length < 1 ||
     p.teePubkeys.length > 16 ||
@@ -548,7 +558,7 @@ export function buildSetTeePubkeyInstruction(
   ) {
     throw new Error("teePubkeys must be non-default and unique");
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
+  const [vaultPda] = await vaultConfigPda(p.programId);
   const lenLE = new Uint8Array(4);
   new DataView(lenLE.buffer).setUint32(0, p.teePubkeys.length, true);
   const data = cat(
@@ -579,11 +589,11 @@ export interface BuildResetMerkleTreeParams {
  *   data = disc(8) || tree_id(1)
  *   accounts: [admin(signer), vault_config(ro), merkle_tree(mut)]
  */
-export function buildResetMerkleTreeInstruction(
+export async function buildResetMerkleTreeInstruction(
   p: BuildResetMerkleTreeParams,
-): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
+): Promise<TransactionInstruction> {
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
   const data = cat(
     anchorDiscriminator("reset_merkle_tree"),
     new Uint8Array([p.treeId & 0xff]),
@@ -605,16 +615,16 @@ export interface BuildRotateRootKeyParams {
   newRootKey: PublicKey;
 }
 
-export function buildRotateRootKeyInstruction(
+export async function buildRotateRootKeyInstruction(
   p: BuildRotateRootKeyParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (
     p.newRootKey.equals(PublicKey.default) ||
     p.newRootKey.equals(p.currentRootKey)
   ) {
     throw new Error("newRootKey must be non-default and different");
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
+  const [vaultPda] = await vaultConfigPda(p.programId);
   const data = cat(
     anchorDiscriminator("rotate_root_key"),
     p.newRootKey.toBytes(),
@@ -636,10 +646,10 @@ export interface BuildCreateWalletParams {
   proof: Groth16OnChainProof;
 }
 
-export function buildCreateWalletInstruction(
+export async function buildCreateWalletInstruction(
   p: BuildCreateWalletParams,
-): TransactionInstruction {
-  const [walletPda] = walletEntryPda(p.programId, p.commitment, p.owner);
+): Promise<TransactionInstruction> {
+  const [walletPda] = await walletEntryPda(p.programId, p.commitment, p.owner);
   const data = cat(
     anchorDiscriminator("create_wallet"),
     fixed32(p.commitment),
@@ -674,14 +684,14 @@ export interface BuildDepositParams {
   proof: Groth16OnChainProof;
 }
 
-export function buildDepositInstruction(
+export async function buildDepositInstruction(
   p: BuildDepositParams,
-): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
-  const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
-  const [depositedNote] = depositedNotePda(p.programId, p.noteCommitment);
+): Promise<TransactionInstruction> {
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
+  const [vaultTokenAcct] = await vaultTokenAccountPda(p.programId, p.tokenMint);
+  const [outstandingMint] = await outstandingMintPda(p.programId, p.tokenMint);
+  const [depositedNote] = await depositedNotePda(p.programId, p.noteCommitment);
 
   const data = cat(
     anchorDiscriminator("deposit"),
@@ -847,10 +857,10 @@ export interface BuildReleaseLockParams {
  *     [0] rent_receiver (signer, mut — receives the reclaimed rent)
  *     [1] note_lock     (mut, closed)
  */
-export function buildReleaseLockInstruction(
+export async function buildReleaseLockInstruction(
   p: BuildReleaseLockParams,
-): TransactionInstruction {
-  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
+): Promise<TransactionInstruction> {
+  const [noteLock] = await noteLockPda(p.programId, p.noteUseTag);
   const data = cat(anchorDiscriminator("release_lock"), fixed32(p.noteUseTag));
   return new TransactionInstruction({
     programId: p.programId,
@@ -877,13 +887,13 @@ export function buildReleaseLockInstruction(
  *     [4] consumed_note   (ro — U-02 must-be-absent consume-once guard)
  *     [5] system_program  (ro)
  */
-export function buildLockNoteInstruction(
+export async function buildLockNoteInstruction(
   p: BuildLockNoteParams,
-): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
-  const [consumedNote] = consumedNotePda(p.programId, p.noteUseTag);
+): Promise<TransactionInstruction> {
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
+  const [noteLock] = await noteLockPda(p.programId, p.noteUseTag);
+  const [consumedNote] = await consumedNotePda(p.programId, p.noteUseTag);
   if (p.orderId.length !== 16) {
     throw new Error(`orderId must be 16 bytes, got ${p.orderId.length}`);
   }
@@ -911,15 +921,15 @@ export function buildLockNoteInstruction(
   });
 }
 
-export function buildWithdrawInstruction(
+export async function buildWithdrawInstruction(
   p: BuildWithdrawParams,
-): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
-  const [consumedNote] = consumedNotePda(p.programId, p.noteUseTag);
-  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
-  const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
+): Promise<TransactionInstruction> {
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
+  const [vaultTokenAcct] = await vaultTokenAccountPda(p.programId, p.tokenMint);
+  const [consumedNote] = await consumedNotePda(p.programId, p.noteUseTag);
+  const [noteLock] = await noteLockPda(p.programId, p.noteUseTag);
+  const [outstandingMint] = await outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
     anchorDiscriminator("withdraw"),
@@ -977,15 +987,19 @@ export interface BuildVerifyMatchBatchParams {
   proof: Groth16OnChainProof;
 }
 
-export function buildVerifyMatchBatchInstruction(
+export async function buildVerifyMatchBatchInstruction(
   p: BuildVerifyMatchBatchParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if (p.merkleRoot.length !== 32) {
     throw new Error("merkleRoot must be 32 bytes");
   }
-  const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
-  const [vaultConfig] = vaultConfigPda(p.programId);
-  const [marketConfig] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
+  const [marker] = await batchValidityMarkerPda(p.programId, p.merkleRoot);
+  const [vaultConfig] = await vaultConfigPda(p.programId);
+  const [marketConfig] = await marketConfigPda(
+    p.programId,
+    p.baseMint,
+    p.quoteMint,
+  );
 
   // S-04: no expiry_slot argument. It used to be caller-supplied and bounded
   // only to (slot, slot + 300], which — with an unauthenticated payer and an
@@ -1054,23 +1068,25 @@ export interface BuildMergeParams {
  *     [4..4+A)   one ConsumedNoteEntry PDA per active input (mut), in order
  *     [4+A..4+2A) the corresponding NoteLock PDAs (ro, must be absent)
  */
-export function buildMergeInstruction(
+export async function buildMergeInstruction(
   p: BuildMergeParams,
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   if ((p.k !== 2 && p.k !== 4) || p.inputUseTags.length !== p.k) {
     throw new Error("merge k must be 2 or 4 and match the tag slot count");
   }
-  const [vaultPda] = vaultConfigPda(p.programId);
-  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
+  const [vaultPda] = await vaultConfigPda(p.programId);
+  const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
   const activeTags = p.inputUseTags.filter((t) => !isZero(t));
   if (activeTags.length === 0) {
     throw new Error("merge must contain at least one active input");
   }
-  const consumedPdas = activeTags.map(
-    (t) => consumedNotePda(p.programId, t)[0],
+  const consumedPdas = await Promise.all(
+    activeTags.map(async (t) => (await consumedNotePda(p.programId, t))[0]),
   );
-  const noteLockPdas = activeTags.map((t) => noteLockPda(p.programId, t)[0]);
+  const noteLockPdas = await Promise.all(
+    activeTags.map(async (t) => (await noteLockPda(p.programId, t))[0]),
+  );
 
   const lenLE = new Uint8Array(4);
   new DataView(lenLE.buffer).setUint32(0, p.inputUseTags.length, true);

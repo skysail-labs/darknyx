@@ -24,12 +24,16 @@ const normalizeFeedId = (feedId: string): Buffer => {
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
 
-export function derivePythCorePushAccount(feedId: string): PublicKey {
+export async function derivePythCorePushAccount(
+  feedId: string,
+): Promise<PublicKey> {
   const shard = Buffer.alloc(2);
   shard.writeUInt16LE(PYTH_PUSH_SHARD_ID);
-  return PublicKey.findProgramAddressSync(
-    [shard, normalizeFeedId(feedId)],
-    PYTH_CORE_PUSH_ORACLE_PROGRAM_ID,
+  return (
+    await PublicKey.findProgramAddress(
+      [shard, normalizeFeedId(feedId)],
+      PYTH_CORE_PUSH_ORACLE_PROGRAM_ID,
+    )
   )[0];
 }
 
@@ -46,16 +50,16 @@ export interface PythCorePushPrice {
   contextSlot: number;
 }
 
-export function decodePythCorePushAccount(args: {
+export async function decodePythCorePushAccount(args: {
   data: Uint8Array;
   owner: PublicKey;
   account: PublicKey;
   feedId: string;
   contextSlot: number;
-}): PythCorePushPrice {
+}): Promise<PythCorePushPrice> {
   const data = Buffer.from(args.data);
   const expectedFeed = normalizeFeedId(args.feedId);
-  const expectedAccount = derivePythCorePushAccount(args.feedId);
+  const expectedAccount = await derivePythCorePushAccount(args.feedId);
   if (!args.account.equals(expectedAccount)) {
     throw new Error("Pyth push account is not the feed-derived PDA");
   }
@@ -116,7 +120,7 @@ export async function fetchPythCorePushPrice(
   connection: Connection,
   feedId: string,
 ): Promise<PythCorePushPrice> {
-  const account = derivePythCorePushAccount(feedId);
+  const account = await derivePythCorePushAccount(feedId);
   const response = await connection.getAccountInfoAndContext(account, {
     commitment: "finalized",
   });
