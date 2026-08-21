@@ -25,13 +25,6 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAccount,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
 
 import {
   deriveSpendingKey,
@@ -54,7 +47,16 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToDec, be32ToBigInt, StepTimer } from "./helpers/e2e-helpers.js";
+import {
+  StepTimer,
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  be32ToBigInt,
+  be32ToDec,
+  createAtaIdempotentIx,
+  getTokenAccount,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
@@ -119,7 +121,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const conn = new Connection(rpcUrl, "confirmed");
     const admin = await loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     const A0 = 3_000_000n;
     const A1 = 2_000_000n;
@@ -199,13 +201,8 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           conn,
           new Transaction().add(
             ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-            createAssociatedTokenAccountIdempotentInstruction(
-              admin.publicKey,
-              ata,
-              admin.publicKey,
-              mint,
-            ),
-            createMintToInstruction(mint, ata, admin.publicKey, amount),
+            createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+            mintToIx(mint, ata, admin, amount),
             await buildDepositInstruction({
               programId: VAULT_ID,
               treeId: 0,
@@ -315,7 +312,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       ),
     );
 
-    const balBefore = (await getAccount(conn, ata)).amount;
+    const balBefore = (await getTokenAccount(conn, ata)).amount;
     const mergedUseTag = await deriveNoteUseTag(
       mergeRes.outputCommitmentBE,
       bn254ToBE32(mergeRes.outputInnerHash),
@@ -345,7 +342,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     );
 
     // The merged note was spendable for the FULL consolidated amount.
-    const balAfter = (await getAccount(conn, ata)).amount;
+    const balAfter = (await getTokenAccount(conn, ata)).amount;
     expect(balAfter - balBefore).toBe(SUM);
     console.log(`  · withdrew the merged note — ${SUM} tokens round-tripped`);
     t.report("devnet-merge: deposit×2 → MERGE(K=2) → withdraw");

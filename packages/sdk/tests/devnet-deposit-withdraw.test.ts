@@ -22,13 +22,6 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAccount,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
 
 import {
   deriveSpendingKey,
@@ -51,7 +44,15 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToBigInt, be32ToDec } from "./helpers/e2e-helpers.js";
+import {
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  be32ToBigInt,
+  be32ToDec,
+  createAtaIdempotentIx,
+  getTokenAccount,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
@@ -110,7 +111,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
 
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const AMOUNT = 7_000_000n; // 7 tokens @ 6 decimals
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     // Darkpool note keys (independent of the Solana payer). Seed is unique
     // per run so the note's nullifier/consumed-note PDAs don't collide with a
@@ -186,20 +187,15 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
     });
 
-    const balBefore = await getAccount(conn, ata)
+    const balBefore = await getTokenAccount(conn, ata)
       .then((a) => a.amount)
       .catch(() => 0n);
     const depositSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          ata,
-          admin.publicKey,
-          mint,
-        ),
-        createMintToInstruction(mint, ata, admin.publicKey, AMOUNT),
+        createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+        mintToIx(mint, ata, admin, AMOUNT),
         await buildDepositInstruction({
           programId: VAULT_ID,
           treeId: 0,
@@ -248,7 +244,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       },
     );
 
-    const balAfterDeposit = (await getAccount(conn, ata)).amount;
+    const balAfterDeposit = (await getTokenAccount(conn, ata)).amount;
     const withdrawSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
@@ -278,7 +274,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     console.log(`  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`);
 
     // ── 4. assert the tokens round-tripped back ──
-    const balFinal = (await getAccount(conn, ata)).amount;
+    const balFinal = (await getTokenAccount(conn, ata)).amount;
     expect(balFinal - balAfterDeposit).toBe(AMOUNT);
     void balBefore;
   }, 120_000);

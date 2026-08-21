@@ -23,11 +23,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -70,7 +65,13 @@ import {
   type Persona,
   withFee,
 } from "./helpers/cvm-harness.js";
-import { loadKeypairRel, StepTimer } from "./helpers/e2e-helpers.js";
+import {
+  StepTimer,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 
 interface MarketFixture {
   symbol: string;
@@ -158,17 +159,12 @@ async function mintCollateral(
   mint: PublicKey,
   amount: bigint,
 ): Promise<PublicKey> {
-  const ata = await getAssociatedTokenAddress(mint, persona.payer.publicKey);
+  const ata = await associatedTokenAddress(mint, persona.payer.publicKey);
   await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
-      createAssociatedTokenAccountIdempotentInstruction(
-        admin.publicKey,
-        ata,
-        persona.payer.publicKey,
-        mint,
-      ),
-      createMintToInstruction(mint, ata, admin.publicKey, amount),
+      createAtaIdempotentIx(admin, ata, persona.payer.publicKey, mint),
+      mintToIx(mint, ata, admin, amount),
     ),
     [admin],
     { commitment: "confirmed" },

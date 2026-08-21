@@ -29,11 +29,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   ComputeBudgetProgram,
   Connection,
   Keypair,
@@ -62,9 +57,12 @@ import {
 } from "../src/orders/canonical.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import {
-  be32ToBigInt,
-  loadKeypairRel,
   StepTimer,
+  associatedTokenAddress,
+  be32ToBigInt,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
 } from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
@@ -189,11 +187,11 @@ maybeDescribe(
           }
         });
 
-        const sellerBaseAta = await getAssociatedTokenAddress(
+        const sellerBaseAta = await associatedTokenAddress(
           baseMint,
           seller.payer.publicKey,
         );
-        const buyerQuoteAta = await getAssociatedTokenAddress(
+        const buyerQuoteAta = await associatedTokenAddress(
           quoteMint,
           buyer.payer.publicKey,
         );
@@ -203,30 +201,20 @@ maybeDescribe(
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 sellerBaseAta,
                 seller.payer.publicKey,
                 baseMint,
               ),
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 buyerQuoteAta,
                 buyer.payer.publicKey,
                 quoteMint,
               ),
-              createMintToInstruction(
-                baseMint,
-                sellerBaseAta,
-                admin.publicKey,
-                A0 + A1,
-              ),
-              createMintToInstruction(
-                quoteMint,
-                buyerQuoteAta,
-                admin.publicKey,
-                buyerNoteAmt,
-              ),
+              mintToIx(baseMint, sellerBaseAta, admin, A0 + A1),
+              mintToIx(quoteMint, buyerQuoteAta, admin, buyerNoteAmt),
             ),
             [admin],
           ),

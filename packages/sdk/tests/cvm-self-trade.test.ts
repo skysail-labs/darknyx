@@ -37,11 +37,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   PublicKey,
@@ -63,7 +58,12 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import { loadKeypairRel } from "./helpers/e2e-helpers.js";
+import {
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
   makePersona,
@@ -184,57 +184,42 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       //    taker needs a BASE note (its crossing ask) ─────────────────────
       const bidNoteAmt = withFee(scaledQuote(QTY, bidPrice, PRICE_SCALE)); // quote
       const askNoteAmt = withFee(QTY); // base
-      const selfQuoteAta = await getAssociatedTokenAddress(
+      const selfQuoteAta = await associatedTokenAddress(
         quoteMint,
         self_.payer.publicKey,
       );
-      const selfBaseAta = await getAssociatedTokenAddress(
+      const selfBaseAta = await associatedTokenAddress(
         baseMint,
         self_.payer.publicKey,
       );
-      const takerBaseAta = await getAssociatedTokenAddress(
+      const takerBaseAta = await associatedTokenAddress(
         baseMint,
         taker.payer.publicKey,
       );
       await sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             selfQuoteAta,
             self_.payer.publicKey,
             quoteMint,
           ),
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             selfBaseAta,
             self_.payer.publicKey,
             baseMint,
           ),
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             takerBaseAta,
             taker.payer.publicKey,
             baseMint,
           ),
-          createMintToInstruction(
-            quoteMint,
-            selfQuoteAta,
-            admin.publicKey,
-            bidNoteAmt,
-          ),
-          createMintToInstruction(
-            baseMint,
-            selfBaseAta,
-            admin.publicKey,
-            askNoteAmt,
-          ),
-          createMintToInstruction(
-            baseMint,
-            takerBaseAta,
-            admin.publicKey,
-            askNoteAmt,
-          ),
+          mintToIx(quoteMint, selfQuoteAta, admin, bidNoteAmt),
+          mintToIx(baseMint, selfBaseAta, admin, askNoteAmt),
+          mintToIx(baseMint, takerBaseAta, admin, askNoteAmt),
         ),
         [admin],
       );

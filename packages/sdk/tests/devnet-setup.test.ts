@@ -39,11 +39,10 @@ import { resolve } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  createInitializeMintInstruction,
-  MINT_SIZE,
-  TOKEN_PROGRAM_ID,
-  getMinimumBalanceForRentExemptMint,
-} from "@solana/spl-token";
+  getInitializeMintInstruction,
+  getMintSize,
+} from "@solana-program/token";
+import { TOKEN_PROGRAM_ID } from "./helpers/e2e-helpers.js";
 import {
   AddressLookupTableProgram,
   Connection,
@@ -340,37 +339,37 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       bullet(`BASE mint pubkey:   ${baseMint.publicKey.toBase58()}`);
       bullet(`QUOTE mint pubkey:  ${quoteMint.publicKey.toBase58()}`);
 
-      const rentLamports = await getMinimumBalanceForRentExemptMint(connection);
+      const mintSize = getMintSize();
+      const rentLamports =
+        await connection.getMinimumBalanceForRentExemption(mintSize);
 
       const mintTx = new Transaction().add(
         SystemProgram.createAccount({
           fromPubkey: admin.publicKey,
           newAccountPubkey: baseMint.publicKey,
-          space: MINT_SIZE,
+          space: mintSize,
           lamports: rentLamports,
           programId: TOKEN_PROGRAM_ID,
         }),
-        createInitializeMintInstruction(
-          baseMint.publicKey,
-          DEMO_MINT_DECIMALS,
-          admin.publicKey,
-          null,
-          TOKEN_PROGRAM_ID,
-        ),
+        getInitializeMintInstruction({
+          mint: baseMint.publicKey.toBase58(),
+          decimals: DEMO_MINT_DECIMALS,
+          mintAuthority: admin.publicKey.toBase58(),
+          freezeAuthority: null,
+        }),
         SystemProgram.createAccount({
           fromPubkey: admin.publicKey,
           newAccountPubkey: quoteMint.publicKey,
-          space: MINT_SIZE,
+          space: mintSize,
           lamports: rentLamports,
           programId: TOKEN_PROGRAM_ID,
         }),
-        createInitializeMintInstruction(
-          quoteMint.publicKey,
-          DEMO_MINT_DECIMALS,
-          admin.publicKey,
-          null,
-          TOKEN_PROGRAM_ID,
-        ),
+        getInitializeMintInstruction({
+          mint: quoteMint.publicKey.toBase58(),
+          decimals: DEMO_MINT_DECIMALS,
+          mintAuthority: admin.publicKey.toBase58(),
+          freezeAuthority: null,
+        }),
       );
       const mintSig = await sendAndConfirmTransaction(
         connection,

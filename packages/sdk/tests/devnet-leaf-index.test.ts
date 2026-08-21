@@ -23,12 +23,6 @@ import {
   ComputeBudgetProgram,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
 
 import { DarkPoolClient } from "../src/client.js";
 import { getDepositFunction } from "../src/utxo/deposit.js";
@@ -43,6 +37,12 @@ import type { MergeInputs, Groth16ProofBytes } from "../src/zk/prover-suite.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
+import {
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -99,7 +99,7 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     const conn = new Connection(rpcUrl, "confirmed");
     const admin = await loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     // Deterministic per-run keys (admin is the only signer on devnet).
     const masterSeed = new Uint8Array(64).map((_, i) => (i * 31 + 7) & 0xff);
@@ -224,13 +224,8 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
       await sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
-            ata,
-            admin.publicKey,
-            mint,
-          ),
-          createMintToInstruction(mint, ata, admin.publicKey, amount),
+          createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+          mintToIx(mint, ata, admin, amount),
         ),
         [admin],
         { commitment: "confirmed" },

@@ -13,6 +13,13 @@ import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getMintToInstruction,
+  getTokenDecoder,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 
 import { anchorDiscriminator } from "../../src/idl/vault-client.js";
 
@@ -41,6 +48,90 @@ export function dummyAddress(): PublicKey {
 // CHANGE_ROLE_SELLER = 0x5E). That crate is the single source of truth for the
 // role tags; the pointer here used to name a program that no longer exists,
 // which is a bad place for a parity contract to send a reader.
+// ── SPL-token boundary (@solana-program/token) ─────────────────────────────
+// `@solana/spl-token` peer-depends on web3.js v1 and cannot coexist with v3,
+// so the token surface moved to `@solana-program/token`. That client speaks
+// kit-branded Address STRINGS, while the vault SDK and Connection speak the
+// v3 `Address` class. These three helpers own that conversion so the rule
+// lives in one place instead of at every call site:
+//
+//   builder boundary            -> `.toBase58()` (the kit branded string)
+//   SDK / Connection boundary   -> `new PublicKey(...)` (the v3 class)
+//
+// `payer` and `mintAuthority` take the KEYPAIR, never its address. A v3
+// Keypair satisfies kit's TransactionSigner; a bare Address type-checks for
+// `mintAuthority` but emits a non-signer account meta, and the mint then
+// fails on-chain for a reason the types never hinted at.
+
+/**
+ * The classic Token program id as the v3 `Address` class.
+ *
+ * `TOKEN_PROGRAM_ADDRESS` is a kit-branded string; the vault SDK's
+ * `tokenProgramId` fields want the class. Same name and type as the old
+ * spl-token export, so call sites are unchanged.
+ */
+export const TOKEN_PROGRAM_ID = new PublicKey(TOKEN_PROGRAM_ADDRESS);
+
+/**
+ * Decoded SPL token account. Replaces spl-token's `getAccount`, including its
+ * behaviour of REJECTING when the account does not exist -- callers rely on
+ * that (`.catch(() => 0n)` for a not-yet-created ATA), and returning null
+ * instead would silently turn a missing account into a passing assertion.
+ */
+export async function getTokenAccount(
+  connection: Connection,
+  address: PublicKey,
+) {
+  const info = await connection.getAccountInfo(address);
+  if (info === null) {
+    throw new Error(`token account ${address.toBase58()} not found`);
+  }
+  return getTokenDecoder().decode(info.data);
+}
+
+/** ATA for (mint, owner), returned as the v3 class the SDK expects. */
+export async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
+
+/** Idempotent create-ATA. `payer` must be the signing Keypair. */
+export function createAtaIdempotentIx(
+  payer: Keypair,
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+) {
+  return getCreateAssociatedTokenIdempotentInstruction({
+    payer,
+    ata: ata.toBase58(),
+    owner: owner.toBase58(),
+    mint: mint.toBase58(),
+  });
+}
+
+/** mint_to. `mintAuthority` must be the signing Keypair -- see note above. */
+export function mintToIx(
+  mint: PublicKey,
+  token: PublicKey,
+  mintAuthority: Keypair,
+  amount: bigint | number,
+) {
+  return getMintToInstruction({
+    mint: mint.toBase58(),
+    token: token.toBase58(),
+    mintAuthority,
+    amount,
+  });
+}
+
 export const CHANGE_ROLE_BUYER = 0xb1;
 export const CHANGE_ROLE_SELLER = 0x5e;
 

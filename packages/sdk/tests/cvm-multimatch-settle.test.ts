@@ -38,11 +38,6 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   PublicKey,
   Transaction,
@@ -63,7 +58,12 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import { loadKeypairRel } from "./helpers/e2e-helpers.js";
+import {
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
   makePersona,
@@ -161,11 +161,11 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       }
     }
 
-    const buyerQuoteAta = await getAssociatedTokenAddress(
+    const buyerQuoteAta = await associatedTokenAddress(
       quoteMint,
       buyer.payer.publicKey,
     );
-    const sellerBaseAta = await getAssociatedTokenAddress(
+    const sellerBaseAta = await associatedTokenAddress(
       baseMint,
       seller.payer.publicKey,
     );
@@ -178,28 +178,28 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
+        createAtaIdempotentIx(
+          admin,
           buyerQuoteAta,
           buyer.payer.publicKey,
           quoteMint,
         ),
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
+        createAtaIdempotentIx(
+          admin,
           sellerBaseAta,
           seller.payer.publicKey,
           baseMint,
         ),
-        createMintToInstruction(
+        mintToIx(
           quoteMint,
           buyerQuoteAta,
-          admin.publicKey,
+          admin,
           buyerNoteAmts.reduce((a, b) => a + b, 0n),
         ),
-        createMintToInstruction(
+        mintToIx(
           baseMint,
           sellerBaseAta,
-          admin.publicKey,
+          admin,
           sellerNoteAmts.reduce((a, b) => a + b, 0n),
         ),
       ),

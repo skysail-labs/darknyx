@@ -43,11 +43,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   PublicKey,
@@ -82,9 +77,12 @@ import {
   type ChangeNoteRecord,
 } from "../src/utxo/note-store.js";
 import {
-  loadKeypairRel,
   StepTimer,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
   fetchSettleTimeline,
+  loadKeypairRel,
+  mintToIx,
   reportSettleTimeline,
 } from "./helpers/e2e-helpers.js";
 import {
@@ -279,11 +277,11 @@ maybeDescribe(
           }
         });
 
-        const buyerQuoteAta = await getAssociatedTokenAddress(
+        const buyerQuoteAta = await associatedTokenAddress(
           quoteMint,
           buyer.payer.publicKey,
         );
-        const sellerBaseAta = await getAssociatedTokenAddress(
+        const sellerBaseAta = await associatedTokenAddress(
           baseMint,
           seller.payer.publicKey,
         );
@@ -309,30 +307,20 @@ maybeDescribe(
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 buyerQuoteAta,
                 buyer.payer.publicKey,
                 quoteMint,
               ),
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 sellerBaseAta,
                 seller.payer.publicKey,
                 baseMint,
               ),
-              createMintToInstruction(
-                quoteMint,
-                buyerQuoteAta,
-                admin.publicKey,
-                buyerNoteAmt,
-              ),
-              createMintToInstruction(
-                baseMint,
-                sellerBaseAta,
-                admin.publicKey,
-                sellerNoteAmt,
-              ),
+              mintToIx(quoteMint, buyerQuoteAta, admin, buyerNoteAmt),
+              mintToIx(baseMint, sellerBaseAta, admin, sellerNoteAmt),
             ),
             [admin],
           ),
@@ -353,7 +341,7 @@ maybeDescribe(
         // batch-2 re-match. Same base amount as seller1.
         let seller2Note: DepositedNote | null = null;
         if (seller2) {
-          const seller2BaseAta = await getAssociatedTokenAddress(
+          const seller2BaseAta = await associatedTokenAddress(
             baseMint,
             seller2.payer.publicKey,
           );
@@ -361,18 +349,13 @@ maybeDescribe(
             sendAndConfirmTransaction(
               conn,
               new Transaction().add(
-                createAssociatedTokenAccountIdempotentInstruction(
-                  admin.publicKey,
+                createAtaIdempotentIx(
+                  admin,
                   seller2BaseAta,
                   seller2.payer.publicKey,
                   baseMint,
                 ),
-                createMintToInstruction(
-                  baseMint,
-                  seller2BaseAta,
-                  admin.publicKey,
-                  sellerNoteAmt,
-                ),
+                mintToIx(baseMint, seller2BaseAta, admin, sellerNoteAmt),
               ),
               [admin],
             ),

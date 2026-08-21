@@ -23,11 +23,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  createInitializeMintInstruction,
-  getMinimumBalanceForRentExemptMint,
-  MINT_SIZE,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+  getInitializeMintInstruction,
+  getMintSize,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import {
   Connection,
   Keypair,
@@ -37,6 +36,10 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+
+// `@solana-program/token` speaks kit-branded Address strings; SystemProgram
+// and Connection want the v3 Address class. Convert once, here.
+const TOKEN_PROGRAM_ID = new PublicKey(TOKEN_PROGRAM_ADDRESS);
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PRIMARY_CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -212,7 +215,8 @@ if (existing) {
   );
 } else {
   secondBaseMint = await Keypair.generate();
-  const rent = await getMinimumBalanceForRentExemptMint(connection);
+  const mintSize = getMintSize();
+  const rent = await connection.getMinimumBalanceForRentExemption(mintSize);
   const decimals = Number(primary.baseMint.decimals);
   const mintSignature = await sendAndConfirmTransaction(
     connection,
@@ -220,17 +224,16 @@ if (existing) {
       SystemProgram.createAccount({
         fromPubkey: admin.publicKey,
         newAccountPubkey: secondBaseMint.publicKey,
-        space: MINT_SIZE,
+        space: mintSize,
         lamports: rent,
         programId: TOKEN_PROGRAM_ID,
       }),
-      createInitializeMintInstruction(
-        secondBaseMint.publicKey,
+      getInitializeMintInstruction({
+        mint: secondBaseMint.publicKey.toBase58(),
         decimals,
-        admin.publicKey,
-        null,
-        TOKEN_PROGRAM_ID,
-      ),
+        mintAuthority: admin.publicKey.toBase58(),
+        freezeAuthority: null,
+      }),
     ),
     [admin, secondBaseMint],
     { commitment: "confirmed" },

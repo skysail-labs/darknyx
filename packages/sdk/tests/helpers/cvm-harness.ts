@@ -25,7 +25,7 @@ import { TransportVerificationError } from "../../src/tee/verify-transport.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "./e2e-helpers.js";
 import {
   Connection,
   ComputeBudgetProgram,

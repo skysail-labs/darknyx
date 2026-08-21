@@ -1,7 +1,25 @@
 import {
-  getAssociatedTokenAddressSync,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+  findAssociatedTokenPda,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
+
+// `@solana/spl-token` peer-depends on web3.js v1 and cannot coexist with v3,
+// so ATA derivation moved to `@solana-program/token`. It is async there
+// (WebCrypto) and returns a kit-branded Address string, while the vault SDK
+// wants the v3 `Address` class -- convert once, here.
+const TOKEN_PROGRAM_ID = new PublicKey(TOKEN_PROGRAM_ADDRESS);
+
+async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
 import {
   Connection,
   PublicKey,
@@ -271,7 +289,7 @@ export class BrowserAccountOperations {
       );
     const mint = new PublicKey(params.tokenMint);
     const depositor = this.#walletAddress();
-    const tokenAccount = getAssociatedTokenAddressSync(mint, depositor);
+    const tokenAccount = await associatedTokenAddress(mint, depositor);
     const depositIndex = await this.#options.inventory.allocateDepositIndex();
     const treeId = depositIndex % this.#options.venue.numTrees;
     this.#options.onProgress?.(operation, "preparing");
@@ -330,7 +348,7 @@ export class BrowserAccountOperations {
     try {
       this.#options.onProgress?.(operation, "preparing");
       const inclusion = await this.#inclusion(held.note);
-      const destination = getAssociatedTokenAddressSync(
+      const destination = await associatedTokenAddress(
         mint,
         this.#walletAddress(),
       );

@@ -45,10 +45,11 @@ import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
 import { buildDaemonTransport } from "../src/transport.js";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getMintToInstruction,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import {
   Connection,
   Keypair,
@@ -84,6 +85,55 @@ import {
   type DaemonConfig,
   type DaemonEvent,
 } from "../src/index.js";
+
+// ── SPL-token boundary ─────────────────────────────────────────────────────
+// `@solana/spl-token` peer-depends on web3.js v1, so the token surface moved
+// to `@solana-program/token`, which speaks kit-branded Address strings while
+// the SDK speaks the v3 `Address` class. The sdk test-helper copy of this
+// lives in packages/sdk/tests/helpers/e2e-helpers.ts; it is not importable
+// from here (the daemon only sees the SDK's published surface), so these are
+// local. `payer` / `mintAuthority` take the KEYPAIR -- a bare Address
+// type-checks for mintAuthority but emits a non-signer meta and fails
+// on-chain.
+async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
+
+function createAtaIdempotentIx(
+  payer: Keypair,
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+) {
+  return getCreateAssociatedTokenIdempotentInstruction({
+    payer,
+    ata: ata.toBase58(),
+    owner: owner.toBase58(),
+    mint: mint.toBase58(),
+  });
+}
+
+function mintToIx(
+  mint: PublicKey,
+  token: PublicKey,
+  mintAuthority: Keypair,
+  amount: bigint | number,
+) {
+  return getMintToInstruction({
+    mint: mint.toBase58(),
+    token: token.toBase58(),
+    mintAuthority,
+    amount,
+  });
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
@@ -323,20 +373,12 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       deriveAccountIdentity(seed, sellerPayer.publicKey.toBytes()),
     );
     const noteAmt = withFee(qty);
-    const ata = await getAssociatedTokenAddress(
-      baseMint,
-      sellerPayer.publicKey,
-    );
+    const ata = await associatedTokenAddress(baseMint, sellerPayer.publicKey);
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          ata,
-          sellerPayer.publicKey,
-          baseMint,
-        ),
-        createMintToInstruction(baseMint, ata, admin.publicKey, noteAmt),
+        createAtaIdempotentIx(admin, ata, sellerPayer.publicKey, baseMint),
+        mintToIx(baseMint, ata, admin, noteAmt),
       ),
       [admin],
     );
@@ -608,25 +650,15 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     console.log(
       `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
     );
-    const buyerAta = await getAssociatedTokenAddress(
+    const buyerAta = await associatedTokenAddress(
       quoteMint,
       buyerPayer.publicKey,
     );
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          buyerAta,
-          buyerPayer.publicKey,
-          quoteMint,
-        ),
-        createMintToInstruction(
-          quoteMint,
-          buyerAta,
-          admin.publicKey,
-          collateral,
-        ),
+        createAtaIdempotentIx(admin, buyerAta, buyerPayer.publicKey, quoteMint),
+        mintToIx(quoteMint, buyerAta, admin, collateral),
       ),
       [admin],
     );
