@@ -106,7 +106,10 @@ describe("recovery v3 cross-package e2e", () => {
       matchId: fill(16, 0x11),
       // The settle carries the input's HANDLE; recovery inverts it against the
       // caller's own notes.
-      noteAuseTag: await deriveNoteUseTag(inputCommitment, bn254ToBE32(0x1234n)),
+      noteAuseTag: await deriveNoteUseTag(
+        inputCommitment,
+        bn254ToBE32(0x1234n),
+      ),
       noteBuseTag: fill(32, 0x12),
       noteCcommitment: trade,
       noteDcommitment: fill(32, 0x13),
@@ -152,7 +155,12 @@ describe("recovery v3 cross-package e2e", () => {
       orderIdA: fill(16, 6),
       orderIdB: fill(16, 7),
     });
-    payload.fillRecovery = cat(fill(32, 1), fill(36, 2), fill(36, 3), fill(24, 0));
+    payload.fillRecovery = cat(
+      fill(32, 1),
+      fill(36, 2),
+      fill(36, 3),
+      fill(24, 0),
+    );
     const ix = cat(
       SETTLE_DISCRIMINATOR,
       new Uint8Array([0]),

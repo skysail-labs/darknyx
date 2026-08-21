@@ -85,11 +85,11 @@ const VAULT = new PublicKey(
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-const admin = Keypair.fromSecretKey(
+const admin = await Keypair.fromSecretKey(
   new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
 );
 const conn = new Connection(RPC, "confirmed");
-const [vaultConfig] = PublicKey.findProgramAddressSync(
+const [vaultConfig] = await PublicKey.findProgramAddress(
   [Buffer.from("vault_config")],
   VAULT,
 );

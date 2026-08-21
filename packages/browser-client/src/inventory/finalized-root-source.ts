@@ -7,6 +7,7 @@ import {
 import { parseMerkleRootRing } from "@darknyx/sdk/merkle-root-ring";
 
 import type { FinalizedRootRing } from "./types.js";
+import { slotToNumber } from "@darknyx/sdk/slot";
 
 const hex = (value: Uint8Array): string =>
   Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -26,7 +27,7 @@ export class SolanaFinalizedRootSource {
         if (!Number.isInteger(treeId) || treeId < 0 || treeId > 255) {
           throw new Error(`tree id must be a u8, got ${treeId}`);
         }
-        const [address] = merkleTreePda(this.#programId, treeId);
+        const [address] = await merkleTreePda(this.#programId, treeId);
         const response = await this.#connection.getAccountInfoAndContext(
           address,
           "finalized",
@@ -40,7 +41,7 @@ export class SolanaFinalizedRootSource {
         const parsed = parseMerkleRootRing(response.value.data, treeId);
         return {
           treeId,
-          finalizedSlot: response.context.slot,
+          finalizedSlot: slotToNumber(response.context.slot),
           acceptedRoots: parsed.acceptedRoots.map(hex),
         };
       }),
@@ -55,7 +56,7 @@ export class SolanaFinalizedRootSource {
     const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
       Number.parseInt(byte, 16),
     );
-    const [address] = consumedNotePda(this.#programId, tag);
+    const [address] = await consumedNotePda(this.#programId, tag);
     const account = await this.#connection.getAccountInfo(address, "finalized");
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {
@@ -72,7 +73,7 @@ export class SolanaFinalizedRootSource {
     const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
       Number.parseInt(byte, 16),
     );
-    const [address] = noteLockPda(this.#programId, tag);
+    const [address] = await noteLockPda(this.#programId, tag);
     const account = await this.#connection.getAccountInfo(address, "finalized");
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {

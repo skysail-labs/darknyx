@@ -43,11 +43,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   PublicKey,
@@ -82,9 +77,12 @@ import {
   type ChangeNoteRecord,
 } from "../src/utxo/note-store.js";
 import {
-  loadKeypairRel,
   StepTimer,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
   fetchSettleTimeline,
+  loadKeypairRel,
+  mintToIx,
   reportSettleTimeline,
 } from "./helpers/e2e-helpers.js";
 import {
@@ -106,6 +104,7 @@ import {
   type DepositedNote,
 } from "./helpers/cvm-harness.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
+import { slotToNumber } from "../src/types/slot.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -165,15 +164,15 @@ maybeDescribe(
         process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
         "confirmed",
       );
-      admin = loadKeypairRel(
+      admin = await loadKeypairRel(
         REPO_ROOT,
         process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
       );
       funder = process.env.FUNDER_KEYPAIR
-        ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+        ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       vaultProgramId = new PublicKey(cfg.vaultProgramId);
-      [vaultPda] = vaultConfigPda(vaultProgramId);
+      [vaultPda] = await vaultConfigPda(vaultProgramId);
       baseMint = new PublicKey(cfg.baseMint.pubkey);
       quoteMint = new PublicKey(cfg.quoteMint.pubkey);
       buyer = await makePersona(REPO_ROOT, "cvm-buyer", 0x40);
@@ -197,7 +196,8 @@ maybeDescribe(
         // intake rejects it as 1 below the required floor. 2×250k×bidPrice(~7.4e9)
         // ≈ 3.7e15 — comfortably exact even if SOL's price doubles.
         const BASE_QTY = BigInt(
-          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+          process.env.DARKNYX_CVM_BASE_QTY ??
+            String((Date.now() % 250_000) + 1000),
         );
         // Run-unique order-id index. Order ids are now DETERMINISTIC
         // (`deriveOrderId(seed, n)`) so fills mode can query the indexer by the
@@ -223,7 +223,8 @@ maybeDescribe(
         // (BUY_QTY=BASE_QTY).
         // Override the multiplier with DARKNYX_CVM_BUY_MULT.
         const BUY_MULT = BigInt(
-          process.env.DARKNYX_CVM_BUY_MULT ?? (FILLS || CHAIN_RECOVERY ? "2" : "1"),
+          process.env.DARKNYX_CVM_BUY_MULT ??
+            (FILLS || CHAIN_RECOVERY ? "2" : "1"),
         );
         const BUY_QTY = BASE_QTY * BUY_MULT;
         console.log(
@@ -245,7 +246,7 @@ maybeDescribe(
           "tree not empty — run devnet-setup (reset) first",
         ).toBe(0);
         const recoveryFloorSlot = CHAIN_RECOVERY
-          ? await conn.getSlot("finalized")
+          ? slotToNumber(await conn.getSlot("finalized"))
           : undefined;
 
         // For the cross-batch re-match we need a 2nd ask, so a 3rd deposit
@@ -277,11 +278,11 @@ maybeDescribe(
           }
         });
 
-        const buyerQuoteAta = await getAssociatedTokenAddress(
+        const buyerQuoteAta = await associatedTokenAddress(
           quoteMint,
           buyer.payer.publicKey,
         );
-        const sellerBaseAta = await getAssociatedTokenAddress(
+        const sellerBaseAta = await associatedTokenAddress(
           baseMint,
           seller.payer.publicKey,
         );
@@ -296,7 +297,9 @@ maybeDescribe(
         // needs (DARKNYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
         // collateral_amount; intake accepts note ≥ required and the matcher returns
         // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
-        const BUYER_SURPLUS = BigInt(process.env.DARKNYX_CVM_BUYER_SURPLUS ?? "0");
+        const BUYER_SURPLUS = BigInt(
+          process.env.DARKNYX_CVM_BUYER_SURPLUS ?? "0",
+        );
         const buyerNoteAmt =
           withFee(scaledQuote(BUY_QTY, bidPrice, PRICE_SCALE)) + BUYER_SURPLUS;
         const sellerNoteAmt = withFee(BASE_QTY);
@@ -305,30 +308,20 @@ maybeDescribe(
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 buyerQuoteAta,
                 buyer.payer.publicKey,
                 quoteMint,
               ),
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 sellerBaseAta,
                 seller.payer.publicKey,
                 baseMint,
               ),
-              createMintToInstruction(
-                quoteMint,
-                buyerQuoteAta,
-                admin.publicKey,
-                buyerNoteAmt,
-              ),
-              createMintToInstruction(
-                baseMint,
-                sellerBaseAta,
-                admin.publicKey,
-                sellerNoteAmt,
-              ),
+              mintToIx(quoteMint, buyerQuoteAta, admin, buyerNoteAmt),
+              mintToIx(baseMint, sellerBaseAta, admin, sellerNoteAmt),
             ),
             [admin],
           ),
@@ -349,7 +342,7 @@ maybeDescribe(
         // batch-2 re-match. Same base amount as seller1.
         let seller2Note: DepositedNote | null = null;
         if (seller2) {
-          const seller2BaseAta = await getAssociatedTokenAddress(
+          const seller2BaseAta = await associatedTokenAddress(
             baseMint,
             seller2.payer.publicKey,
           );
@@ -357,18 +350,13 @@ maybeDescribe(
             sendAndConfirmTransaction(
               conn,
               new Transaction().add(
-                createAssociatedTokenAccountIdempotentInstruction(
-                  admin.publicKey,
+                createAtaIdempotentIx(
+                  admin,
                   seller2BaseAta,
                   seller2.payer.publicKey,
                   baseMint,
                 ),
-                createMintToInstruction(
-                  baseMint,
-                  seller2BaseAta,
-                  admin.publicKey,
-                  sellerNoteAmt,
-                ),
+                mintToIx(baseMint, seller2BaseAta, admin, sellerNoteAmt),
               ),
               [admin],
             ),
@@ -404,7 +392,7 @@ maybeDescribe(
         // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it
         // and the settle-time lock_note doesn't hit the cap. Far more than the
         // ~90 s the test needs, with margin for TEE/client slot-view skew.
-        const expirySlot = BigInt(slot + 3_000);
+        const expirySlot = slot + 3_000n;
         const bootSessionId = await fetchBootSessionId(GATEWAY);
 
         async function buildOrder(
@@ -423,9 +411,7 @@ maybeDescribe(
           // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
           // the same n yields distinct ids. Recoverable by the fills gap-scan.
           const orderId = deriveOrderId(p.masterSeed, orderIndex);
-          const viewingPubkey = deriveViewingEncKeypair(
-            p.masterSeed,
-          ).publicKey;
+          const viewingPubkey = deriveViewingEncKeypair(p.masterSeed).publicKey;
           const digest = orderCanonicalDigest({
             symbol: new TextEncoder().encode(SYMBOL),
             side,
@@ -512,7 +498,7 @@ maybeDescribe(
           buyerVI,
           ORDER_N + 777, // distinct order id
           BASE_QTY,
-          BigInt(slot + 100_000), // ≫ MAX_LOCK_TTL_SLOTS (~4_500)
+          slot + 100_000n, // ≫ MAX_LOCK_TTL_SLOTS (~4_500)
         );
         const overCapResp = await t.step(
           "F-05: over-cap expiry rejected at intake",
@@ -891,9 +877,7 @@ maybeDescribe(
           }
 
           // The memo must name the exact deposited input that v3 consumed.
-          expect(memoRec!.consumedCommitment).toBe(
-            hex(buyerNote.commitment),
-          );
+          expect(memoRec!.consumedCommitment).toBe(hex(buyerNote.commitment));
           console.log(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, consumed ${memoRec!.consumedCommitment!.slice(0, 12)}…)`,
           );
@@ -906,42 +890,39 @@ maybeDescribe(
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
-          await t.step(
-            "on-chain trade + change recovery v3",
-            async () => {
-              const coldStore = new InMemoryNoteStore();
-              const inputRecord = {
-                commitment: hex(buyerNote.commitment),
-                tokenMint: buyerNote.mint.toBytes(),
-                amount: buyerNote.amount,
-                ownerCommitment: buyer.ownerCommit,
-                innerHash: buyerNote.innerHash,
-                leafIndex: BigInt(buyerNote.leafIndex),
-              };
-              await coldStore.put(inputRecord);
-              const recovered = await recoverFillFromChain(change!, {
-                masterSeed: buyer.masterSeed,
-                candidateInputs: [inputRecord],
-                baseMint: baseMint.toBytes(),
-                quoteMint: quoteMint.toBytes(),
-              });
-              expect(
-                recovered,
-                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v3 image?)",
-              ).toBeTruthy();
-              expect(recovered!.trade.amount).toBe(BASE_QTY);
-              // The chain-recovered amount must match the live memo byte-for-byte.
-              expect(recovered!.change!.amount).toBe(memoRec!.amount);
-              // And it lands spendable in a cold store.
-              await coldStore.put(recovered!.trade);
-              await coldStore.put(recovered!.change!);
-              const stored = await coldStore.get(change!.changeNoteCommitment!);
-              expect(stored?.amount).toBe(memoRec!.amount);
-              console.log(
-                `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
-              );
-            },
-          );
+          await t.step("on-chain trade + change recovery v3", async () => {
+            const coldStore = new InMemoryNoteStore();
+            const inputRecord = {
+              commitment: hex(buyerNote.commitment),
+              tokenMint: buyerNote.mint.toBytes(),
+              amount: buyerNote.amount,
+              ownerCommitment: buyer.ownerCommit,
+              innerHash: buyerNote.innerHash,
+              leafIndex: BigInt(buyerNote.leafIndex),
+            };
+            await coldStore.put(inputRecord);
+            const recovered = await recoverFillFromChain(change!, {
+              masterSeed: buyer.masterSeed,
+              candidateInputs: [inputRecord],
+              baseMint: baseMint.toBytes(),
+              quoteMint: quoteMint.toBytes(),
+            });
+            expect(
+              recovered,
+              "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v3 image?)",
+            ).toBeTruthy();
+            expect(recovered!.trade.amount).toBe(BASE_QTY);
+            // The chain-recovered amount must match the live memo byte-for-byte.
+            expect(recovered!.change!.amount).toBe(memoRec!.amount);
+            // And it lands spendable in a cold store.
+            await coldStore.put(recovered!.trade);
+            await coldStore.put(recovered!.change!);
+            const stored = await coldStore.get(change!.changeNoteCommitment!);
+            expect(stored?.amount).toBe(memoRec!.amount);
+            console.log(
+              `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
+            );
+          });
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
           // The buyer's output-derived residual was relocked in batch 1 and

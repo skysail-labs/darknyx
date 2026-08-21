@@ -15,7 +15,6 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getWithdrawFunction } from "../src/utxo/withdraw.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
@@ -34,6 +33,14 @@ import type {
   IDarkPoolZkProverSuite,
   SpendInputs,
 } from "../src/zk/prover-suite.js";
+
+// v3 exposes TransactionInstruction.data as a Uint8Array. These assertions
+// used to cast it to a node Buffer -- a cast the compiler trusts and the
+// runtime does not, which is why they typechecked and then failed on
+// `.equals` / `.readBigUInt64LE`. Read through a DataView instead, and
+// compare Uint8Array to Uint8Array.
+const u64le = (d: Uint8Array, at: number): bigint =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(at, true);
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -83,7 +90,10 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
         ],
       };
       return this.corruptPublicInputs
-        ? { ...proof, publicInputs: this.corruptPublicInputs(proof.publicInputs) }
+        ? {
+            ...proof,
+            publicInputs: this.corruptPublicInputs(proof.publicInputs),
+          }
         : proof;
     },
   };
@@ -210,15 +220,15 @@ describe("getWithdrawFunction", () => {
     // One instruction built.
     expect(ixs).toHaveLength(1);
     const ix = ixs[0];
-    const disc = Buffer.from(anchorDiscriminator("withdraw"));
-    expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
+    const disc = anchorDiscriminator("withdraw");
+    expect(ix.data.subarray(0, 8)).toEqual(disc);
 
     // Data layout: disc(8) || tree_id(1) || note_commitment(32) || nullifier(32)
     //   || merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
-    const d = ix.data as NodeBuffer;
+    const d = ix.data;
     expect(d.length).toBe(8 + 1 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
     expect(d[8]).toBe(0); // tree_id
-    const amt = d.readBigUInt64LE(8 + 1 + 32 + 32 + 32);
+    const amt = u64le(d, 8 + 1 + 32 + 32 + 32);
     expect(amt).toBe(250_000n);
     // Proof bytes (0xaa / 0xbb / 0xcc) should be present at the tail.
     const tailStart = 8 + 1 + 32 + 32 + 32 + 8;
@@ -255,9 +265,9 @@ describe("getWithdrawFunction", () => {
         innerHash: 9n,
       };
       prover.expectedNoteUseTag = await deriveNoteUseTag(
-      await noteCommitmentV2(notePlaintext),
-      bn254ToBE32(notePlaintext.innerHash),
-    );
+        await noteCommitmentV2(notePlaintext),
+        bn254ToBE32(notePlaintext.innerHash),
+      );
       prover.corruptPublicInputs = corrupt;
 
       let error: Error | null = null;
@@ -277,7 +287,9 @@ describe("getWithdrawFunction", () => {
     }
 
     it("refuses a public-input vector of the wrong length", async () => {
-      const { error, sent } = await withdrawWith((v) => v.slice(0, v.length - 1));
+      const { error, sent } = await withdrawWith((v) =>
+        v.slice(0, v.length - 1),
+      );
       expect(error?.message).toMatch(/public inputs/i);
       expect(sent).toHaveLength(0);
     });

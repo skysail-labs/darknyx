@@ -22,13 +22,6 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAccount,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
 
 import {
   deriveSpendingKey,
@@ -51,7 +44,15 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToBigInt, be32ToDec } from "./helpers/e2e-helpers.js";
+import {
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  be32ToBigInt,
+  be32ToDec,
+  createAtaIdempotentIx,
+  getTokenAccount,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
@@ -80,7 +81,8 @@ const DEPOSIT_ZKEY = resolve(
 // experiment this run looked like a no-op against the new program while
 // actually depositing and withdrawing on the old one.
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -91,8 +93,8 @@ const READY =
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
-function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(
+async function loadKp(rel: string): Promise<Keypair> {
+  return await Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
   );
 }
@@ -105,11 +107,11 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     // mints/config, and the runbook explicitly supplies this override.
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(".devnet/keypairs/admin.json");
 
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const AMOUNT = 7_000_000n; // 7 tokens @ 6 decimals
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     // Darkpool note keys (independent of the Solana payer). Seed is unique
     // per run so the note's nullifier/consumed-note PDAs don't collide with a
@@ -127,7 +129,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const resetSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({
+        await buildResetMerkleTreeInstruction({
           programId: VAULT_ID,
           admin: admin.publicKey,
           treeId: 0,
@@ -143,7 +145,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     // first field, at byte offset 8 after the 8-byte discriminator), NOT in
     // `VaultConfig` — which has no leaf field at all (offset 104 there is
     // `tee_pubkeys[2]`). After resetting shard 0 this must be 0.
-    const [tree0Pda] = merkleTreePda(VAULT_ID, 0);
+    const [tree0Pda] = await merkleTreePda(VAULT_ID, 0);
     const tinfo = await conn.getAccountInfo(tree0Pda);
     if (!tinfo) throw new Error("merkle_tree(0) missing");
     const leafIndex = Number(
@@ -185,21 +187,16 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
     });
 
-    const balBefore = await getAccount(conn, ata)
+    const balBefore = await getTokenAccount(conn, ata)
       .then((a) => a.amount)
       .catch(() => 0n);
     const depositSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          ata,
-          admin.publicKey,
-          mint,
-        ),
-        createMintToInstruction(mint, ata, admin.publicKey, AMOUNT),
-        buildDepositInstruction({
+        createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+        mintToIx(mint, ata, admin, AMOUNT),
+        await buildDepositInstruction({
           programId: VAULT_ID,
           treeId: 0,
           depositor: admin.publicKey,
@@ -247,12 +244,12 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       },
     );
 
-    const balAfterDeposit = (await getAccount(conn, ata)).amount;
+    const balAfterDeposit = (await getTokenAccount(conn, ata)).amount;
     const withdrawSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        buildWithdrawInstruction({
+        await buildWithdrawInstruction({
           programId: VAULT_ID,
           treeId: 0,
           payer: admin.publicKey,
@@ -261,7 +258,10 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
           tokenProgramId: TOKEN_PROGRAM_ID,
           // VALID_SPEND's public output 0 is now the tag; the commitment
           // stays a private intermediate inside the proof.
-          noteUseTag: await deriveNoteUseTag(commitment, bn254ToBE32(innerHash)),
+          noteUseTag: await deriveNoteUseTag(
+            commitment,
+            bn254ToBE32(innerHash),
+          ),
           nullifier: nulli,
           merkleRoot: w.root,
           amount: AMOUNT,
@@ -271,12 +271,10 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       [admin],
       { commitment: "confirmed" },
     );
-    console.log(
-      `  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`,
-    );
+    console.log(`  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`);
 
     // ── 4. assert the tokens round-tripped back ──
-    const balFinal = (await getAccount(conn, ata)).amount;
+    const balFinal = (await getTokenAccount(conn, ata)).amount;
     expect(balFinal - balAfterDeposit).toBe(AMOUNT);
     void balBefore;
   }, 120_000);

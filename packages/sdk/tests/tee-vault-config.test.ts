@@ -10,6 +10,7 @@ import {
   assertTeePubkeysMatch,
   vaultConfigTeePubkeys,
 } from "../src/index.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 function buildVaultConfig(pubkeys: Uint8Array[]): Uint8Array {
   const data = new Uint8Array(VAULT_CONFIG_ACCOUNT_LEN);
@@ -30,14 +31,15 @@ describe("vaultConfigTeePubkeys", () => {
     expect(VAULT_CONFIG_ACCOUNT_LEN).toBe(1264);
   });
 
-  it("reads exactly num_tee_keys pubkeys in order", () => {
-    const kps = [Keypair.generate(), Keypair.generate(), Keypair.generate()];
+  it("reads exactly num_tee_keys pubkeys in order", async () => {
+    const kps = [
+      await Keypair.generate(),
+      await Keypair.generate(),
+      await Keypair.generate(),
+    ];
     const data = buildVaultConfig(kps.map((k) => k.publicKey.toBytes()));
     // A 4th key sits in the array bytes but num_tee_keys=3 → must be ignored.
-    data.set(
-      Keypair.generate().publicKey.toBytes(),
-      TEE_PUBKEYS_OFFSET + 3 * 32,
-    );
+    data.set(dummyAddress().toBytes(), TEE_PUBKEYS_OFFSET + 3 * 32);
     expect(vaultConfigTeePubkeys(data)).toEqual(
       kps.map((k) => k.publicKey.toBase58()),
     );
@@ -47,14 +49,12 @@ describe("vaultConfigTeePubkeys", () => {
     expect(() => vaultConfigTeePubkeys(new Uint8Array(100))).toThrow(
       /account length/,
     );
-    const wrongDiscriminator = buildVaultConfig([
-      Keypair.generate().publicKey.toBytes(),
-    ]);
+    const wrongDiscriminator = buildVaultConfig([dummyAddress().toBytes()]);
     wrongDiscriminator[0] ^= 1;
     expect(() => vaultConfigTeePubkeys(wrongDiscriminator)).toThrow(
       /discriminator/,
     );
-    const bad = buildVaultConfig([Keypair.generate().publicKey.toBytes()]);
+    const bad = buildVaultConfig([dummyAddress().toBytes()]);
     bad[NUM_TEE_KEYS_OFFSET] = 0;
     expect(() => vaultConfigTeePubkeys(bad)).toThrow(/out of range/);
     bad[NUM_TEE_KEYS_OFFSET] = 17;
@@ -62,7 +62,7 @@ describe("vaultConfigTeePubkeys", () => {
   });
 
   it("rejects signer/tree mismatch, zero keys, and duplicate keys", () => {
-    const key = Keypair.generate().publicKey.toBytes();
+    const key = dummyAddress().toBytes();
     const mismatch = buildVaultConfig([key]);
     mismatch[NUM_TREES_OFFSET] = 2;
     expect(() => vaultConfigTeePubkeys(mismatch)).toThrow(/count mismatch/);
@@ -78,22 +78,22 @@ describe("vaultConfigTeePubkeys", () => {
 });
 
 describe("assertTeePubkeysMatch", () => {
-  const a = Keypair.generate().publicKey.toBase58();
-  const b = Keypair.generate().publicKey.toBase58();
+  const a = dummyAddress().toBase58();
+  const b = dummyAddress().toBase58();
 
   it("accepts an order-independent set match", () => {
     expect(() => assertTeePubkeysMatch([a, b], [b, a])).not.toThrow();
   });
 
   it("rejects an extra on-chain key (vault trusts a key the enclave lacks)", () => {
-    const c = Keypair.generate().publicKey.toBase58();
+    const c = dummyAddress().toBase58();
     expect(() => assertTeePubkeysMatch([a, b], [a, b, c])).toThrow(
       /!= on-chain/,
     );
   });
 
   it("rejects a substituted key", () => {
-    const c = Keypair.generate().publicKey.toBase58();
+    const c = dummyAddress().toBase58();
     let kind = "";
     try {
       assertTeePubkeysMatch([a, b], [a, c]);

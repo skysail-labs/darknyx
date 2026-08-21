@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 
 import {
   limitPolicy,
@@ -34,10 +34,20 @@ import { DEFAULT_THRESHOLDS } from "../src/order-lifecycle.js";
 import type { DaemonConfig } from "../src/config.js";
 import { newManagedOrder } from "../src/types.js";
 
+// v3 made `Keypair.generate()` async, and this call site only ever wanted a
+// unique opaque address -- the secret key was discarded. Keep it synchronous.
+// Counter starts at 1 so the result is never the all-zero default address.
+let dummyAddressCounter = 0;
+function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
+
 const GW = "https://gw.example";
 const TOKEN = "tok";
 
-const teeKp = Keypair.generate();
+const teeKp = await Keypair.generate();
 const TEE_PUBKEY_B58 = teeKp.publicKey.toBase58();
 const TEE_PUBKEY_HASH = createHash("sha256")
   .update(teeKp.publicKey.toBytes())
@@ -482,7 +492,7 @@ describe("Daemon — attestation gate", () => {
       // Vault trusts an extra key the enclave doesn't hold → refuse.
       onchainTeePubkeys: async () => [
         TEE_PUBKEY_B58,
-        Keypair.generate().publicKey.toBase58(),
+        dummyAddress().toBase58(),
       ],
       verifyRoot: false,
       // This suite has no CVM behind it; boot reconciliation (SW-11) is
@@ -604,7 +614,7 @@ describe("Daemon — attestation gate", () => {
     });
     await daemon.start();
 
-    onchain = [Keypair.generate().publicKey.toBase58()];
+    onchain = [dummyAddress().toBase58()];
     await daemon.refreshTrustNow();
     expect(daemon.getTrustStatus().tradingEnabled).toBe(false);
     expect(daemon.getTrustStatus().pauseReason).toMatch(/on-chain/);

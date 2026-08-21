@@ -36,6 +36,7 @@ import { anchorDiscriminator } from "../idl/vault-client.js";
 import { programEventPayloads } from "../idl/log-scope.js";
 import { deriveOrderId } from "../keys/key-generators.js";
 import type { IndexerFill, BackfillResult } from "./history.js";
+import { slotToNumber } from "../types/slot.js";
 
 /** `sha256("global:tee_forced_settle_batched")[..8]`. */
 const SETTLE_DISCRIMINATOR = anchorDiscriminator("tee_forced_settle_batched");
@@ -265,7 +266,7 @@ export function makeConnectionScan(
           if (ixDatas.length > 0) {
             out.push({
               signature: batch[index].signature,
-              slot: tx.slot,
+              slot: slotToNumber(tx.slot),
               ixDatas,
               logMessages: tx.meta?.logMessages ?? [],
             });

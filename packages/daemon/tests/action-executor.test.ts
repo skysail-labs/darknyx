@@ -29,10 +29,11 @@ describe("DaemonActionExecutor — merge", () => {
     };
     const executor = new DaemonActionExecutor({ merge: runner });
 
-    const event = await executor.merge(
-      openOrder({ pendingChangeNotes: 4 }),
-      { type: "merge", orderId: ORDER_ID, noteCount: 4 },
-    );
+    const event = await executor.merge(openOrder({ pendingChangeNotes: 4 }), {
+      type: "merge",
+      orderId: ORDER_ID,
+      noteCount: 4,
+    });
 
     // The event carries the trigger order's REMAINING residuals, not the
     // account-wide consumed count (SW-13).

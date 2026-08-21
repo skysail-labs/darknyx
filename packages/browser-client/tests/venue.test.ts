@@ -72,16 +72,16 @@ function attestation(): TeeAttestation {
   };
 }
 
-function venueFetch(
+async function venueFetch(
   options: {
     mismatchedTick?: boolean;
     marketEnabled?: boolean;
     oracleSource?: "pyth-router-quorum-v1" | "pyth-solana-push-v1";
     oracleType?: "pyth_pull_v2" | "pyth_push_v2";
   } = {},
-): typeof fetch {
-  const [vault] = vaultConfigPda(PROGRAM);
-  const [market] = marketConfigPda(PROGRAM, BASE, QUOTE);
+): Promise<typeof fetch> {
+  const [vault] = await vaultConfigPda(PROGRAM);
+  const [market] = await marketConfigPda(PROGRAM, BASE, QUOTE);
   return vi.fn(async (input, init) => {
     const url = String(input);
     if (url === "https://rpc.example/") {
@@ -156,7 +156,7 @@ const RELEASE = {
 
 describe("strict browser venue bootstrap", () => {
   it("binds attestation and instrument metadata to finalized governance", async () => {
-    const fetchImpl = venueFetch();
+    const fetchImpl = await venueFetch();
     const verify = vi.fn(async () => attestation());
     const venue = await bootstrapTrustedVenue(RELEASE, {
       fetchImpl,
@@ -187,7 +187,7 @@ describe("strict browser venue bootstrap", () => {
   });
 
   it("fails closed when venue market metadata differs from governance", async () => {
-    const fetchImpl = venueFetch({ mismatchedTick: true });
+    const fetchImpl = await venueFetch({ mismatchedTick: true });
     await expect(
       bootstrapTrustedVenue(RELEASE, {
         fetchImpl,
@@ -207,7 +207,7 @@ describe("strict browser venue bootstrap", () => {
   it("fails closed when the boot-selected oracle source differs from the release pin", async () => {
     await expect(
       bootstrapTrustedVenue(RELEASE, {
-        fetchImpl: venueFetch({ oracleSource: "pyth-router-quorum-v1" }),
+        fetchImpl: await venueFetch({ oracleSource: "pyth-router-quorum-v1" }),
         origin: "https://app.example",
         attestationVerifier: async () => attestation(),
       }),
@@ -217,7 +217,7 @@ describe("strict browser venue bootstrap", () => {
   it("fails closed when the oracle adapter contradicts its source", async () => {
     await expect(
       bootstrapTrustedVenue(RELEASE, {
-        fetchImpl: venueFetch({ oracleType: "pyth_pull_v2" }),
+        fetchImpl: await venueFetch({ oracleType: "pyth_pull_v2" }),
         origin: "https://app.example",
         attestationVerifier: async () => attestation(),
       }),
@@ -227,7 +227,7 @@ describe("strict browser venue bootstrap", () => {
   it("fails closed on signer-set drift and a disabled governed market", async () => {
     await expect(
       bootstrapTrustedVenue(RELEASE, {
-        fetchImpl: venueFetch(),
+        fetchImpl: await venueFetch(),
         origin: "https://app.example",
         attestationVerifier: async () => ({
           ...attestation(),
@@ -237,7 +237,7 @@ describe("strict browser venue bootstrap", () => {
     ).rejects.toThrow(/attested tee_pubkeys.*on-chain/i);
     await expect(
       bootstrapTrustedVenue(RELEASE, {
-        fetchImpl: venueFetch({ marketEnabled: false }),
+        fetchImpl: await venueFetch({ marketEnabled: false }),
         origin: "https://app.example",
         attestationVerifier: async () => attestation(),
       }),

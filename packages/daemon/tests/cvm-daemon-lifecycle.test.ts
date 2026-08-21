@@ -45,10 +45,11 @@ import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
 import { buildDaemonTransport } from "../src/transport.js";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getMintToInstruction,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import {
   Connection,
   Keypair,
@@ -84,6 +85,55 @@ import {
   type DaemonConfig,
   type DaemonEvent,
 } from "../src/index.js";
+
+// ── SPL-token boundary ─────────────────────────────────────────────────────
+// `@solana/spl-token` peer-depends on web3.js v1, so the token surface moved
+// to `@solana-program/token`, which speaks kit-branded Address strings while
+// the SDK speaks the v3 `Address` class. The sdk test-helper copy of this
+// lives in packages/sdk/tests/helpers/e2e-helpers.ts; it is not importable
+// from here (the daemon only sees the SDK's published surface), so these are
+// local. `payer` / `mintAuthority` take the KEYPAIR -- a bare Address
+// type-checks for mintAuthority but emits a non-signer meta and fails
+// on-chain.
+async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
+
+function createAtaIdempotentIx(
+  payer: Keypair,
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+) {
+  return getCreateAssociatedTokenIdempotentInstruction({
+    payer,
+    ata: ata.toBase58(),
+    owner: owner.toBase58(),
+    mint: mint.toBase58(),
+  });
+}
+
+function mintToIx(
+  mint: PublicKey,
+  token: PublicKey,
+  mintAuthority: Keypair,
+  amount: bigint | number,
+) {
+  return getMintToInstruction({
+    mint: mint.toBase58(),
+    token: token.toBase58(),
+    mintAuthority,
+    amount,
+  });
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
@@ -185,25 +235,25 @@ async function oracleAnchor(): Promise<bigint> {
     await fetchPythCorePushPrice(new Connection(RPC, "finalized"), SOL_USD_FEED)
   ).emaPrice;
 }
-const loadKp = (rel: string) =>
-  Keypair.fromSecretKey(
+const loadKp = async (rel: string) =>
+  await Keypair.fromSecretKey(
     Uint8Array.from(
       JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8")) as number[],
     ),
   );
 
 /**
- * The buyer/seller fee payers used to be `loadKp(...)` on two files nothing in
+ * The buyer/seller fee payers used to be `await loadKp(...)` on two files nothing in
  * the repo creates. They existed only on the machine of whoever last ran this
  * by hand, so the suite threw in `beforeAll` anywhere else — which is a large
  * part of why it sat unrunnable while CI stayed green. Generate and persist
  * them on first use instead: they are throwaway devnet fee payers, not
  * protocol identities.
  */
-const loadOrCreateKp = (rel: string): Keypair => {
+const loadOrCreateKp = async (rel: string): Promise<Keypair> => {
   const abs = resolve(REPO_ROOT, rel);
-  if (existsSync(abs)) return loadKp(rel);
-  const kp = Keypair.generate();
+  if (existsSync(abs)) return await loadKp(rel);
+  const kp = await Keypair.generate();
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600 });
   return kp;
@@ -216,7 +266,9 @@ async function ensureFunded(
   target: PublicKey,
   minSol = 0.5,
 ): Promise<void> {
-  const have = await conn.getBalance(target, "confirmed");
+  // v3 getBalance returns Lamports (bigint); this arithmetic is in SOL-scale
+  // numbers, so narrow at the call.
+  const have = Number(await conn.getBalance(target, "confirmed"));
   const need = minSol * LAMPORTS_PER_SOL;
   if (have >= need) return;
   await sendAndConfirmTransaction(
@@ -312,7 +364,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
   // and the CVM evaluating the order, so asking for exactly 4500 would be
   // intermittently over.
   async function futureExpiry(): Promise<bigint> {
-    return BigInt((await conn.getSlot("confirmed")) + 4_000);
+    return (await conn.getSlot("confirmed")) + 4_000n;
   }
 
   // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──
@@ -323,20 +375,12 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       deriveAccountIdentity(seed, sellerPayer.publicKey.toBytes()),
     );
     const noteAmt = withFee(qty);
-    const ata = await getAssociatedTokenAddress(
-      baseMint,
-      sellerPayer.publicKey,
-    );
+    const ata = await associatedTokenAddress(baseMint, sellerPayer.publicKey);
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          ata,
-          sellerPayer.publicKey,
-          baseMint,
-        ),
-        createMintToInstruction(baseMint, ata, admin.publicKey, noteAmt),
+        createAtaIdempotentIx(admin, ata, sellerPayer.publicKey, baseMint),
+        mintToIx(baseMint, ata, admin, noteAmt),
       ),
       [admin],
     );
@@ -461,10 +505,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     );
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
     conn = new Connection(RPC, "confirmed");
-    admin = loadKp(process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json");
-    buyerPayer = loadOrCreateKp(".devnet/keypairs/cvm-buyer-payer.json");
-    sellerPayer = loadOrCreateKp(".devnet/keypairs/cvm-seller-payer.json");
-    const funder = loadKp(
+    admin = await loadKp(
+      process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
+    );
+    buyerPayer = await loadOrCreateKp(".devnet/keypairs/cvm-buyer-payer.json");
+    sellerPayer = await loadOrCreateKp(
+      ".devnet/keypairs/cvm-seller-payer.json",
+    );
+    const funder = await loadKp(
       process.env.FUNDER_KEYPAIR ?? ".devnet/keypairs/funder.json",
     );
     await ensureFunded(conn, funder, buyerPayer.publicKey);
@@ -604,25 +652,15 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     console.log(
       `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
     );
-    const buyerAta = await getAssociatedTokenAddress(
+    const buyerAta = await associatedTokenAddress(
       quoteMint,
       buyerPayer.publicKey,
     );
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
-          buyerAta,
-          buyerPayer.publicKey,
-          quoteMint,
-        ),
-        createMintToInstruction(
-          quoteMint,
-          buyerAta,
-          admin.publicKey,
-          collateral,
-        ),
+        createAtaIdempotentIx(admin, buyerAta, buyerPayer.publicKey, quoteMint),
+        mintToIx(quoteMint, buyerAta, admin, collateral),
       ),
       [admin],
     );

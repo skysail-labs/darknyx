@@ -122,11 +122,13 @@ gate("live CVM attestation (real DCAP)", () => {
     // attested key — so this assertion passed while comparing that key against
     // itself. Sourcing it from the chain is the whole point of the pin.
     if (!RPC) {
-      console.warn("[cvm-attest] SOLANA_RPC_URL unset — skipping strict verify");
+      console.warn(
+        "[cvm-attest] SOLANA_RPC_URL unset — skipping strict verify",
+      );
       return;
     }
     const conn = new Connection(RPC, "confirmed");
-    const [pda] = vaultConfigPda(new PublicKey(PROGRAM_ID));
+    const [pda] = await vaultConfigPda(new PublicKey(PROGRAM_ID));
     const acct = await conn.getAccountInfo(pda);
     expect(acct, "vault_config account exists").not.toBeNull();
     const onchainKeys = vaultConfigTeePubkeys(acct!.data);
@@ -190,7 +192,7 @@ gate("live CVM attestation (real DCAP)", () => {
     const info = await fetchInfo();
     const attested = (info.tee_pubkeys ?? [info.tee_pubkey]).slice().sort();
     const conn = new Connection(RPC, "confirmed");
-    const [pda] = vaultConfigPda(new PublicKey(PROGRAM_ID));
+    const [pda] = await vaultConfigPda(new PublicKey(PROGRAM_ID));
     const acct = await conn.getAccountInfo(pda);
     expect(acct, "vault_config account exists").not.toBeNull();
     const onchain = vaultConfigTeePubkeys(acct!.data).slice().sort();

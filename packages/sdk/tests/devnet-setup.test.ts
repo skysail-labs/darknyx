@@ -39,11 +39,10 @@ import { resolve } from "node:path";
 import { config as dotenvConfig } from "dotenv";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  createInitializeMintInstruction,
-  MINT_SIZE,
-  TOKEN_PROGRAM_ID,
-  getMinimumBalanceForRentExemptMint,
-} from "@solana/spl-token";
+  getInitializeMintInstruction,
+  getMintSize,
+} from "@solana-program/token";
+import { TOKEN_PROGRAM_ID } from "./helpers/e2e-helpers.js";
 import {
   AddressLookupTableProgram,
   Connection,
@@ -140,7 +139,7 @@ function rpcHostLabel(url: string): string {
   }
 }
 
-function loadKeypair(relPath: string): Keypair {
+async function loadKeypair(relPath: string): Promise<Keypair> {
   const abs = resolve(REPO_ROOT, relPath);
   if (!existsSync(abs)) {
     throw new Error(
@@ -148,7 +147,7 @@ function loadKeypair(relPath: string): Keypair {
     );
   }
   const raw = JSON.parse(readFileSync(abs, "utf8")) as number[];
-  return Keypair.fromSecretKey(new Uint8Array(raw));
+  return await Keypair.fromSecretKey(new Uint8Array(raw));
 }
 
 function requireEnv(k: string): string {
@@ -252,7 +251,7 @@ async function tryReadVaultConfig(
   // reclaimed. Only a FUNDED, vault-program-owned account is genuinely
   // initialized — an existence-only check would wrongly skip `initialize` during
   // a re-foundation (VaultConfig layout change) and then fail at reset_merkle_tree.
-  if (!info || info.lamports === 0 || !info.owner.equals(VAULT_PROGRAM_ID)) {
+  if (!info || info.lamports === 0n || !info.owner.equals(VAULT_PROGRAM_ID)) {
     return false;
   }
   if (info.data.length !== VAULT_CONFIG_ACCOUNT_LEN) {
@@ -301,9 +300,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
 
   beforeAll(async () => {
     connection = new Connection(L1_RPC_URL, "confirmed");
-    admin = loadKeypair(requireEnv("ADMIN_KEYPAIR"));
-    tee = loadKeypair(requireEnv("TEE_AUTHORITY_KEYPAIR"));
-    rootKey = loadKeypair(requireEnv("ROOT_KEY_KEYPAIR"));
+    admin = await loadKeypair(requireEnv("ADMIN_KEYPAIR"));
+    tee = await loadKeypair(requireEnv("TEE_AUTHORITY_KEYPAIR"));
+    rootKey = await loadKeypair(requireEnv("ROOT_KEY_KEYPAIR"));
 
     banner("DARKNYX DARKPOOL — DEVNET E2E SETUP");
     bullet(`RPC:                   ${rpcHostLabel(L1_RPC_URL)}`);
@@ -317,8 +316,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     );
 
     const bal = await connection.getBalance(admin.publicKey);
-    bullet(`admin balance:         ${(bal / 1e9).toFixed(4)} SOL`);
-    if (bal < 0.5 * 1e9) {
+    const balSol = Number(bal) / 1e9;
+    bullet(`admin balance:         ${balSol.toFixed(4)} SOL`);
+    if (balSol < 0.5) {
       throw new Error(
         `admin has < 0.5 SOL; fund first via 'solana airdrop 2 ${admin.publicKey.toBase58()}'`,
       );
@@ -335,42 +335,42 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         `Create BASE + QUOTE SPL mints (${DEMO_MINT_DECIMALS} decimals each)`,
       );
       // ────────────────────────────────────────────────────────────────────
-      const baseMint = Keypair.generate();
-      const quoteMint = Keypair.generate();
+      const baseMint = await Keypair.generate();
+      const quoteMint = await Keypair.generate();
       bullet(`BASE mint pubkey:   ${baseMint.publicKey.toBase58()}`);
       bullet(`QUOTE mint pubkey:  ${quoteMint.publicKey.toBase58()}`);
 
-      const rentLamports = await getMinimumBalanceForRentExemptMint(connection);
+      const mintSize = getMintSize();
+      const rentLamports =
+        await connection.getMinimumBalanceForRentExemption(mintSize);
 
       const mintTx = new Transaction().add(
         SystemProgram.createAccount({
           fromPubkey: admin.publicKey,
           newAccountPubkey: baseMint.publicKey,
-          space: MINT_SIZE,
+          space: mintSize,
           lamports: rentLamports,
           programId: TOKEN_PROGRAM_ID,
         }),
-        createInitializeMintInstruction(
-          baseMint.publicKey,
-          DEMO_MINT_DECIMALS,
-          admin.publicKey,
-          null,
-          TOKEN_PROGRAM_ID,
-        ),
+        getInitializeMintInstruction({
+          mint: baseMint.publicKey.toBase58(),
+          decimals: DEMO_MINT_DECIMALS,
+          mintAuthority: admin.publicKey.toBase58(),
+          freezeAuthority: null,
+        }),
         SystemProgram.createAccount({
           fromPubkey: admin.publicKey,
           newAccountPubkey: quoteMint.publicKey,
-          space: MINT_SIZE,
+          space: mintSize,
           lamports: rentLamports,
           programId: TOKEN_PROGRAM_ID,
         }),
-        createInitializeMintInstruction(
-          quoteMint.publicKey,
-          DEMO_MINT_DECIMALS,
-          admin.publicKey,
-          null,
-          TOKEN_PROGRAM_ID,
-        ),
+        getInitializeMintInstruction({
+          mint: quoteMint.publicKey.toBase58(),
+          decimals: DEMO_MINT_DECIMALS,
+          mintAuthority: admin.publicKey.toBase58(),
+          freezeAuthority: null,
+        }),
       );
       const mintSig = await sendAndConfirmTransaction(
         connection,
@@ -389,7 +389,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // would state the default and then silently act on a different number.
       step(2, "Initialise vault_config + Merkle-tree shards (idempotent)");
       // ────────────────────────────────────────────────────────────────────
-      const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
+      const [vaultPda] = await vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
       const alreadyInit = await tryReadVaultConfig(
         connection,
@@ -415,7 +415,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           return raw;
         })();
         const initTx = new Transaction().add(
-          buildInitializeInstruction({
+          await buildInitializeInstruction({
             programId: VAULT_PROGRAM_ID,
             initializer: admin.publicKey,
             operationsAdmin: admin.publicKey,
@@ -440,7 +440,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // before the CVM can settle to any non-zero shard.
       const merkleTreePdas: PublicKey[] = [];
       for (let treeId = 0; treeId < NUM_TREES; treeId++) {
-        const [treePda] = merkleTreePda(VAULT_PROGRAM_ID, treeId);
+        const [treePda] = await merkleTreePda(VAULT_PROGRAM_ID, treeId);
         merkleTreePdas.push(treePda);
         const exists = await connection.getAccountInfo(treePda);
         if (exists) {
@@ -448,7 +448,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           continue;
         }
         const treeTx = new Transaction().add(
-          buildInitializeTreeInstruction({
+          await buildInitializeTreeInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             treeId,
@@ -487,7 +487,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // Idempotent + admin-gated. See programs/vault/src/instructions/reset_merkle_tree.rs.
       for (let treeId = 0; treeId < NUM_TREES; treeId++) {
         const resetTx = new Transaction().add(
-          buildResetMerkleTreeInstruction({
+          await buildResetMerkleTreeInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             treeId,
@@ -518,7 +518,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const ON_CHAIN_TICK_SIZE = 5n;
       const ON_CHAIN_MIN_ORDER_SIZE = 1_000n;
       const ON_CHAIN_CIRCUIT_BREAKER_BPS = 5_000n;
-      const [marketPda] = marketConfigPda(
+      const [marketPda] = await marketConfigPda(
         VAULT_PROGRAM_ID,
         baseMint.publicKey,
         quoteMint.publicKey,
@@ -526,7 +526,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const marketExists = await connection.getAccountInfo(marketPda);
       if (!marketExists) {
         const marketTx = new Transaction().add(
-          buildInitializeMarketInstruction({
+          await buildInitializeMarketInstruction({
             programId: VAULT_PROGRAM_ID,
             admin: admin.publicKey,
             baseMint: baseMint.publicKey,
@@ -546,7 +546,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         tx("initialize_market(base/quote)", marketSig);
       }
       const spcTx = new Transaction().add(
-        buildSetProtocolConfigInstruction({
+        await buildSetProtocolConfigInstruction({
           programId: VAULT_PROGRAM_ID,
           admin: admin.publicKey,
           protocolOwnerCommitment,
@@ -572,7 +572,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // bytes to a 1-byte index. With sharding the worker references its
       // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
       // the Rust static_alt_addresses).
-      const altAddresses = staticSettleAltAddresses(
+      const altAddresses = await staticSettleAltAddresses(
         VAULT_PROGRAM_ID,
         NUM_TREES,
       );
@@ -582,7 +582,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const slot = (await connection.getLatestBlockhashAndContext()).context
         .slot;
       const [createAltIx, settleLookupTable] =
-        AddressLookupTableProgram.createLookupTable({
+        await AddressLookupTableProgram.createLookupTable({
           authority: admin.publicKey,
           payer: admin.publicKey,
           recentSlot: slot,

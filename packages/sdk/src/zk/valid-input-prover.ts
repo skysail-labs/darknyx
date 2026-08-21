@@ -69,7 +69,7 @@ export function onchainRootVerifier(deps: {
     if (!Number.isInteger(treeId) || treeId < 0 || treeId > 255) {
       throw new Error(`tree id must be a u8, got ${treeId}`);
     }
-    const [pda] = merkleTreePda(deps.programId, treeId);
+    const [pda] = await merkleTreePda(deps.programId, treeId);
     // Read at `confirmed`, NOT `finalized`.
     //
     // The vault's own `contains_root` runs against live account state, so

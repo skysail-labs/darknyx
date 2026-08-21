@@ -13,7 +13,7 @@ import type {
 export interface AccountInfoProvider {
   getAccountInfo(
     pubkey: PublicKey,
-  ): Promise<{ data: Buffer; owner: PublicKey } | null>;
+  ): Promise<{ data: Uint8Array; owner: PublicKey } | null>;
 }
 
 export interface TransactionForwarder {

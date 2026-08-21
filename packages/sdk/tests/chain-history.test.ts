@@ -246,7 +246,10 @@ describe("makeConnectionScan", () => {
       },
     } as unknown as Connection;
 
-    const rows = await makeConnectionScan(connection, programId)({
+    const rows = await makeConnectionScan(
+      connection,
+      programId,
+    )({
       sinceSlot: 150,
     });
     expect(requested.map((batch) => batch.length)).toEqual([50, 1]);

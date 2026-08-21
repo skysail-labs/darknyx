@@ -92,10 +92,18 @@ async function buildSlot(args: {
   const I = (idx: number) => BigInt(0xa0a0 + args.slotIdx * 100 + idx);
   const aInner = I(1);
   const bInner = I(2);
-  const cInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(aInner), 0xc1));
-  const dInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(bInner), 0xd1));
-  const eInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(aInner), 0xb1));
-  const fInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(bInner), 0x5e));
+  const cInner = bytesToBigIntBE(
+    await deriveMatchOutputInner(bn254ToBE32(aInner), 0xc1),
+  );
+  const dInner = bytesToBigIntBE(
+    await deriveMatchOutputInner(bn254ToBE32(bInner), 0xd1),
+  );
+  const eInner = bytesToBigIntBE(
+    await deriveMatchOutputInner(bn254ToBE32(aInner), 0xb1),
+  );
+  const fInner = bytesToBigIntBE(
+    await deriveMatchOutputInner(bn254ToBE32(bInner), 0x5e),
+  );
 
   const noteA = await noteCommitmentV2({
     tokenMint: args.quoteMint,
@@ -195,8 +203,12 @@ async function bindFeeNotes(
   const zero = new Uint8Array(32);
   for (const s of slots) {
     s.protocolOwnerCommitment = args.protocolOwner;
-    s.feeBaseInner = bytesToBigIntBE(await deriveMatchFeeInner(s.noteBcommitment, 0xfb));
-    s.feeQuoteInner = bytesToBigIntBE(await deriveMatchFeeInner(s.noteAcommitment, 0xfc));
+    s.feeBaseInner = bytesToBigIntBE(
+      await deriveMatchFeeInner(s.noteBcommitment, 0xfb),
+    );
+    s.feeQuoteInner = bytesToBigIntBE(
+      await deriveMatchFeeInner(s.noteAcommitment, 0xfc),
+    );
     s.noteFeeBaseCommitment =
       s.sellerFeeAmt === 0n
         ? zero
@@ -414,9 +426,7 @@ const ready2 = artefactsReady(2);
     expect(result.publicInputsBE[1]).toEqual(
       await matchConfigDigest({
         feeRateBps: 30n,
-        protocolOwnerCommitment: bn254ToBE32(
-          slots[0].protocolOwnerCommitment,
-        ),
+        protocolOwnerCommitment: bn254ToBE32(slots[0].protocolOwnerCommitment),
         baseMint,
         quoteMint,
         priceScale: 1n,

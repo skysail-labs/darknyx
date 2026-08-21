@@ -38,11 +38,6 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   PublicKey,
   Transaction,
@@ -63,7 +58,12 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import { loadKeypairRel } from "./helpers/e2e-helpers.js";
+import {
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
   makePersona,
@@ -102,12 +102,12 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
       "confirmed",
     );
-    const admin = loadKeypairRel(
+    const admin = await loadKeypairRel(
       REPO_ROOT,
       process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
     );
     const funder = process.env.FUNDER_KEYPAIR
-      ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+      ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
       : admin;
     const vaultProgramId = new PublicKey(cfg.vaultProgramId);
     vaultConfigPda(vaultProgramId); // (assert program id is well-formed)
@@ -161,11 +161,11 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       }
     }
 
-    const buyerQuoteAta = await getAssociatedTokenAddress(
+    const buyerQuoteAta = await associatedTokenAddress(
       quoteMint,
       buyer.payer.publicKey,
     );
-    const sellerBaseAta = await getAssociatedTokenAddress(
+    const sellerBaseAta = await associatedTokenAddress(
       baseMint,
       seller.payer.publicKey,
     );
@@ -178,28 +178,28 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
+        createAtaIdempotentIx(
+          admin,
           buyerQuoteAta,
           buyer.payer.publicKey,
           quoteMint,
         ),
-        createAssociatedTokenAccountIdempotentInstruction(
-          admin.publicKey,
+        createAtaIdempotentIx(
+          admin,
           sellerBaseAta,
           seller.payer.publicKey,
           baseMint,
         ),
-        createMintToInstruction(
+        mintToIx(
           quoteMint,
           buyerQuoteAta,
-          admin.publicKey,
+          admin,
           buyerNoteAmts.reduce((a, b) => a + b, 0n),
         ),
-        createMintToInstruction(
+        mintToIx(
           baseMint,
           sellerBaseAta,
-          admin.publicKey,
+          admin,
           sellerNoteAmts.reduce((a, b) => a + b, 0n),
         ),
       ),
@@ -245,7 +245,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
 
     const slot = await conn.getSlot("confirmed");
     // Production intake caps lock TTLs at 4,500 slots.
-    const expirySlot = BigInt(slot + 3_000);
+    const expirySlot = slot + 3_000n;
     async function buildOrder(
       p: Persona,
       side: OrderSide,

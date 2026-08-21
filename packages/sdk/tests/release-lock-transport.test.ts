@@ -38,9 +38,9 @@ function commitment(fill: number): Uint8Array {
 }
 
 describe("buildReleaseLockInstruction", () => {
-  it("emits disc(8) || note_commitment(32) with no other args", () => {
+  it("emits disc(8) || note_commitment(32) with no other args", async () => {
     const noteUseTag = commitment(0x42);
-    const ix = buildReleaseLockInstruction({
+    const ix = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
       noteUseTag,
@@ -54,14 +54,14 @@ describe("buildReleaseLockInstruction", () => {
     expect(new Uint8Array(ix.data.subarray(8, 40))).toEqual(noteUseTag);
   });
 
-  it("passes exactly [rent_receiver(signer,mut), note_lock(mut)]", () => {
+  it("passes exactly [rent_receiver(signer,mut), note_lock(mut)]", async () => {
     const noteUseTag = commitment(0x07);
-    const ix = buildReleaseLockInstruction({
+    const ix = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
       noteUseTag,
     });
-    const [expectedLock] = noteLockPda(PROGRAM_ID, noteUseTag);
+    const [expectedLock] = await noteLockPda(PROGRAM_ID, noteUseTag);
 
     expect(ix.keys.length).toBe(2);
     // The rent receiver signs and is credited the reclaimed rent — the
@@ -76,13 +76,13 @@ describe("buildReleaseLockInstruction", () => {
     expect(ix.keys[1].isWritable).toBe(true);
   });
 
-  it("derives a distinct lock PDA per note commitment", () => {
-    const a = buildReleaseLockInstruction({
+  it("derives a distinct lock PDA per note commitment", async () => {
+    const a = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
       noteUseTag: commitment(1),
     });
-    const b = buildReleaseLockInstruction({
+    const b = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
       noteUseTag: commitment(2),

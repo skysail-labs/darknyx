@@ -16,6 +16,7 @@ import {
   Transaction,
   type PublicKey,
   type TransactionInstruction,
+  type Blockhash,
 } from "@solana/web3.js";
 import type {
   AccountInfoProvider,
@@ -28,8 +29,8 @@ import type {
 export interface ConnectionLike {
   getAccountInfo(
     pubkey: PublicKey,
-  ): Promise<{ data: Buffer; owner: PublicKey } | null>;
-  getLatestBlockhash(): Promise<{ blockhash: string }>;
+  ): Promise<{ data: Uint8Array; owner: PublicKey } | null>;
+  getLatestBlockhash(): Promise<{ blockhash: Blockhash }>;
   sendRawTransaction(raw: Uint8Array): Promise<string>;
   confirmTransaction(sig: string, commitment?: string): Promise<unknown>;
 }
@@ -71,8 +72,10 @@ export function keypairForwarder(
         : (txOrIxs as Transaction);
       tx.feePayer = payer.publicKey;
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      tx.sign(payer, ...(signers as Keypair[]));
-      const sig = await connection.sendRawTransaction(tx.serialize());
+      // v3: both are async. `sign` MUST complete before `serialize`, or an
+      // unsigned transaction goes on the wire.
+      await tx.sign(payer, ...(signers as Keypair[]));
+      const sig = await connection.sendRawTransaction(await tx.serialize());
       await connection.confirmTransaction(sig, "confirmed");
       return sig;
     },

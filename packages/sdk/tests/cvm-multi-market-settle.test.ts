@@ -23,11 +23,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -70,7 +65,13 @@ import {
   type Persona,
   withFee,
 } from "./helpers/cvm-harness.js";
-import { loadKeypairRel, StepTimer } from "./helpers/e2e-helpers.js";
+import {
+  StepTimer,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 
 interface MarketFixture {
   symbol: string;
@@ -158,17 +159,12 @@ async function mintCollateral(
   mint: PublicKey,
   amount: bigint,
 ): Promise<PublicKey> {
-  const ata = await getAssociatedTokenAddress(mint, persona.payer.publicKey);
+  const ata = await associatedTokenAddress(mint, persona.payer.publicKey);
   await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
-      createAssociatedTokenAccountIdempotentInstruction(
-        admin.publicKey,
-        ata,
-        persona.payer.publicKey,
-        mint,
-      ),
-      createMintToInstruction(mint, ata, admin.publicKey, amount),
+      createAtaIdempotentIx(admin, ata, persona.payer.publicKey, mint),
+      mintToIx(mint, ata, admin, amount),
     ),
     [admin],
     { commitment: "confirmed" },
@@ -191,12 +187,12 @@ maybeDescribe(
         process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
         "confirmed",
       );
-      const admin = loadKeypairRel(
+      const admin = await loadKeypairRel(
         REPO_ROOT,
         process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
       );
       const funder = process.env.FUNDER_KEYPAIR
-        ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+        ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       const programId = new PublicKey(cfg.vaultProgramId);
       vaultConfigPda(programId);
@@ -255,10 +251,12 @@ maybeDescribe(
         ).then(() => undefined),
       );
 
-      const anchors = await timer.step("fetch both finalized Pyth push anchors", () =>
-        Promise.all(
-          cfg.markets.map((market) => fetchAnchor(market.oracleFeedId)),
-        ),
+      const anchors = await timer.step(
+        "fetch both finalized Pyth push anchors",
+        () =>
+          Promise.all(
+            cfg.markets.map((market) => fetchAnchor(market.oracleFeedId)),
+          ),
       );
       const quantities = [
         BigInt((Date.now() % 150_000) + 10_000),
@@ -362,7 +360,7 @@ maybeDescribe(
       expect(depositCount).toBe(5);
 
       const slot = await connection.getSlot("confirmed");
-      const expirySlot = BigInt(slot + 3_000);
+      const expirySlot = slot + 3_000n;
       const baseOrderIndex = Date.now() % 800_000;
 
       async function buildOrder(
@@ -646,7 +644,7 @@ maybeDescribe(
         const signature = await sendAndConfirmTransaction(
           connection,
           new Transaction().add(
-            buildUpdateMarketConfigInstruction({
+            await buildUpdateMarketConfigInstruction({
               programId,
               admin: admin.publicKey,
               baseMint: secondBase,

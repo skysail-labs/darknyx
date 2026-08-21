@@ -85,7 +85,7 @@ const defaultOnchainTeePubkeys: OnchainTeePubkeysReader = async (
 ) => {
   const owner = new PublicKey(programId);
   const conn = new Connection(rpcUrl, "finalized");
-  const [pda] = vaultConfigPda(owner);
+  const [pda] = await vaultConfigPda(owner);
   const acct = await conn.getAccountInfo(pda, "finalized");
   if (acct && !acct.owner.equals(owner)) {
     throw new Error(

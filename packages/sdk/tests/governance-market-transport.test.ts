@@ -15,17 +15,28 @@ import {
   MARKET_CONFIG_ACCOUNT_LEN,
   decodeMarketConfig,
 } from "../src/tee/market-config.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-function discriminator(namespace: "global" | "account", name: string): Buffer {
-  return createHash("sha256")
-    .update(`${namespace}:${name}`)
-    .digest()
-    .subarray(0, 8);
+function discriminator(
+  namespace: "global" | "account",
+  name: string,
+): Uint8Array {
+  return new Uint8Array(
+    createHash("sha256").update(`${namespace}:${name}`).digest().subarray(0, 8),
+  );
 }
+
+// v3 exposes TransactionInstruction.data as a Uint8Array, which has no
+// readUIntLE helpers. Read through a DataView over the same bytes -- note the
+// byteOffset, since `data` may be a view into a larger buffer.
+const u32le = (d: Uint8Array, at: number): number =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getUint32(at, true);
+const u16le = (d: Uint8Array, at: number): number =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getUint16(at, true);
 
 function readU64(data: Uint8Array, offset: number): bigint {
   return new DataView(
@@ -36,15 +47,12 @@ function readU64(data: Uint8Array, offset: number): bigint {
 }
 
 describe("governance initialization transport", () => {
-  it("serializes a distinct operations admin and complete shard signer set", () => {
-    const initializer = Keypair.generate().publicKey;
-    const operationsAdmin = Keypair.generate().publicKey;
-    const teePubkeys = [
-      Keypair.generate().publicKey,
-      Keypair.generate().publicKey,
-    ];
-    const rootKey = Keypair.generate().publicKey;
-    const ix = buildInitializeInstruction({
+  it("serializes a distinct operations admin and complete shard signer set", async () => {
+    const initializer = dummyAddress();
+    const operationsAdmin = dummyAddress();
+    const teePubkeys = [dummyAddress(), dummyAddress()];
+    const rootKey = dummyAddress();
+    const ix = await buildInitializeInstruction({
       programId: PROGRAM_ID,
       initializer,
       operationsAdmin,
@@ -63,28 +71,22 @@ describe("governance initialization transport", () => {
     expect(ix.data.subarray(0, 8)).toEqual(
       discriminator("global", "initialize"),
     );
-    expect(ix.data.subarray(8, 40)).toEqual(
-      Buffer.from(operationsAdmin.toBytes()),
-    );
-    expect(ix.data.readUInt32LE(40)).toBe(2);
-    expect(ix.data.subarray(44, 76)).toEqual(
-      Buffer.from(teePubkeys[0].toBytes()),
-    );
-    expect(ix.data.subarray(76, 108)).toEqual(
-      Buffer.from(teePubkeys[1].toBytes()),
-    );
-    expect(ix.data.subarray(108, 140)).toEqual(Buffer.from(rootKey.toBytes()));
+    expect(ix.data.subarray(8, 40)).toEqual(operationsAdmin.toBytes());
+    expect(u32le(ix.data, 40)).toBe(2);
+    expect(ix.data.subarray(44, 76)).toEqual(teePubkeys[0].toBytes());
+    expect(ix.data.subarray(76, 108)).toEqual(teePubkeys[1].toBytes());
+    expect(ix.data.subarray(108, 140)).toEqual(rootKey.toBytes());
     expect(ix.data[140]).toBe(2);
   });
 
-  it("adds the program and ProgramData accounts for mainnet initialization", () => {
-    const programData = Keypair.generate().publicKey;
-    const ix = buildInitializeInstruction({
+  it("adds the program and ProgramData accounts for mainnet initialization", async () => {
+    const programData = dummyAddress();
+    const ix = await buildInitializeInstruction({
       programId: PROGRAM_ID,
-      initializer: Keypair.generate().publicKey,
-      operationsAdmin: Keypair.generate().publicKey,
-      teePubkeys: [Keypair.generate().publicKey],
-      rootKey: Keypair.generate().publicKey,
+      initializer: dummyAddress(),
+      operationsAdmin: dummyAddress(),
+      teePubkeys: [dummyAddress()],
+      rootKey: dummyAddress(),
       numTrees: 1,
       programData,
     });
@@ -94,48 +96,48 @@ describe("governance initialization transport", () => {
     expect(ix.keys[4].pubkey.equals(SystemProgram.programId)).toBe(true);
   });
 
-  it("rejects default, partial, and duplicate authority sets", () => {
+  it("rejects default, partial, and duplicate authority sets", async () => {
     const common = {
       programId: PROGRAM_ID,
-      initializer: Keypair.generate().publicKey,
-      operationsAdmin: Keypair.generate().publicKey,
-      rootKey: Keypair.generate().publicKey,
+      initializer: dummyAddress(),
+      operationsAdmin: dummyAddress(),
+      rootKey: dummyAddress(),
       numTrees: 2,
     };
-    const tee = Keypair.generate().publicKey;
-    expect(() =>
+    const tee = dummyAddress();
+    await expect(
       buildInitializeInstruction({ ...common, teePubkeys: [tee] }),
-    ).toThrow(/must equal numTrees/);
-    expect(() =>
+    ).rejects.toThrow(/must equal numTrees/);
+    await expect(
       buildInitializeInstruction({ ...common, teePubkeys: [tee, tee] }),
-    ).toThrow(/non-default, unique/);
-    expect(() =>
+    ).rejects.toThrow(/non-default, unique/);
+    await expect(
       buildInitializeInstruction({
         ...common,
         operationsAdmin: PublicKey.default,
-        teePubkeys: [tee, Keypair.generate().publicKey],
+        teePubkeys: [tee, dummyAddress()],
       }),
-    ).toThrow(/operationsAdmin/);
-    expect(() =>
+    ).rejects.toThrow(/operationsAdmin/);
+    await expect(
       buildInitializeInstruction({
         ...common,
         operationsAdmin: common.rootKey,
-        teePubkeys: [tee, Keypair.generate().publicKey],
+        teePubkeys: [tee, dummyAddress()],
       }),
-    ).toThrow(/distinct from rootKey/);
-    expect(() =>
+    ).rejects.toThrow(/distinct from rootKey/);
+    await expect(
       buildInitializeInstruction({
         ...common,
         teePubkeys: [common.operationsAdmin, tee],
       }),
-    ).toThrow(/distinct from governance keys/);
+    ).rejects.toThrow(/distinct from governance keys/);
   });
 });
 
 describe("MarketConfig transport", () => {
-  const admin = Keypair.generate().publicKey;
-  const baseMint = Keypair.generate().publicKey;
-  const quoteMint = Keypair.generate().publicKey;
+  const admin = dummyAddress();
+  const baseMint = dummyAddress();
+  const quoteMint = dummyAddress();
   const market = {
     programId: PROGRAM_ID,
     admin,
@@ -147,9 +149,9 @@ describe("MarketConfig transport", () => {
     circuitBreakerBps: 5_000n,
   };
 
-  it("pins the PDA, account ordering, and initialize/update wire layouts", () => {
-    const [marketPda] = marketConfigPda(PROGRAM_ID, baseMint, quoteMint);
-    const init = buildInitializeMarketInstruction(market);
+  it("pins the PDA, account ordering, and initialize/update wire layouts", async () => {
+    const [marketPda] = await marketConfigPda(PROGRAM_ID, baseMint, quoteMint);
+    const init = await buildInitializeMarketInstruction(market);
     expect(init.keys).toHaveLength(6);
     expect(init.keys[2].pubkey.equals(baseMint)).toBe(true);
     expect(init.keys[3].pubkey.equals(quoteMint)).toBe(true);
@@ -163,7 +165,7 @@ describe("MarketConfig transport", () => {
     expect(readU64(init.data, 24)).toBe(1_000n);
     expect(readU64(init.data, 32)).toBe(5_000n);
 
-    const update = buildUpdateMarketConfigInstruction({
+    const update = await buildUpdateMarketConfigInstruction({
       ...market,
       enabled: false,
     });
@@ -177,9 +179,9 @@ describe("MarketConfig transport", () => {
     expect(readU64(update.data, 9)).toBe(100_000_000n);
   });
 
-  it("separates protocol fee wire data from market parameters", () => {
+  it("separates protocol fee wire data from market parameters", async () => {
     const owner = new Uint8Array(32).fill(7);
-    const protocol = buildSetProtocolConfigInstruction({
+    const protocol = await buildSetProtocolConfigInstruction({
       programId: PROGRAM_ID,
       admin,
       protocolOwnerCommitment: owner,
@@ -189,23 +191,23 @@ describe("MarketConfig transport", () => {
     expect(protocol.data.subarray(0, 8)).toEqual(
       discriminator("global", "set_protocol_config"),
     );
-    expect(protocol.data.subarray(8, 40)).toEqual(Buffer.from(owner));
-    expect(protocol.data.readUInt16LE(40)).toBe(30);
+    expect(protocol.data.subarray(8, 40)).toEqual(new Uint8Array(owner));
+    expect(u16le(protocol.data, 40)).toBe(30);
   });
 
-  it("requires valid bounded parameters and distinct mints", () => {
-    expect(() =>
+  it("requires valid bounded parameters and distinct mints", async () => {
+    await expect(
       buildInitializeMarketInstruction({ ...market, priceScale: 0n }),
-    ).toThrow(/invalid market parameters/);
-    expect(() =>
+    ).rejects.toThrow(/invalid market parameters/);
+    await expect(
       buildInitializeMarketInstruction({
         ...market,
         circuitBreakerBps: 10_001n,
       }),
-    ).toThrow(/invalid market parameters/);
-    expect(() =>
+    ).rejects.toThrow(/invalid market parameters/);
+    await expect(
       buildInitializeMarketInstruction({ ...market, quoteMint: baseMint }),
-    ).toThrow(/must be distinct/);
+    ).rejects.toThrow(/must be distinct/);
   });
 
   it("decodes the exact 108-byte Anchor account layout", () => {
@@ -241,43 +243,43 @@ describe("MarketConfig transport", () => {
 });
 
 describe("TEE signer rotation transport", () => {
-  it("serializes exactly numTrees unique keys", () => {
-    const keys = [Keypair.generate().publicKey, Keypair.generate().publicKey];
-    const ix = buildSetTeePubkeyInstruction({
+  it("serializes exactly numTrees unique keys", async () => {
+    const keys = [dummyAddress(), dummyAddress()];
+    const ix = await buildSetTeePubkeyInstruction({
       programId: PROGRAM_ID,
-      admin: Keypair.generate().publicKey,
+      admin: dummyAddress(),
       teePubkeys: keys,
       numTrees: 2,
     });
-    expect(ix.data.readUInt32LE(8)).toBe(2);
+    expect(u32le(ix.data, 8)).toBe(2);
     expect(ix.data).toHaveLength(8 + 4 + 64);
-    expect(() =>
+    await expect(
       buildSetTeePubkeyInstruction({
         programId: PROGRAM_ID,
-        admin: Keypair.generate().publicKey,
+        admin: dummyAddress(),
         teePubkeys: [keys[0]],
         numTrees: 2,
       }),
-    ).toThrow(/exactly numTrees/);
+    ).rejects.toThrow(/exactly numTrees/);
   });
 });
 
 describe("root rotation transport", () => {
-  it("rejects default and no-op successors before submission", () => {
-    const currentRootKey = Keypair.generate().publicKey;
-    expect(() =>
+  it("rejects default and no-op successors before submission", async () => {
+    const currentRootKey = dummyAddress();
+    await expect(
       buildRotateRootKeyInstruction({
         programId: PROGRAM_ID,
         currentRootKey,
         newRootKey: PublicKey.default,
       }),
-    ).toThrow(/non-default and different/);
-    expect(() =>
+    ).rejects.toThrow(/non-default and different/);
+    await expect(
       buildRotateRootKeyInstruction({
         programId: PROGRAM_ID,
         currentRootKey,
         newRootKey: currentRootKey,
       }),
-    ).toThrow(/non-default and different/);
+    ).rejects.toThrow(/non-default and different/);
   });
 });

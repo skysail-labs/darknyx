@@ -37,7 +37,8 @@ import {
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 // `num_trees` byte offset inside VaultConfig data (after the 8-byte Anchor
@@ -46,26 +47,40 @@ const VAULT = new PublicKey(
 // + num_tee_keys(1) = 1259.
 const NUM_TREES_OFFSET = 8 + 32 + 16 * 32 + 32 + 20 * 32 + 32 + 2 + 1;
 
-const admin = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))));
+const admin = await Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
+);
 const conn = new Connection(RPC, "confirmed");
-const [vaultConfig] = PublicKey.findProgramAddressSync([Buffer.from("vault_config")], VAULT);
+const [vaultConfig] = await PublicKey.findProgramAddress(
+  [Buffer.from("vault_config")],
+  VAULT,
+);
 
-const merkleTreePda = (treeId) =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from("merkle_tree"), Buffer.from([treeId & 0xff])],
-    VAULT,
+const merkleTreePda = async (treeId) =>
+  (
+    await PublicKey.findProgramAddress(
+      [Buffer.from("merkle_tree"), Buffer.from([treeId & 0xff])],
+      VAULT,
+    )
   )[0];
 
 // Anchor ix discriminator = sha256("global:reset_merkle_tree")[..8].
-const disc = createHash("sha256").update("global:reset_merkle_tree").digest().subarray(0, 8);
+const disc = createHash("sha256")
+  .update("global:reset_merkle_tree")
+  .digest()
+  .subarray(0, 8);
 
-function resetIx(treeId) {
+async function resetIx(treeId) {
   return new TransactionInstruction({
     programId: VAULT,
     keys: [
       { pubkey: admin.publicKey, isSigner: true, isWritable: false },
       { pubkey: vaultConfig, isSigner: false, isWritable: false },
-      { pubkey: merkleTreePda(treeId), isSigner: false, isWritable: true },
+      {
+        pubkey: await merkleTreePda(treeId),
+        isSigner: false,
+        isWritable: true,
+      },
     ],
     // data = disc(8) || tree_id(1)
     data: Buffer.concat([disc, Buffer.from([treeId & 0xff])]),
@@ -87,15 +102,22 @@ if (treeFlag !== -1) {
   // --all (default): read num_trees from vault_config.
   const info = await conn.getAccountInfo(vaultConfig);
   if (!info) {
-    console.error(`vault_config not found at ${vaultConfig.toBase58()} — is the program initialised?`);
+    console.error(
+      `vault_config not found at ${vaultConfig.toBase58()} — is the program initialised?`,
+    );
     process.exit(1);
   }
-  const numTrees = info.data.length > NUM_TREES_OFFSET ? info.data[NUM_TREES_OFFSET] : 1;
+  const numTrees =
+    info.data.length > NUM_TREES_OFFSET ? info.data[NUM_TREES_OFFSET] : 1;
   treeIds = Array.from({ length: Math.max(1, numTrees) }, (_, i) => i);
 }
 
 for (const treeId of treeIds) {
-  const sig = await sendAndConfirmTransaction(conn, new Transaction().add(resetIx(treeId)), [admin]);
+  const sig = await sendAndConfirmTransaction(
+    conn,
+    new Transaction().add(await resetIx(treeId)),
+    [admin],
+  );
   console.log(`reset_merkle_tree(tree ${treeId}) ok: ${sig}`);
 }
 console.log(`  vault   = ${VAULT.toBase58()}`);

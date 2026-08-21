@@ -1,13 +1,41 @@
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  findAssociatedTokenPda,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { pubkeyToFrPair } from "@darknyx/sdk/browser-inventory-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// ATA derivation is async under `@solana-program/token` and returns a
+// kit-branded Address string; the assertions here compare against the v3
+// `Address` class the SDK produces.
+async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
 
 import { BrowserVault } from "../src/index.js";
 import {
   AccountOperationError,
   BrowserAccountOperations,
 } from "../src/internal.js";
+
+// v3 made `Keypair.generate()` async, and this call site only ever wanted a
+// unique opaque address -- the secret key was discarded. Keep it synchronous.
+// Counter starts at 1 so the result is never the all-zero default address.
+let dummyAddressCounter = 0;
+function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
 
 const be32 = (value: bigint): Uint8Array => {
   const out = new Uint8Array(32);
@@ -36,13 +64,13 @@ class ReplyWorker {
   terminate(): void {}
 }
 
-function withdrawalHarness(outcome: "finalized" | "ambiguous") {
-  const mint = Keypair.generate().publicKey;
-  const wallet = Keypair.generate().publicKey;
+async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
+  const mint = dummyAddress();
+  const wallet = dummyAddress();
   const root = new Uint8Array(32).fill(3);
   const tag = new Uint8Array(32).fill(4);
   const nullifier = new Uint8Array(32).fill(5);
-  const destination = getAssociatedTokenAddressSync(mint, wallet);
+  const destination = await associatedTokenAddress(mint, wallet);
   const commitment = "06".repeat(32);
   const note = {
     commitment,
@@ -153,12 +181,12 @@ describe("browser account operations", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps an exact-note reservation when wallet broadcast is uncertain", async () => {
-    const mint = Keypair.generate().publicKey;
-    const wallet = Keypair.generate().publicKey;
+    const mint = dummyAddress();
+    const wallet = dummyAddress();
     const root = new Uint8Array(32).fill(3);
     const tag = new Uint8Array(32).fill(4);
     const nullifier = new Uint8Array(32).fill(5);
-    const destination = getAssociatedTokenAddressSync(mint, wallet);
+    const destination = await associatedTokenAddress(mint, wallet);
     const commitment = "06".repeat(32);
     const note = {
       commitment,
@@ -292,7 +320,7 @@ describe("browser account operations", () => {
   });
 
   it("consumes the reserved note only after finalized withdrawal", async () => {
-    const fixture = withdrawalHarness("finalized");
+    const fixture = await withdrawalHarness("finalized");
     await expect(
       fixture.operations.withdraw({
         tokenMint: fixture.mint.toBase58(),
@@ -308,7 +336,7 @@ describe("browser account operations", () => {
   });
 
   it("retains the reserved note when withdrawal finality is ambiguous", async () => {
-    const fixture = withdrawalHarness("ambiguous");
+    const fixture = await withdrawalHarness("ambiguous");
     await expect(
       fixture.operations.withdraw({
         tokenMint: fixture.mint.toBase58(),

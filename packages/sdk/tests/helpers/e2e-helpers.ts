@@ -13,8 +13,36 @@ import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction,
+  getMintToInstruction,
+  AccountState,
+  getTokenDecoder,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 
 import { anchorDiscriminator } from "../../src/idl/vault-client.js";
+import { slotToNumber } from "../../src/types/slot.js";
+
+// ── Unique throwaway addresses for tests ───────────────────────────────────
+// v3 made `Keypair.generate()` async (WebCrypto), so the old
+// `Keypair.generate().publicKey` shorthand for "some unique address" would
+// force `await` into tests that are otherwise synchronous -- and it always
+// discarded the secret key anyway. `dummyAddress()` is the sync replacement.
+//
+// Use it ONLY where the address is an opaque identity (account-ordering
+// assertions, PDA seeds, config fields). Anything that has to SIGN needs a
+// real `await Keypair.generate()`.
+//
+// The counter starts at 1, so a dummy address is never `PublicKey.default`
+// (all-zero) -- several builders reject that explicitly.
+let dummyAddressCounter = 0;
+export function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
 
 // ── Role tags for deterministic note derivation in the test relayer ─────────
 // `CHANGE_ROLE_*` must match the Rust constants in
@@ -22,6 +50,103 @@ import { anchorDiscriminator } from "../../src/idl/vault-client.js";
 // CHANGE_ROLE_SELLER = 0x5E). That crate is the single source of truth for the
 // role tags; the pointer here used to name a program that no longer exists,
 // which is a bad place for a parity contract to send a reader.
+// ── SPL-token boundary (@solana-program/token) ─────────────────────────────
+// `@solana/spl-token` peer-depends on web3.js v1 and cannot coexist with v3,
+// so the token surface moved to `@solana-program/token`. That client speaks
+// kit-branded Address STRINGS, while the vault SDK and Connection speak the
+// v3 `Address` class. These three helpers own that conversion so the rule
+// lives in one place instead of at every call site:
+//
+//   builder boundary            -> `.toBase58()` (the kit branded string)
+//   SDK / Connection boundary   -> `new PublicKey(...)` (the v3 class)
+//
+// `payer` and `mintAuthority` take the KEYPAIR, never its address. A v3
+// Keypair satisfies kit's TransactionSigner; a bare Address type-checks for
+// `mintAuthority` but emits a non-signer account meta, and the mint then
+// fails on-chain for a reason the types never hinted at.
+
+/**
+ * The classic Token program id as the v3 `Address` class.
+ *
+ * `TOKEN_PROGRAM_ADDRESS` is a kit-branded string; the vault SDK's
+ * `tokenProgramId` fields want the class. Same name and type as the old
+ * spl-token export, so call sites are unchanged.
+ */
+export const TOKEN_PROGRAM_ID = new PublicKey(TOKEN_PROGRAM_ADDRESS);
+
+/**
+ * Decoded SPL token account. Replaces spl-token's `getAccount`, including its
+ * behaviour of REJECTING when the account does not exist -- callers rely on
+ * that (`.catch(() => 0n)` for a not-yet-created ATA), and returning null
+ * instead would silently turn a missing account into a passing assertion.
+ */
+export async function getTokenAccount(
+  connection: Connection,
+  address: PublicKey,
+) {
+  const info = await connection.getAccountInfo(address);
+  if (info === null) {
+    throw new Error(`token account ${address.toBase58()} not found`);
+  }
+  // spl-token's getAccount checked ownership and initialisation before
+  // decoding. The raw decoder does not: any account whose data happens to be
+  // token-shaped decodes cleanly, and an Uninitialized account decodes to a
+  // zero balance -- which would read as a legitimate "0 tokens" assertion.
+  if (!info.owner.equals(TOKEN_PROGRAM_ID)) {
+    throw new Error(
+      `account ${address.toBase58()} is not owned by the token program`,
+    );
+  }
+  const decoded = getTokenDecoder().decode(info.data);
+  if (decoded.state === AccountState.Uninitialized) {
+    throw new Error(`token account ${address.toBase58()} is uninitialized`);
+  }
+  return decoded;
+}
+
+/** ATA for (mint, owner), returned as the v3 class the SDK expects. */
+export async function associatedTokenAddress(
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<PublicKey> {
+  const [ata] = await findAssociatedTokenPda({
+    mint: mint.toBase58(),
+    owner: owner.toBase58(),
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
+  return new PublicKey(ata);
+}
+
+/** Idempotent create-ATA. `payer` must be the signing Keypair. */
+export function createAtaIdempotentIx(
+  payer: Keypair,
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+) {
+  return getCreateAssociatedTokenIdempotentInstruction({
+    payer,
+    ata: ata.toBase58(),
+    owner: owner.toBase58(),
+    mint: mint.toBase58(),
+  });
+}
+
+/** mint_to. `mintAuthority` must be the signing Keypair -- see note above. */
+export function mintToIx(
+  mint: PublicKey,
+  token: PublicKey,
+  mintAuthority: Keypair,
+  amount: bigint | number,
+) {
+  return getMintToInstruction({
+    mint: mint.toBase58(),
+    token: token.toBase58(),
+    mintAuthority,
+    amount,
+  });
+}
+
 export const CHANGE_ROLE_BUYER = 0xb1;
 export const CHANGE_ROLE_SELLER = 0x5e;
 
@@ -87,20 +212,23 @@ export function u64ToBe32(x: bigint): Uint8Array {
 }
 
 /** Load a Solana keypair from a JSON array file. */
-export function loadKeypairFile(absPath: string): Keypair {
+export async function loadKeypairFile(absPath: string): Promise<Keypair> {
   if (!existsSync(absPath)) throw new Error(`keypair missing: ${absPath}`);
   const raw = JSON.parse(readFileSync(absPath, "utf8")) as number[];
-  return Keypair.fromSecretKey(new Uint8Array(raw));
+  return await Keypair.fromSecretKey(new Uint8Array(raw));
 }
 
-export function loadKeypairRel(repoRoot: string, relPath: string): Keypair {
-  return loadKeypairFile(resolve(repoRoot, relPath));
+export async function loadKeypairRel(
+  repoRoot: string,
+  relPath: string,
+): Promise<Keypair> {
+  return await loadKeypairFile(resolve(repoRoot, relPath));
 }
 
 /** Load a keypair from an absolute path, expanding a leading `~` to `$HOME`. */
-export function loadKeypairFileExpand(p: string): Keypair {
+export async function loadKeypairFileExpand(p: string): Promise<Keypair> {
   if (p.startsWith("~/") || p === "~") p = p.replace(/^~/, homedir());
-  return loadKeypairFile(p);
+  return await loadKeypairFile(p);
 }
 
 /** Save a Solana keypair as a JSON array (Solana-CLI-compatible). */
@@ -110,9 +238,9 @@ export function saveKeypairFile(absPath: string, kp: Keypair): void {
 }
 
 /** Load a keypair from disk if it exists, else generate a fresh one + persist. */
-export function loadOrCreateKeypair(absPath: string): Keypair {
-  if (existsSync(absPath)) return loadKeypairFile(absPath);
-  const kp = Keypair.generate();
+export async function loadOrCreateKeypair(absPath: string): Promise<Keypair> {
+  if (existsSync(absPath)) return await loadKeypairFile(absPath);
+  const kp = await Keypair.generate();
   saveKeypairFile(absPath, kp);
   return kp;
 }
@@ -272,8 +400,8 @@ export async function fetchSettleTimeline(
     rows.push({
       stage,
       signature: s.signature,
-      slot: s.slot,
-      blockTimeMs: s.blockTime != null ? s.blockTime * 1000 : null,
+      slot: slotToNumber(s.slot),
+      blockTimeMs: s.blockTime != null ? Number(s.blockTime) * 1000 : null,
     });
   }
   return rows.reverse(); // oldest → newest

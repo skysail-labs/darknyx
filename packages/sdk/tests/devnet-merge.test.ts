@@ -25,13 +25,6 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-  getAccount,
-  getAssociatedTokenAddress,
-} from "@solana/spl-token";
 
 import {
   deriveSpendingKey,
@@ -54,7 +47,16 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToDec, be32ToBigInt, StepTimer } from "./helpers/e2e-helpers.js";
+import {
+  StepTimer,
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  be32ToBigInt,
+  be32ToDec,
+  createAtaIdempotentIx,
+  getTokenAccount,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
@@ -83,7 +85,8 @@ const DEPOSIT_ZKEY = resolve(
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -95,8 +98,8 @@ const READY =
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
-function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(
+async function loadKp(rel: string): Promise<Keypair> {
+  return await Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
   );
 }
@@ -116,9 +119,9 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     const A0 = 3_000_000n;
     const A1 = 2_000_000n;
@@ -136,11 +139,11 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const t = new StepTimer();
 
     // ── 1. reset → deposit two notes at leaves 0,1 ──
-    await t.step("reset_merkle_tree", () =>
+    await t.step("reset_merkle_tree", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          buildResetMerkleTreeInstruction({
+          await buildResetMerkleTreeInstruction({
             programId: VAULT_ID,
             admin: admin.publicKey,
             treeId: 0,
@@ -150,7 +153,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         { commitment: "confirmed" },
       ),
     );
-    const [treePda] = merkleTreePda(VAULT_ID, 0);
+    const [treePda] = await merkleTreePda(VAULT_ID, 0);
     expect(
       leafCount((await conn.getAccountInfo(treePda))!),
       "tree empty after reset",
@@ -193,19 +196,14 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         ownerCommitmentBlinding: ownerBlinding,
         noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
       });
-      await t.step(`deposit note ${i}`, () =>
+      await t.step(`deposit note ${i}`, async () =>
         sendAndConfirmTransaction(
           conn,
           new Transaction().add(
             ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-            createAssociatedTokenAccountIdempotentInstruction(
-              admin.publicKey,
-              ata,
-              admin.publicKey,
-              mint,
-            ),
-            createMintToInstruction(mint, ata, admin.publicKey, amount),
-            buildDepositInstruction({
+            createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+            mintToIx(mint, ata, admin, amount),
+            await buildDepositInstruction({
               programId: VAULT_ID,
               treeId: 0,
               depositor: admin.publicKey,
@@ -251,12 +249,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         slots,
       }),
     );
-    const mergeSig = await t.step("merge ix submit + confirm", () =>
+    const mergeSig = await t.step("merge ix submit + confirm", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-          buildMergeInstruction({
+          await buildMergeInstruction({
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,
@@ -314,17 +312,17 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       ),
     );
 
-    const balBefore = (await getAccount(conn, ata)).amount;
+    const balBefore = (await getTokenAccount(conn, ata)).amount;
     const mergedUseTag = await deriveNoteUseTag(
       mergeRes.outputCommitmentBE,
       bn254ToBE32(mergeRes.outputInnerHash),
     );
-    await t.step("withdraw ix submit + confirm", () =>
+    await t.step("withdraw ix submit + confirm", async () =>
       sendAndConfirmTransaction(
         conn,
         new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-          buildWithdrawInstruction({
+          await buildWithdrawInstruction({
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,
@@ -344,7 +342,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     );
 
     // The merged note was spendable for the FULL consolidated amount.
-    const balAfter = (await getAccount(conn, ata)).amount;
+    const balAfter = (await getTokenAccount(conn, ata)).amount;
     expect(balAfter - balBefore).toBe(SUM);
     console.log(`  · withdrew the merged note — ${SUM} tokens round-tripped`);
     t.report("devnet-merge: deposit×2 → MERGE(K=2) → withdraw");

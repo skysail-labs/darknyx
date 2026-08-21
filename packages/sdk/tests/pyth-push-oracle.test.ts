@@ -28,15 +28,15 @@ const fixture = (account: PublicKey): Buffer => {
 };
 
 describe("Pyth upgraded Core push accounts", () => {
-  it("derives the official shard-0 SOL/USD account", () => {
-    expect(derivePythCorePushAccount(FEED).toBase58()).toBe(
+  it("derives the official shard-0 SOL/USD account", async () => {
+    expect((await derivePythCorePushAccount(FEED)).toBase58()).toBe(
       "7AviUf9nL62mcxNbQGKm4nKDQnPjswo6c5MX4D57HmyE",
     );
   });
 
-  it("decodes only the pinned owner, feed, authority, and finalized slot", () => {
-    const account = derivePythCorePushAccount(FEED);
-    const decoded = decodePythCorePushAccount({
+  it("decodes only the pinned owner, feed, authority, and finalized slot", async () => {
+    const account = await derivePythCorePushAccount(FEED);
+    const decoded = await decodePythCorePushAccount({
       data: fixture(account),
       owner: PYTH_CORE_RECEIVER_PROGRAM_ID,
       account,
@@ -46,7 +46,7 @@ describe("Pyth upgraded Core push accounts", () => {
     expect(decoded.emaPrice).toBe(14_900_000_000n);
     expect(decoded.postedSlot).toBe(900n);
 
-    expect(() =>
+    await expect(
       decodePythCorePushAccount({
         data: fixture(account),
         owner: new PublicKey(new Uint8Array(32).fill(7)),
@@ -54,8 +54,8 @@ describe("Pyth upgraded Core push accounts", () => {
         feedId: FEED,
         contextSlot: 1_000,
       }),
-    ).toThrow(/owner/);
-    expect(() =>
+    ).rejects.toThrow(/owner/);
+    await expect(
       decodePythCorePushAccount({
         data: fixture(account),
         owner: PYTH_CORE_RECEIVER_PROGRAM_ID,
@@ -63,10 +63,10 @@ describe("Pyth upgraded Core push accounts", () => {
         feedId: FEED,
         contextSlot: 899,
       }),
-    ).toThrow(/finalized RPC context/);
+    ).rejects.toThrow(/finalized RPC context/);
 
     const impostor = new PublicKey(new Uint8Array(32).fill(8));
-    expect(() =>
+    await expect(
       decodePythCorePushAccount({
         data: fixture(impostor),
         owner: PYTH_CORE_RECEIVER_PROGRAM_ID,
@@ -74,6 +74,6 @@ describe("Pyth upgraded Core push accounts", () => {
         feedId: FEED,
         contextSlot: 1_000,
       }),
-    ).toThrow(/feed-derived PDA/);
+    ).rejects.toThrow(/feed-derived PDA/);
   });
 });

@@ -92,17 +92,17 @@ marketData.writeBigUInt64LE(MIN, o);
 o += 8;
 marketData.writeBigUInt64LE(CB, o);
 
-const admin = Keypair.fromSecretKey(
+const admin = await Keypair.fromSecretKey(
   new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
 );
-const [vaultPda] = PublicKey.findProgramAddressSync(
+const [vaultPda] = await PublicKey.findProgramAddress(
   [Buffer.from("vault_config")],
   VAULT,
 );
 const baseMint = new PublicKey(cfg.baseMint.pubkey);
 const quoteMint = new PublicKey(cfg.quoteMint.pubkey);
-const [marketPda] = PublicKey.findProgramAddressSync(
-  [Buffer.from("market_config"), baseMint.toBuffer(), quoteMint.toBuffer()],
+const [marketPda] = await PublicKey.findProgramAddress(
+  [Buffer.from("market_config"), baseMint.toBytes(), quoteMint.toBytes()],
   VAULT,
 );
 if (marketPda.toBase58() !== cfg.marketConfigPda) {

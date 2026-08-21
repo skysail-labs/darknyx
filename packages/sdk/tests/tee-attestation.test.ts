@@ -10,10 +10,11 @@ import {
   replayEventLogRtmr,
   verifyTeeAttestation,
 } from "../src/index.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const BASE = "https://gw.example";
-const teeKp = Keypair.generate();
-const kp1 = Keypair.generate();
+const teeKp = await Keypair.generate();
+const kp1 = await Keypair.generate();
 const TEE_B58 = teeKp.publicKey.toBase58();
 const COMPOSE = "c0ffeec0ffee";
 const MRTD = "aa".repeat(48);
@@ -195,7 +196,7 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
       verifyTeeAttestation(BASE, COMPOSE, {
         quoteVerifier: goodVerifier(),
         fetchImpl: fakeFetch(),
-        expectedTeePubkey: Keypair.generate().publicKey.toBase58(),
+        expectedTeePubkey: dummyAddress().toBase58(),
       }),
     ).rejects.toMatchObject({ kind: "pubkey_mismatch" });
   });

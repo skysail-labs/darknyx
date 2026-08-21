@@ -12,6 +12,7 @@ import {
   onchainRootVerifier,
   parseMerkleRootRing,
 } from "../src/zk/valid-input-prover.js";
+import { dummyAddress } from "./helpers/e2e-helpers.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -127,8 +128,7 @@ describe("onchainRootVerifier (C-09)", () => {
 
   it("rejects an account owned by a different program", async () => {
     const verify = onchainRootVerifier({
-      connection: mockConn(mtAccount(r(0x11), []), Keypair.generate().publicKey)
-        .connection,
+      connection: mockConn(mtAccount(r(0x11), []), dummyAddress()).connection,
       programId: PROGRAM_ID,
     });
     await expect(verify(r(0x11), 0)).rejects.toThrow(/owned by/);

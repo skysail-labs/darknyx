@@ -187,23 +187,29 @@ describe("control-api — routes", () => {
   });
 
   it("POST /orders maps the body and places", async () => {
-    const r = await fetch(`${base}/orders`, authed({
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        note_commitment: NOTE.commitment,
-        price_limit: 100,
+    const r = await fetch(
+      `${base}/orders`,
+      authed({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          note_commitment: NOTE.commitment,
+          price_limit: 100,
+        }),
       }),
-    }));
+    );
     const body = (await r.json()) as { order_id: string; arrival_slot: number };
     expect(body.arrival_slot).toBe(9);
     expect(daemon.placeOrder).toHaveBeenCalledOnce();
   });
 
   it("DELETE /orders/:id cancels", async () => {
-    const r = await fetch(`${base}/orders/${ORDER.orderId}`, authed({
-      method: "DELETE",
-    }));
+    const r = await fetch(
+      `${base}/orders/${ORDER.orderId}`,
+      authed({
+        method: "DELETE",
+      }),
+    );
     expect(await r.json()).toEqual({ ok: true });
     expect(daemon.cancelOrder).toHaveBeenCalledWith(ORDER.orderId);
   });
@@ -220,7 +226,9 @@ describe("control-api — routes", () => {
   });
 
   it("proxies the read-only TEE surface under /tee/*", async () => {
-    const acct = (await (await fetch(`${base}/tee/account`, authed())).json()) as {
+    const acct = (await (
+      await fetch(`${base}/tee/account`, authed())
+    ).json()) as {
       account_id: string;
     };
     expect(acct.account_id).toBe("acct");
@@ -229,11 +237,15 @@ describe("control-api — routes", () => {
       await fetch(`${base}/tee/instruments/SOL-USDC`, authed())
     ).json()) as { symbol: string };
     expect(inst.symbol).toBe("SOL-USDC");
-    const sett = (await (await fetch(`${base}/tee/settlement/42`, authed())).json()) as {
+    const sett = (await (
+      await fetch(`${base}/tee/settlement/42`, authed())
+    ).json()) as {
       batch_id: string;
     };
     expect(String(sett.batch_id)).toBe("42");
-    const t = (await (await fetch(`${base}/tee/transparency`, authed())).json()) as {
+    const t = (await (
+      await fetch(`${base}/tee/transparency`, authed())
+    ).json()) as {
       leaf_count: number;
     };
     expect(t.leaf_count).toBe(7);
@@ -248,9 +260,12 @@ describe("control-api — auth", () => {
     expect((await fetch(`${base}/health`, authed())).status).toBe(401);
   });
   it("allows with the bearer token", async () => {
-    const r = await fetch(`${base}/health`, authed({
-      headers: { authorization: "Bearer secret" },
-    }));
+    const r = await fetch(
+      `${base}/health`,
+      authed({
+        headers: { authorization: "Bearer secret" },
+      }),
+    );
     expect(r.status).toBe(200);
   });
 });
@@ -325,7 +340,9 @@ describe("control-api — browser defences (SW-19)", () => {
       headers: { origin: "https://evil.example" },
     });
     expect(r.status).toBe(403);
-    expect((await r.json()) as unknown).toEqual({ error: "origin_not_allowed" });
+    expect((await r.json()) as unknown).toEqual({
+      error: "origin_not_allowed",
+    });
   });
 
   it("refuses a cross-site Sec-Fetch-Site", async () => {
@@ -360,7 +377,10 @@ describe("control-api — browser defences (SW-19)", () => {
         authorization: `Bearer ${TEST_TOKEN}`,
         "content-type": "text/plain",
       },
-      body: JSON.stringify({ note_commitment: NOTE.commitment, price_limit: 100 }),
+      body: JSON.stringify({
+        note_commitment: NOTE.commitment,
+        price_limit: 100,
+      }),
     });
     expect(r.status).toBe(415);
     expect(daemon.placeOrder).not.toHaveBeenCalled();
@@ -396,7 +416,9 @@ describe("control-api — input and error hygiene (SW-20)", () => {
     // DARKNYX_DAEMON_RPC_URL, whose Helius key rides in the query string, and a
     // Solana transport error typically embeds the request URL in its message.
     daemon.placeOrder.mockRejectedValueOnce(
-      new Error("connect ECONNREFUSED https://rpc.example/?api-key=SUPERSECRET"),
+      new Error(
+        "connect ECONNREFUSED https://rpc.example/?api-key=SUPERSECRET",
+      ),
     );
     const r = await fetch(
       `${base}/orders`,

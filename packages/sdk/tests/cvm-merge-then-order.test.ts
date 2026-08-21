@@ -29,11 +29,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   ComputeBudgetProgram,
   Connection,
   Keypair,
@@ -62,9 +57,12 @@ import {
 } from "../src/orders/canonical.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import {
-  be32ToBigInt,
-  loadKeypairRel,
   StepTimer,
+  associatedTokenAddress,
+  be32ToBigInt,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
 } from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
@@ -121,12 +119,12 @@ maybeDescribe(
         process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
         "confirmed",
       );
-      admin = loadKeypairRel(
+      admin = await loadKeypairRel(
         REPO_ROOT,
         process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
       );
       funder = process.env.FUNDER_KEYPAIR
-        ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+        ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
         : admin;
       vaultProgramId = new PublicKey(cfg.vaultProgramId);
       baseMint = new PublicKey(cfg.baseMint.pubkey);
@@ -155,7 +153,8 @@ maybeDescribe(
         // Q (= ask qty). The merged note must equal withFee(Q) so it exactly
         // covers the ask's fee-inclusive collateral. Per-run-unique commitments.
         const Q = BigInt(
-          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 200_000) + 2000),
+          process.env.DARKNYX_CVM_BASE_QTY ??
+            String((Date.now() % 200_000) + 2000),
         );
         const mergedAmt = withFee(Q); // = A0 + A1
         const A1 = mergedAmt / 2n;
@@ -188,57 +187,47 @@ maybeDescribe(
           }
         });
 
-        const sellerBaseAta = await getAssociatedTokenAddress(
+        const sellerBaseAta = await associatedTokenAddress(
           baseMint,
           seller.payer.publicKey,
         );
-        const buyerQuoteAta = await getAssociatedTokenAddress(
+        const buyerQuoteAta = await associatedTokenAddress(
           quoteMint,
           buyer.payer.publicKey,
         );
 
         // ── 2. mint collateral: seller's two base notes + buyer's quote note ──
-        await t.step("mint collateral", () =>
+        await t.step("mint collateral", async () =>
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 sellerBaseAta,
                 seller.payer.publicKey,
                 baseMint,
               ),
-              createAssociatedTokenAccountIdempotentInstruction(
-                admin.publicKey,
+              createAtaIdempotentIx(
+                admin,
                 buyerQuoteAta,
                 buyer.payer.publicKey,
                 quoteMint,
               ),
-              createMintToInstruction(
-                baseMint,
-                sellerBaseAta,
-                admin.publicKey,
-                A0 + A1,
-              ),
-              createMintToInstruction(
-                quoteMint,
-                buyerQuoteAta,
-                admin.publicKey,
-                buyerNoteAmt,
-              ),
+              mintToIx(baseMint, sellerBaseAta, admin, A0 + A1),
+              mintToIx(quoteMint, buyerQuoteAta, admin, buyerNoteAmt),
             ),
             [admin],
           ),
         );
 
         // ── 3. deposit (all to shard 0 for deterministic merge witness) ──
-        const sellerNote0 = await t.step("deposit seller note 0", () =>
+        const sellerNote0 = await t.step("deposit seller note 0", async () =>
           harness.deposit(seller, baseMint, sellerBaseAta, A0, 0),
         );
-        const sellerNote1 = await t.step("deposit seller note 1", () =>
+        const sellerNote1 = await t.step("deposit seller note 1", async () =>
           harness.deposit(seller, baseMint, sellerBaseAta, A1, 0),
         );
-        const buyerNote = await t.step("deposit buyer note", () =>
+        const buyerNote = await t.step("deposit buyer note", async () =>
           harness.deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt, 0),
         );
         expect(await harness.leafCount()).toBe(3);
@@ -248,7 +237,7 @@ maybeDescribe(
         const w0 = await shadow.witness(sellerNote0.leafIndex);
         const w1 = await shadow.witness(sellerNote1.leafIndex);
         const root = await shadow.computeRoot();
-        const mergeRes = await t.step("VALID_MERGE prove (K=2)", () =>
+        const mergeRes = await t.step("VALID_MERGE prove (K=2)", async () =>
           proveValidMerge({
             repoRoot: REPO_ROOT,
             k: 2,
@@ -272,12 +261,12 @@ maybeDescribe(
             ],
           }),
         );
-        const mergeSig = await t.step("merge ix submit", () =>
+        const mergeSig = await t.step("merge ix submit", async () =>
           sendAndConfirmTransaction(
             conn,
             new Transaction().add(
               ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-              buildMergeInstruction({
+              await buildMergeInstruction({
                 programId: vaultProgramId,
                 treeId: 0,
                 payer: seller.payer.publicKey,
@@ -318,7 +307,7 @@ maybeDescribe(
           "VALID_INPUT prove seller (merged note)",
           () => harness.viProof(REPO_ROOT, seller, mergedNote),
         );
-        const buyerVI = await t.step("VALID_INPUT prove buyer", () =>
+        const buyerVI = await t.step("VALID_INPUT prove buyer", async () =>
           harness.viProof(REPO_ROOT, buyer, buyerNote),
         );
 
@@ -327,7 +316,7 @@ maybeDescribe(
         // Production intake caps lock TTLs at 4,500 slots. Keep the live
         // fixture comfortably inside that boundary so it exercises settlement
         // instead of the intended long-expiry rejection path.
-        const expirySlot = BigInt(slot + 3_000);
+        const expirySlot = slot + 3_000n;
         const bootSessionId = await fetchBootSessionId(GATEWAY);
         async function buildOrder(
           p: Persona,
@@ -415,8 +404,9 @@ maybeDescribe(
             );
           return r.status;
         }
-        const sAsk = await t.step("submit ask (merged-note collateral)", () =>
-          submit(sellerOrder),
+        const sAsk = await t.step(
+          "submit ask (merged-note collateral)",
+          async () => submit(sellerOrder),
         );
         const sBid = await t.step("submit bid", () => submit(buyerOrder));
         expect(String(sAsk).startsWith("2"), `ask rejected (${sAsk})`).toBe(

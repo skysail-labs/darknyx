@@ -23,12 +23,6 @@ import {
   ComputeBudgetProgram,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
 
 import { DarkPoolClient } from "../src/client.js";
 import { getDepositFunction } from "../src/utxo/deposit.js";
@@ -43,6 +37,12 @@ import type { MergeInputs, Groth16ProofBytes } from "../src/zk/prover-suite.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
+import {
+  TOKEN_PROGRAM_ID,
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -59,7 +59,8 @@ const DEPOSIT_ZKEY = resolve(
   "circuits/build/valid_deposit/circuit_final.zkey",
 );
 const VAULT_ID = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const READY =
@@ -70,8 +71,8 @@ const READY =
   existsSync(MERGE_ZKEY);
 const d = READY ? describe : describe.skip;
 
-function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(
+async function loadKp(rel: string): Promise<Keypair> {
+  return await Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
   );
 }
@@ -81,7 +82,7 @@ async function onChainLeafCount(
   conn: Connection,
   treeId: number,
 ): Promise<bigint> {
-  const [treePda] = merkleTreePda(VAULT_ID, treeId);
+  const [treePda] = await merkleTreePda(VAULT_ID, treeId);
   const info = await conn.getAccountInfo(treePda, "confirmed");
   if (!info) throw new Error(`merkle_tree shard ${treeId} not found`);
   return new DataView(
@@ -96,9 +97,9 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
-    const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
+    const ata = await associatedTokenAddress(mint, admin.publicKey);
 
     // Deterministic per-run keys (admin is the only signer on devnet).
     const masterSeed = new Uint8Array(64).map((_, i) => (i * 31 + 7) & 0xff);
@@ -111,7 +112,7 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({
+        await buildResetMerkleTreeInstruction({
           programId: VAULT_ID,
           admin: admin.publicKey,
           treeId: 0,
@@ -223,13 +224,8 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
       await sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
-            ata,
-            admin.publicKey,
-            mint,
-          ),
-          createMintToInstruction(mint, ata, admin.publicKey, amount),
+          createAtaIdempotentIx(admin, ata, admin.publicKey, mint),
+          mintToIx(mint, ata, admin, amount),
         ),
         [admin],
         { commitment: "confirmed" },

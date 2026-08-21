@@ -11,6 +11,7 @@ import {
   Transaction,
   TransactionInstruction,
   SystemProgram,
+  type Blockhash,
 } from "@solana/web3.js";
 
 import {
@@ -20,8 +21,20 @@ import {
   type ConnectionLike,
 } from "../src/solana-providers.js";
 
+// v3 made `Keypair.generate()` async, and this call site only ever wanted a
+// unique opaque address -- the secret key was discarded. Keep it synchronous.
+// Counter starts at 1 so the result is never the all-zero default address.
+let dummyAddressCounter = 0;
+function dummyAddress(): PublicKey {
+  const bytes = new Uint8Array(32);
+  new DataView(bytes.buffer).setUint32(0, ++dummyAddressCounter, true);
+  return new PublicKey(bytes);
+}
+
 // A valid 32-byte base58 string (a pubkey) standing in for a blockhash.
-const BLOCKHASH = Keypair.generate().publicKey.toBase58();
+// A blockhash is base58 like an address but carries a different brand in v3;
+// this is a mock value, so assert the brand rather than derive it.
+const BLOCKHASH = dummyAddress().toBase58() as unknown as Blockhash;
 
 function fakeConnection(
   overrides: Partial<ConnectionLike> = {},
@@ -74,11 +87,11 @@ describe("accountInfoProvider", () => {
 
 describe("keypairForwarder", () => {
   it("sets the fee-payer, signs, and send→confirms an instruction list", async () => {
-    const payer = Keypair.generate();
+    const payer = await Keypair.generate();
     const conn = fakeConnection();
     const ix: TransactionInstruction = SystemProgram.transfer({
       fromPubkey: payer.publicKey,
-      toPubkey: Keypair.generate().publicKey,
+      toPubkey: dummyAddress(),
       lamports: 1,
     });
 

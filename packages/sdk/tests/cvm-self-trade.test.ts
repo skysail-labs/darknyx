@@ -37,11 +37,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createMintToInstruction,
-} from "@solana/spl-token";
-import {
   Connection,
   Keypair,
   PublicKey,
@@ -63,7 +58,12 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import { loadKeypairRel } from "./helpers/e2e-helpers.js";
+import {
+  associatedTokenAddress,
+  createAtaIdempotentIx,
+  loadKeypairRel,
+  mintToIx,
+} from "./helpers/e2e-helpers.js";
 import {
   CvmHarness,
   makePersona,
@@ -93,7 +93,9 @@ const maybeDescribe = READY ? describe : describe.skip;
 // How long to watch for a (forbidden) self-match before concluding it was
 // correctly prevented. The matcher ticks within seconds; a generous window
 // keeps the negative assertion robust without waiting a full settle timeout.
-const NO_MATCH_WINDOW_MS = Number(process.env.DARKNYX_CVM_NO_MATCH_MS ?? "25000");
+const NO_MATCH_WINDOW_MS = Number(
+  process.env.DARKNYX_CVM_NO_MATCH_MS ?? "25000",
+);
 // How long to wait for the positive-control cross-owner settle to land.
 const SETTLE_TIMEOUT_MS = Number(
   process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "90000",
@@ -116,12 +118,12 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
       "confirmed",
     );
-    admin = loadKeypairRel(
+    admin = await loadKeypairRel(
       REPO_ROOT,
       process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
     );
     funder = process.env.FUNDER_KEYPAIR
-      ? loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
+      ? await loadKeypairRel(REPO_ROOT, process.env.FUNDER_KEYPAIR)
       : admin;
     vaultProgramId = new PublicKey(cfg.vaultProgramId);
     baseMint = new PublicKey(cfg.baseMint.pubkey);
@@ -135,7 +137,8 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
     "refuses to match a same-owner crossing pair, then matches a cross-owner ask",
     async () => {
       const QTY = BigInt(
-        process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+        process.env.DARKNYX_CVM_BASE_QTY ??
+          String((Date.now() % 250_000) + 1000),
       );
       const N = Number(
         process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
@@ -181,57 +184,42 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       //    taker needs a BASE note (its crossing ask) ─────────────────────
       const bidNoteAmt = withFee(scaledQuote(QTY, bidPrice, PRICE_SCALE)); // quote
       const askNoteAmt = withFee(QTY); // base
-      const selfQuoteAta = await getAssociatedTokenAddress(
+      const selfQuoteAta = await associatedTokenAddress(
         quoteMint,
         self_.payer.publicKey,
       );
-      const selfBaseAta = await getAssociatedTokenAddress(
+      const selfBaseAta = await associatedTokenAddress(
         baseMint,
         self_.payer.publicKey,
       );
-      const takerBaseAta = await getAssociatedTokenAddress(
+      const takerBaseAta = await associatedTokenAddress(
         baseMint,
         taker.payer.publicKey,
       );
       await sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             selfQuoteAta,
             self_.payer.publicKey,
             quoteMint,
           ),
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             selfBaseAta,
             self_.payer.publicKey,
             baseMint,
           ),
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey,
+          createAtaIdempotentIx(
+            admin,
             takerBaseAta,
             taker.payer.publicKey,
             baseMint,
           ),
-          createMintToInstruction(
-            quoteMint,
-            selfQuoteAta,
-            admin.publicKey,
-            bidNoteAmt,
-          ),
-          createMintToInstruction(
-            baseMint,
-            selfBaseAta,
-            admin.publicKey,
-            askNoteAmt,
-          ),
-          createMintToInstruction(
-            baseMint,
-            takerBaseAta,
-            admin.publicKey,
-            askNoteAmt,
-          ),
+          mintToIx(quoteMint, selfQuoteAta, admin, bidNoteAmt),
+          mintToIx(baseMint, selfBaseAta, admin, askNoteAmt),
+          mintToIx(baseMint, takerBaseAta, admin, askNoteAmt),
         ),
         [admin],
       );
@@ -264,7 +252,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
 
       const slot = await conn.getSlot("confirmed");
       // Production intake caps lock TTLs at 4,500 slots.
-      const expirySlot = BigInt(slot + 3_000);
+      const expirySlot = slot + 3_000n;
       const bootSessionId = await fetchBootSessionId(GATEWAY);
 
       // Build a signed limit-order body (a plain-limit subset of the settle

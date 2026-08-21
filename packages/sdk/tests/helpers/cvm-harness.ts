@@ -25,7 +25,7 @@ import { TransportVerificationError } from "../../src/tee/verify-transport.js";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "./e2e-helpers.js";
 import {
   Connection,
   ComputeBudgetProgram,
@@ -90,7 +90,10 @@ function cvmCredential(name: string, localFixture: string): string {
 /** Live CVM credentials are generated per test window and injected through the
  * encrypted deploy env. Public fixture defaults remain only for non-live local
  * simulator tests. See docs/cvm-run-runbook.md. */
-export const API_KEY = cvmCredential("DARKNYX_TEE_API_KEY", "darknyx-test-api-key");
+export const API_KEY = cvmCredential(
+  "DARKNYX_TEE_API_KEY",
+  "darknyx-test-api-key",
+);
 export const API_SECRET = cvmCredential(
   "DARKNYX_TEE_API_SECRET",
   "darknyx-test-secret",
@@ -101,7 +104,9 @@ export const PASSPHRASE = cvmCredential(
 );
 
 /** Protocol fee bps — MUST match the CVM's DARKNYX_TEE_FEE_RATE_BPS (default 30). */
-export const FEE_RATE_BPS = BigInt(process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30");
+export const FEE_RATE_BPS = BigInt(
+  process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30",
+);
 
 /** Per-run salt so persona seed-derived commitments are fresh each run — a
  * fixed seed can reproduce a deposited/consumed-note PDA on a second run,
@@ -187,17 +192,15 @@ async function getTransport(): Promise<typeof fetch> {
           "a channel to some enclave, not the governed one",
       );
     }
-    const { TransportAgent, createVerifiedFetch } = await import(
-      "../../src/tee/transport-agent.node.js"
-    );
+    const { TransportAgent, createVerifiedFetch } =
+      await import("../../src/tee/transport-agent.node.js");
     const { parseEventLog } = await import("../../src/tee/verify-core.js");
     const { createDcapQuoteVerifier } = await import("../../src/tee/dcap.js");
     const { randomBytes } = await import("node:crypto");
     const dcap = createDcapQuoteVerifier({});
     const agent = new TransportAgent();
-    const { verifyTransportOnSocket } = await import(
-      "../../src/tee/transport-agent.node.js"
-    );
+    const { verifyTransportOnSocket } =
+      await import("../../src/tee/transport-agent.node.js");
     const verifyDeps = {
       verifyQuote: (quoteHex: string) =>
         dcap(
@@ -262,9 +265,8 @@ export async function gwWebSocket(url: string): Promise<SendableWebSocketLike> {
         "an ungated stream",
     );
   }
-  const { createVerifiedWebSocketFactory } = await import(
-    "../../src/tee/transport-ws.node.js"
-  );
+  const { createVerifiedWebSocketFactory } =
+    await import("../../src/tee/transport-ws.node.js");
   return createVerifiedWebSocketFactory({
     verifiedSpkiSha256: verifiedSpki,
     // `rejectUnauthorized: false` is safe ONLY because the SPKI gate below is
@@ -327,7 +329,9 @@ export async function gwFetch(
 export async function fetchBootSessionId(gateway: string): Promise<Uint8Array> {
   const response = await gwFetch(`${gateway.replace(/\/$/, "")}/info`);
   if (!response.ok) {
-    throw new Error(`/info returned ${response.status}: ${await response.text()}`);
+    throw new Error(
+      `/info returned ${response.status}: ${await response.text()}`,
+    );
   }
   const body = (await response.json()) as { boot_session_id?: string };
   if (!body.boot_session_id?.match(/^[0-9a-f]{64}$/i)) {
@@ -337,8 +341,11 @@ export async function fetchBootSessionId(gateway: string): Promise<Uint8Array> {
 }
 
 /** Fetch the finalized upgraded Pyth Core push EMA the CVM uses in dev mode. */
-export async function fetchOracleAnchorForFeed(feedId: string): Promise<bigint> {
-  if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
+export async function fetchOracleAnchorForFeed(
+  feedId: string,
+): Promise<bigint> {
+  if (process.env.DARKNYX_CVM_PRICE)
+    return BigInt(process.env.DARKNYX_CVM_PRICE);
   const rpc = process.env.SOLANA_RPC_URL?.trim();
   if (!rpc) throw new Error("SOLANA_RPC_URL is required for Pyth push prices");
   const price = await fetchPythCorePushPrice(
@@ -395,10 +402,10 @@ export async function makePersona(
   name: string,
   seed0: number,
 ): Promise<Persona> {
-  const payer = loadOrCreateKeypair(
+  const payer = await loadOrCreateKeypair(
     resolve(repoRoot, `.devnet/keypairs/${name}-payer.json`),
   );
-  const trading = loadOrCreateKeypair(
+  const trading = await loadOrCreateKeypair(
     resolve(repoRoot, `.devnet/keypairs/${name}-trading.json`),
   );
   const masterSeed = new Uint8Array(64);
@@ -465,7 +472,7 @@ export class CvmHarness {
   async leafCount(): Promise<number> {
     let total = 0;
     for (let treeId = 0; treeId < this.numTrees; treeId++) {
-      const [pda] = merkleTreePda(this.vaultProgramId, treeId);
+      const [pda] = await merkleTreePda(this.vaultProgramId, treeId);
       const info = await this.conn.getAccountInfo(pda);
       if (!info)
         throw new Error(
@@ -522,7 +529,7 @@ export class CvmHarness {
       ownerCommitmentBlinding: p.ownerBlinding,
       noteSecret: deriveNoteSecret(p.masterSeed, recoveryNonceBytes),
     });
-    const ix = buildDepositInstruction({
+    const ix = await buildDepositInstruction({
       programId: this.vaultProgramId,
       treeId,
       depositor: p.payer.publicKey,
@@ -542,7 +549,11 @@ export class CvmHarness {
       ),
       [p.payer],
     );
-    const recovered = await readNoteCreated(this.conn, sig, this.vaultProgramId);
+    const recovered = await readNoteCreated(
+      this.conn,
+      sig,
+      this.vaultProgramId,
+    );
     await this.shadows[recovered.treeId].append(commitment);
     console.log(
       `  · ${p.name} deposited shard ${recovered.treeId} leaf ${recovered.leafIndex} (${sig.slice(0, 8)}…)`,
