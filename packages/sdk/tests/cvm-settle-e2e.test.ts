@@ -104,6 +104,7 @@ import {
   type DepositedNote,
 } from "./helpers/cvm-harness.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
+import { slotToNumber } from "../src/types/slot.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -245,7 +246,7 @@ maybeDescribe(
           "tree not empty — run devnet-setup (reset) first",
         ).toBe(0);
         const recoveryFloorSlot = CHAIN_RECOVERY
-          ? await conn.getSlot("finalized")
+          ? slotToNumber(await conn.getSlot("finalized"))
           : undefined;
 
         // For the cross-batch re-match we need a 2nd ask, so a 3rd deposit
@@ -391,7 +392,7 @@ maybeDescribe(
         // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it
         // and the settle-time lock_note doesn't hit the cap. Far more than the
         // ~90 s the test needs, with margin for TEE/client slot-view skew.
-        const expirySlot = BigInt(slot + 3_000);
+        const expirySlot = slot + 3_000n;
         const bootSessionId = await fetchBootSessionId(GATEWAY);
 
         async function buildOrder(
@@ -497,7 +498,7 @@ maybeDescribe(
           buyerVI,
           ORDER_N + 777, // distinct order id
           BASE_QTY,
-          BigInt(slot + 100_000), // ≫ MAX_LOCK_TTL_SLOTS (~4_500)
+          slot + 100_000n, // ≫ MAX_LOCK_TTL_SLOTS (~4_500)
         );
         const overCapResp = await t.step(
           "F-05: over-cap expiry rejected at intake",

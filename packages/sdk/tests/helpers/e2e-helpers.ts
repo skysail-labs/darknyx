@@ -22,6 +22,7 @@ import {
 } from "@solana-program/token";
 
 import { anchorDiscriminator } from "../../src/idl/vault-client.js";
+import { slotToNumber } from "../../src/types/slot.js";
 
 // ── Unique throwaway addresses for tests ───────────────────────────────────
 // v3 made `Keypair.generate()` async (WebCrypto), so the old
@@ -385,8 +386,8 @@ export async function fetchSettleTimeline(
     rows.push({
       stage,
       signature: s.signature,
-      slot: s.slot,
-      blockTimeMs: s.blockTime != null ? s.blockTime * 1000 : null,
+      slot: slotToNumber(s.slot),
+      blockTimeMs: s.blockTime != null ? Number(s.blockTime) * 1000 : null,
     });
   }
   return rows.reverse(); // oldest → newest

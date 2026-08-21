@@ -14,7 +14,6 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
-import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getDepositFunction } from "../src/utxo/deposit.js";
 import { DarkPoolError } from "../src/errors.js";
@@ -36,6 +35,14 @@ import {
   vaultConfigPda,
   merkleTreePda,
 } from "../src/idl/vault-client.js";
+
+// v3 exposes TransactionInstruction.data as a Uint8Array. These assertions
+// used to cast it to a node Buffer -- a cast the compiler trusts and the
+// runtime does not, which is why they typechecked and then failed on
+// `.equals` / `.readBigUInt64LE`. Read through a DataView instead, and
+// compare Uint8Array to Uint8Array.
+const u64le = (d: Uint8Array, at: number): bigint =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(at, true);
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -199,16 +206,16 @@ describe("getDepositFunction", () => {
     const ix = ixs[0];
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
     // Discriminator check.
-    const disc = Buffer.from(anchorDiscriminator("deposit"));
-    expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
+    const disc = anchorDiscriminator("deposit");
+    expect(ix.data.subarray(0, 8)).toEqual(disc);
     // [1] vault_config (read-only), [2] merkle_tree[0] (the leaf-append shard).
     const [vaultPda] = await vaultConfigPda(PROGRAM_ID);
     expect(ix.keys[1].pubkey.toBase58()).toBe(vaultPda.toBase58());
     const [treePda] = await merkleTreePda(PROGRAM_ID, 0);
     expect(ix.keys[2].pubkey.toBase58()).toBe(treePda.toBase58());
     // tree_id(1) at offset 8, then amount (u64 LE) at offset 9.
-    expect((ix.data as NodeBuffer)[8]).toBe(0);
-    expect((ix.data as NodeBuffer).readBigUInt64LE(9)).toBe(1_000_000n);
+    expect(ix.data[8]).toBe(0);
+    expect(u64le(ix.data, 9)).toBe(1_000_000n);
     expect(ix.data).toHaveLength(337);
     expect(Buffer.from(ix.data.subarray(17, 49))).toEqual(
       Buffer.from(receipt.noteCommitment),

@@ -16,6 +16,7 @@ import {
   Transaction,
   type PublicKey,
   type TransactionInstruction,
+  type Blockhash,
 } from "@solana/web3.js";
 import type {
   AccountInfoProvider,
@@ -28,8 +29,8 @@ import type {
 export interface ConnectionLike {
   getAccountInfo(
     pubkey: PublicKey,
-  ): Promise<{ data: Buffer; owner: PublicKey } | null>;
-  getLatestBlockhash(): Promise<{ blockhash: string }>;
+  ): Promise<{ data: Uint8Array; owner: PublicKey } | null>;
+  getLatestBlockhash(): Promise<{ blockhash: Blockhash }>;
   sendRawTransaction(raw: Uint8Array): Promise<string>;
   confirmTransaction(sig: string, commitment?: string): Promise<unknown>;
 }

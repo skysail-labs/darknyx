@@ -266,7 +266,9 @@ async function ensureFunded(
   target: PublicKey,
   minSol = 0.5,
 ): Promise<void> {
-  const have = await conn.getBalance(target, "confirmed");
+  // v3 getBalance returns Lamports (bigint); this arithmetic is in SOL-scale
+  // numbers, so narrow at the call.
+  const have = Number(await conn.getBalance(target, "confirmed"));
   const need = minSol * LAMPORTS_PER_SOL;
   if (have >= need) return;
   await sendAndConfirmTransaction(
@@ -362,7 +364,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
   // and the CVM evaluating the order, so asking for exactly 4500 would be
   // intermittently over.
   async function futureExpiry(): Promise<bigint> {
-    return BigInt((await conn.getSlot("confirmed")) + 4_000);
+    return (await conn.getSlot("confirmed")) + 4_000n;
   }
 
   // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──

@@ -1,5 +1,6 @@
 // Public SDK exports (TEE-v3 surface).
 export * from "./errors.js";
+export * from "./types/slot.js";
 export * from "./providers.js";
 export * from "./keys/key-generators.js";
 export * from "./keys/master-seed-backup.js";

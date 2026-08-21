@@ -360,7 +360,7 @@ maybeDescribe(
       expect(depositCount).toBe(5);
 
       const slot = await connection.getSlot("confirmed");
-      const expirySlot = BigInt(slot + 3_000);
+      const expirySlot = slot + 3_000n;
       const baseOrderIndex = Date.now() % 800_000;
 
       async function buildOrder(

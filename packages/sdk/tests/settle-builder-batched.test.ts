@@ -256,8 +256,14 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
     // The match_index byte is the ONLY difference between the three ixs.
-    const dropMatchByte = (d: Buffer): Buffer =>
-      Buffer.concat([d.subarray(0, off), d.subarray(off + 1)]);
+    // v3 ix.data is a Uint8Array, so splice through Uint8Array rather than
+    // Buffer.concat -- `toEqual` distinguishes the two constructors.
+    const dropMatchByte = (d: Uint8Array): Uint8Array => {
+      const out = new Uint8Array(d.length - 1);
+      out.set(d.subarray(0, off), 0);
+      out.set(d.subarray(off + 1), off);
+      return out;
+    };
     expect(dropMatchByte(ix0.data)).toEqual(dropMatchByte(ix7.data));
     expect(dropMatchByte(ix0.data)).toEqual(dropMatchByte(ix15.data));
   });

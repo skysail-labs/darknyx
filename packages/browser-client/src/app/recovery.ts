@@ -11,6 +11,7 @@ import type {
   TrustedVenueSession,
   VenueReleaseConfig,
 } from "../venue/types.js";
+import { slotToNumber } from "@darknyx/sdk";
 
 export type VenueRecovery = (
   vault: BrowserVault,
@@ -60,7 +61,7 @@ export function createVenueRecovery(
           transactions.length > 0
             ? Math.max(...transactions.map((transaction) => transaction.slot)) +
               1
-            : (await connection.getSlot("finalized")) + 1;
+            : slotToNumber(await connection.getSlot("finalized")) + 1;
         sinceSlot = Math.max(sinceSlot, nextFloor);
         resolve({
           fullScan: floor === release.recoveryStartSlot,

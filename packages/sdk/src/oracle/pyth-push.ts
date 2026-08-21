@@ -1,4 +1,5 @@
 import { Connection, PublicKey } from "@solana/web3.js";
+import { slotToNumber } from "../types/slot.js";
 
 export const PYTH_CORE_RECEIVER_PROGRAM_ID = new PublicKey(
   "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
@@ -132,6 +133,6 @@ export async function fetchPythCorePushPrice(
     owner: response.value.owner,
     account,
     feedId,
-    contextSlot: response.context.slot,
+    contextSlot: slotToNumber(response.context.slot),
   });
 }

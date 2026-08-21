@@ -345,7 +345,7 @@ export async function buildInitializeInstruction(
   return new TransactionInstruction({
     programId: p.programId,
     keys,
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -407,7 +407,7 @@ export async function buildInitializeMarketInstruction(
       { pubkey: marketPda, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -448,7 +448,7 @@ export async function buildUpdateMarketConfigInstruction(
       { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: marketPda, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -483,7 +483,7 @@ export async function buildInitializeTreeInstruction(
       { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -519,7 +519,7 @@ export async function buildSetProtocolConfigInstruction(
       { pubkey: p.admin, isSigner: true, isWritable: false },
       { pubkey: vaultPda, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -572,7 +572,7 @@ export async function buildSetTeePubkeyInstruction(
       { pubkey: p.admin, isSigner: true, isWritable: false },
       { pubkey: vaultPda, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -605,7 +605,7 @@ export async function buildResetMerkleTreeInstruction(
       { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: merkleTree, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -635,7 +635,7 @@ export async function buildRotateRootKeyInstruction(
       { pubkey: p.currentRootKey, isSigner: true, isWritable: false },
       { pubkey: vaultPda, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -665,7 +665,7 @@ export async function buildCreateWalletInstruction(
       { pubkey: walletPda, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -726,7 +726,7 @@ export async function buildDepositInstruction(
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: rentSysvar, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -868,7 +868,7 @@ export async function buildReleaseLockInstruction(
       { pubkey: p.rentReceiver, isSigner: true, isWritable: true },
       { pubkey: noteLock, isSigner: false, isWritable: true },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -917,7 +917,7 @@ export async function buildLockNoteInstruction(
       { pubkey: consumedNote, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -963,7 +963,7 @@ export async function buildWithdrawInstruction(
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -1020,7 +1020,7 @@ export async function buildVerifyMatchBatchInstruction(
       { pubkey: marker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Buffer.from(data),
+    data,
   });
 }
 
@@ -1121,6 +1121,6 @@ export async function buildMergeInstruction(
         isWritable: false,
       })),
     ],
-    data: Buffer.from(data),
+    data,
   });
 }

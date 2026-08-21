@@ -251,7 +251,7 @@ async function tryReadVaultConfig(
   // reclaimed. Only a FUNDED, vault-program-owned account is genuinely
   // initialized — an existence-only check would wrongly skip `initialize` during
   // a re-foundation (VaultConfig layout change) and then fail at reset_merkle_tree.
-  if (!info || info.lamports === 0 || !info.owner.equals(VAULT_PROGRAM_ID)) {
+  if (!info || info.lamports === 0n || !info.owner.equals(VAULT_PROGRAM_ID)) {
     return false;
   }
   if (info.data.length !== VAULT_CONFIG_ACCOUNT_LEN) {
@@ -316,8 +316,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     );
 
     const bal = await connection.getBalance(admin.publicKey);
-    bullet(`admin balance:         ${(bal / 1e9).toFixed(4)} SOL`);
-    if (bal < 0.5 * 1e9) {
+    const balSol = Number(bal) / 1e9;
+    bullet(`admin balance:         ${balSol.toFixed(4)} SOL`);
+    if (balSol < 0.5) {
       throw new Error(
         `admin has < 0.5 SOL; fund first via 'solana airdrop 2 ${admin.publicKey.toBase58()}'`,
       );

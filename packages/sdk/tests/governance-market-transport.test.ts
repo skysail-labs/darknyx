@@ -21,12 +21,22 @@ const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-function discriminator(namespace: "global" | "account", name: string): Buffer {
-  return createHash("sha256")
-    .update(`${namespace}:${name}`)
-    .digest()
-    .subarray(0, 8);
+function discriminator(
+  namespace: "global" | "account",
+  name: string,
+): Uint8Array {
+  return new Uint8Array(
+    createHash("sha256").update(`${namespace}:${name}`).digest().subarray(0, 8),
+  );
 }
+
+// v3 exposes TransactionInstruction.data as a Uint8Array, which has no
+// readUIntLE helpers. Read through a DataView over the same bytes -- note the
+// byteOffset, since `data` may be a view into a larger buffer.
+const u32le = (d: Uint8Array, at: number): number =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getUint32(at, true);
+const u16le = (d: Uint8Array, at: number): number =>
+  new DataView(d.buffer, d.byteOffset, d.byteLength).getUint16(at, true);
 
 function readU64(data: Uint8Array, offset: number): bigint {
   return new DataView(
@@ -61,17 +71,11 @@ describe("governance initialization transport", () => {
     expect(ix.data.subarray(0, 8)).toEqual(
       discriminator("global", "initialize"),
     );
-    expect(ix.data.subarray(8, 40)).toEqual(
-      Buffer.from(operationsAdmin.toBytes()),
-    );
-    expect(ix.data.readUInt32LE(40)).toBe(2);
-    expect(ix.data.subarray(44, 76)).toEqual(
-      Buffer.from(teePubkeys[0].toBytes()),
-    );
-    expect(ix.data.subarray(76, 108)).toEqual(
-      Buffer.from(teePubkeys[1].toBytes()),
-    );
-    expect(ix.data.subarray(108, 140)).toEqual(Buffer.from(rootKey.toBytes()));
+    expect(ix.data.subarray(8, 40)).toEqual(operationsAdmin.toBytes());
+    expect(u32le(ix.data, 40)).toBe(2);
+    expect(ix.data.subarray(44, 76)).toEqual(teePubkeys[0].toBytes());
+    expect(ix.data.subarray(76, 108)).toEqual(teePubkeys[1].toBytes());
+    expect(ix.data.subarray(108, 140)).toEqual(rootKey.toBytes());
     expect(ix.data[140]).toBe(2);
   });
 
@@ -187,8 +191,8 @@ describe("MarketConfig transport", () => {
     expect(protocol.data.subarray(0, 8)).toEqual(
       discriminator("global", "set_protocol_config"),
     );
-    expect(protocol.data.subarray(8, 40)).toEqual(Buffer.from(owner));
-    expect(protocol.data.readUInt16LE(40)).toBe(30);
+    expect(protocol.data.subarray(8, 40)).toEqual(new Uint8Array(owner));
+    expect(u16le(protocol.data, 40)).toBe(30);
   });
 
   it("requires valid bounded parameters and distinct mints", async () => {
@@ -247,7 +251,7 @@ describe("TEE signer rotation transport", () => {
       teePubkeys: keys,
       numTrees: 2,
     });
-    expect(ix.data.readUInt32LE(8)).toBe(2);
+    expect(u32le(ix.data, 8)).toBe(2);
     expect(ix.data).toHaveLength(8 + 4 + 64);
     await expect(
       buildSetTeePubkeyInstruction({

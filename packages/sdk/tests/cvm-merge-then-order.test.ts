@@ -316,7 +316,7 @@ maybeDescribe(
         // Production intake caps lock TTLs at 4,500 slots. Keep the live
         // fixture comfortably inside that boundary so it exercises settlement
         // instead of the intended long-expiry rejection path.
-        const expirySlot = BigInt(slot + 3_000);
+        const expirySlot = slot + 3_000n;
         const bootSessionId = await fetchBootSessionId(GATEWAY);
         async function buildOrder(
           p: Persona,

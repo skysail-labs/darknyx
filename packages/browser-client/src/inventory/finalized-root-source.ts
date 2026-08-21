@@ -7,6 +7,7 @@ import {
 import { parseMerkleRootRing } from "@darknyx/sdk/merkle-root-ring";
 
 import type { FinalizedRootRing } from "./types.js";
+import { slotToNumber } from "@darknyx/sdk";
 
 const hex = (value: Uint8Array): string =>
   Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -40,7 +41,7 @@ export class SolanaFinalizedRootSource {
         const parsed = parseMerkleRootRing(response.value.data, treeId);
         return {
           treeId,
-          finalizedSlot: response.context.slot,
+          finalizedSlot: slotToNumber(response.context.slot),
           acceptedRoots: parsed.acceptedRoots.map(hex),
         };
       }),

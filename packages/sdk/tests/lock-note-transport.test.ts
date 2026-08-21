@@ -39,10 +39,10 @@ describe("lock_note v3 amount-private transport", () => {
     expect(ix.data).toHaveLength(385);
     const mintOffset = 8 + 1 + 32 + 16 + 8;
     expect(ix.data.subarray(mintOffset, mintOffset + 32)).toEqual(
-      Buffer.from(mint.toBytes()),
+      mint.toBytes(),
     );
     expect(ix.data.subarray(mintOffset + 32, mintOffset + 64)).toEqual(
-      Buffer.from(filled(32, 0x55)),
+      filled(32, 0x55),
     );
   });
 

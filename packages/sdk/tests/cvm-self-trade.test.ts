@@ -252,7 +252,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
 
       const slot = await conn.getSlot("confirmed");
       // Production intake caps lock TTLs at 4,500 slots.
-      const expirySlot = BigInt(slot + 3_000);
+      const expirySlot = slot + 3_000n;
       const bootSessionId = await fetchBootSessionId(GATEWAY);
 
       // Build a signed limit-order body (a plain-limit subset of the settle

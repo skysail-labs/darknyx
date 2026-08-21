@@ -11,6 +11,7 @@ import {
   Transaction,
   TransactionInstruction,
   SystemProgram,
+  type Blockhash,
 } from "@solana/web3.js";
 
 import {
@@ -31,7 +32,9 @@ function dummyAddress(): PublicKey {
 }
 
 // A valid 32-byte base58 string (a pubkey) standing in for a blockhash.
-const BLOCKHASH = dummyAddress().toBase58();
+// A blockhash is base58 like an address but carries a different brand in v3;
+// this is a mock value, so assert the brand rather than derive it.
+const BLOCKHASH = dummyAddress().toBase58() as unknown as Blockhash;
 
 function fakeConnection(
   overrides: Partial<ConnectionLike> = {},

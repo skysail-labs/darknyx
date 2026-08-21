@@ -245,7 +245,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
 
     const slot = await conn.getSlot("confirmed");
     // Production intake caps lock TTLs at 4,500 slots.
-    const expirySlot = BigInt(slot + 3_000);
+    const expirySlot = slot + 3_000n;
     async function buildOrder(
       p: Persona,
       side: OrderSide,
