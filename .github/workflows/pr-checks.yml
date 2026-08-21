@@ -90,6 +90,11 @@ jobs:
         run: bash scripts/check-brand-namespace.sh
       - name: Debug endpoints must stay off by default
         run: bash scripts/check-no-debug-endpoints.sh
+      # .mjs scripts are not typechecked, so a forgotten `await` after an API
+      # turns async is invisible to `node --check` -- valid syntax, broken
+      # promise. Three such bugs shipped during the web3.js v3 port.
+      - name: Async calls in untypechecked .mjs must be awaited
+        run: node scripts/check-script-awaits.mjs
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
@@ -506,6 +511,28 @@ jobs:
       - name: Make example binaries executable
         run: chmod +x target/debug/examples/* 2>/dev/null || true
 
+      # The download above is `continue-on-error`, and the `rust` job it pulls
+      # from does NOT run on a TypeScript-only PR. So on exactly the changes
+      # most able to break cross-language byte equality -- a Buffer ->
+      # Uint8Array port, say -- the helpers were absent, every parity
+      # assertion skipped, and this job still reported green. Build them here
+      # when the artefact is missing, then make a missing helper FATAL rather
+      # than a silent skip.
+      - name: Ensure darkpool-crypto parity helpers exist
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in crates/darkpool-crypto/examples/*.rs; do
+            n=$(basename "$f" .rs)
+            [ -x "target/debug/examples/$n" ] || missing=1
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "parity helpers absent (rust job skipped or artefact missing) — building"
+            cargo build --examples -p darkpool-crypto
+          else
+            echo "parity helpers restored from the rust job artefact"
+          fi
+
       - name: Download circuit build artefacts
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         continue-on-error: true
@@ -519,6 +546,9 @@ jobs:
       # against the just-built `.wasm` + `.zkey`. Env-gated devnet / ER
       # / change-note flows still auto-skip via `RUN_*` env-var checks.
       - name: vitest run (parity, transport, provers, devnet-skipped)
+        env:
+          # A missing parity helper is a hard failure here, not a skip.
+          REQUIRE_PARITY_HELPERS: "1"
         run: node node_modules/vitest/vitest.mjs run --root packages/sdk
 
   typecheck:
@@ -592,6 +622,15 @@ jobs:
       - name: tsc --noEmit (trader host, tests included)
         run: node node_modules/typescript/bin/tsc -p packages/trader-host/tsconfig.test.json --noEmit
 
+      # browser-client and client-core have had a tsconfig.test.json all along
+      # and were never checked by this job. browser-client is the signed
+      # release surface, so its tests were the least-covered code in the repo.
+      - name: tsc --noEmit (client core, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/client-core/tsconfig.test.json --noEmit
+
+      - name: tsc --noEmit (browser client, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/browser-client/tsconfig.test.json --noEmit
+
       # Guard the guard: assert each tsconfig.test.json actually includes
       # `tests/`. Without this, narrowing an `include` would silently restore
       # the blind spot while this job kept reporting success — the T-18 pattern
@@ -600,7 +639,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for pkg in sdk daemon indexer trader-host; do
+          for pkg in sdk daemon indexer trader-host client-core browser-client; do
             cfg="packages/$pkg/tsconfig.test.json"
             test -f "$cfg" || { echo "::error::$cfg is missing"; fail=1; continue; }
             # Prove tsc really loaded a test file. Inspecting the resolved file
