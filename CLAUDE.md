@@ -321,15 +321,47 @@ cargo nextest run --workspace                       # unit + litesvm integration
 # so a proof-backed test can never report success without proving.
 REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests   # or `cargo test`
 bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
+node scripts/check-script-awaits.mjs                # .mjs get no typecheck; a forgotten `await`
+                                                    #   after an API turns async is INVISIBLE to
+                                                    #   `node --check` (valid syntax, broken
+                                                    #   promise). Three such bugs shipped in the
+                                                    #   web3.js v3 port.
 # Typecheck with the TESTS-INCLUSIVE config. The build tsconfig includes only
 # `src/`, so `-p packages/<pkg>/tsconfig.json` never sees tests/ — which is how
-# 23 type errors sat on main unnoticed. CI runs exactly these three lines.
+# 23 type errors sat on main unnoticed.
+# ALL SIX packages that HAVE a tsconfig.test.json are listed. This block used to
+# name three; browser-client and client-core were checked by nothing, locally or
+# in CI, and browser-client is the SIGNED RELEASE surface.
+# The SDK and client-core must be BUILT first — daemon/indexer/browser-client
+# typecheck against their emitted DECLARATIONS, and neither `npm ci` nor
+# `npm install` builds workspace packages. Skip these and browser-client alone
+# reports ~15 "Cannot find module '@darknyx/client-core'" errors. It is easy to
+# miss locally, because a stale dist/ from an earlier build is usually on disk.
+./node_modules/.bin/tsc -p packages/sdk/tsconfig.json          # emits dist/
+./node_modules/.bin/tsc -p packages/client-core/tsconfig.json  # emits dist/
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/daemon/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.test.json --noEmit
-( cd packages/sdk && ../../node_modules/.bin/vitest run )   # devnet/CVM tests auto-skip
+./node_modules/.bin/tsc -p packages/trader-host/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/client-core/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/browser-client/tsconfig.test.json --noEmit
+# The parity helpers gate the TS↔Rust byte-equality contracts (§7). Without
+# them every one of those assertions SKIPS and vitest still reports green —
+# which is exactly what happened during the v3 Buffer→Uint8Array port. The
+# flag turns a missing helper into a hard failure, mirroring
+# REQUIRE_CIRCUIT_ARTIFACTS above.
+cargo build --examples -p darkpool-crypto           # §2.1 lists this; the next line REQUIRES it
+( cd packages/sdk && REQUIRE_PARITY_HELPERS=1 ../../node_modules/.bin/vitest run )
 ( cd packages/indexer && ../../node_modules/.bin/vitest run ) # fills indexer; DB tests need Node 22+ (node:sqlite)
 ( cd packages/daemon && ../../node_modules/.bin/vitest run ) # market-maker daemon
+( cd packages/client-core && ../../node_modules/.bin/vitest run )
+( cd packages/trader-host && ../../node_modules/.bin/vitest run )
+( cd packages/browser-client && ../../node_modules/.bin/vitest run )
+# The browser PRODUCTION build. CI gates this; this block did not, so a change
+# that bundles cleanly in tests could still break the signed release — e.g. a
+# value import from the SDK root barrel drags node:crypto into the browser
+# bundle and esbuild fails to resolve it.
+( cd packages/browser-client && npm run build )
 echo "ALL GREEN — safe to push"
 ```
 
