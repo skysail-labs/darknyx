@@ -20,6 +20,7 @@ import {
   noteLockPda,
   parseNoteLock,
 } from "./idl/vault-client.js";
+import { deriveNoteUseTag } from "./utxo/note-use.js";
 
 export interface DarkPoolClientConfig {
   programId: PublicKey;
@@ -115,11 +116,25 @@ export class DarkPoolClient {
    *   - "locked"   — a NoteLock PDA exists but ConsumedNote does not.
    *   - "active"   — neither PDA exists. Safe to use for a new order.
    *   - "unknown"  — RPC read failed. Caller should retry or abort.
+   *
+   * Takes the note's COMMITMENT and its INNER HASH, not a pre-derived handle.
+   * `ConsumedNoteEntry` and `NoteLock` are both seeded by the note-use TAG
+   * (`Poseidon3(29, commitment, inner_hash)`), never by the commitment —
+   * see CRYPTOGRAPHY.md §2.1. Both values are `[u8; 32]`, so a signature
+   * taking one opaque handle lets a commitment be passed where a tag belongs:
+   * that compiles, derives a plausible address no instruction ever writes,
+   * and reports "active" for a note that is in fact consumed or locked —
+   * which is exactly how a wallet ends up selecting a spent note. Requiring
+   * both halves makes the wrong call impossible to express.
    */
-  async getNoteStatus(noteCommitment: Uint8Array): Promise<NoteStatusInfo> {
+  async getNoteStatus(
+    noteCommitment: Uint8Array,
+    innerHash: Uint8Array,
+  ): Promise<NoteStatusInfo> {
     try {
-      const [consumed] = await consumedNotePda(this.programId, noteCommitment);
-      const [locked] = await noteLockPda(this.programId, noteCommitment);
+      const noteUseTag = await deriveNoteUseTag(noteCommitment, innerHash);
+      const [consumed] = await consumedNotePda(this.programId, noteUseTag);
+      const [locked] = await noteLockPda(this.programId, noteUseTag);
       const consumedInfo =
         await this.providers.accountInfoProvider.getAccountInfo(consumed);
       if (consumedInfo !== null) return { status: "consumed" };
