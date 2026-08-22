@@ -188,7 +188,7 @@ By domain, additionally:
 |---|---|
 | A circom circuit | `CRYPTOGRAPHY.md` §7, then the circuit + its `vk_*.rs` + its `*-prover.test.ts`. **See [§5](#5-touching-circuits-the-failure-mode-thats-bitten-us) — the disaster section.** |
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
-| `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** |
+| `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** Comment conventions: [§10.5](#105-comment-conventions). |
 | `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave calls `PreparedMatchTick::next_page` (`single_fill_per_order: true`), NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). **Comment conventions: [§10.5](#105-comment-conventions)** — enforced by `scripts/check-no-process-markers.sh`. |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
@@ -304,9 +304,9 @@ bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writ
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check-no-debug-endpoints.sh            # /__debug must stay off by default (SW-33)
-bash scripts/check-no-process-markers.sh            # darknyx-tee headers must say what is TRUE
-                                                    #   now, not which PR made it true. See
-                                                    #   See §10.5.
+bash scripts/check-no-process-markers.sh            # headers must say what is TRUE now, not
+                                                    #   which PR made it true. Covers darknyx-tee
+                                                    #   + darkpool-crypto; see §10.5.
 bash scripts/check-no-doctests.sh                   # nextest skips doctests; this
                                                     #   fails if one ever appears
 cargo nextest run --workspace                       # unit + litesvm integration.
