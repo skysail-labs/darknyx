@@ -385,9 +385,9 @@ impl SolanaRpcClient {
     // ─── The 6 methods ──────────────────────────────────────────
 
     /// `getLatestBlockhash` — returns the current blockhash + the
-    /// slot it was reported at (used by per-batch ALT creation in
-    /// See CRYPTOGRAPHY.md §9 for why we read context.slot,
-    /// not `getSlot("confirmed")`).
+    /// slot it was reported at. Per-batch ALT creation uses that slot; see
+    /// CRYPTOGRAPHY.md §9 for why it must come from the blockhash context and
+    /// not from `getSlot("confirmed")`.
     pub async fn get_latest_blockhash(&self) -> Result<BlockhashWithSlot, RpcError> {
         #[derive(Deserialize)]
         struct Inner {

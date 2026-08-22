@@ -9,7 +9,8 @@
 //! dev-dependencies use that same combination alongside the same `ark-*` crates, so
 //! the pairing is proven elsewhere in the workspace.
 //!
-//! Methods implemented are the ones the settle pipeline needs:
+//! Implemented methods — the settle pipeline's needs, plus the reads the Merkle
+//! mirror and recovery paths use:
 //!
 //! ```text
 //!   getLatestBlockhash            recent_blockhash for every tx
@@ -18,6 +19,10 @@
 //!   getAccountInfo                read state, e.g. an ALT's activation slot
 //!   simulateTransaction           pre-flight before send
 //!   getRecentPrioritizationFees   priority-fee bidding hints
+//!   getMultipleAccounts           batched account reads
+//!   getSignaturesForAddress       transaction discovery for the mirror
+//!   getTransaction                decoding leaf-append events
+//!   getTransactionsForAddress     batched variant of the above
 //! ```
 //!
 //! ```text

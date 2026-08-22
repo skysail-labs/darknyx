@@ -16,9 +16,14 @@
 //!   accumulator.rs  accumulator-proof handling — see docs/oracle-accumulator-notes.md
 //! ```
 //!
-//! Freshness is enforced at read time, not at write time: a stale cache entry is
-//! visible to the matcher as stale rather than being silently withheld, so the
-//! admission gate decides what to do about it. See `docs/tee-architecture.md` §6.
+//! Two distinct checks, easy to conflate. The producer validates on **write** —
+//! a feed whose local arrival is already too old is rejected before it reaches
+//! the cache. The cache read itself does **not** check staleness: `get` returns
+//! whatever is present and reports its age, and the matching tick owns the
+//! staleness policy from there. So a stale entry is visible to the matcher as
+//! stale rather than silently withheld, and the admission gate decides.
+//!
+//! See `docs/tee-architecture.md` §6.
 
 pub mod accumulator;
 pub mod cache;

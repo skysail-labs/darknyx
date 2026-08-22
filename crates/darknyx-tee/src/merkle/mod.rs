@@ -17,8 +17,13 @@
 //! and a cold boot. Skipping that is why a "reset" tree can still serve stale
 //! leaves — see `docs/settlement-recovery-drill.md`.
 //!
-//! A root computed here that disagrees with the chain surfaces downstream as
-//! `StaleMerkleRoot (6004)` on the first spend, not as an error in this module.
+//! Divergence from the chain **fails closed** rather than being served: the
+//! `/tree/*` read sites answer `503` for a diverged shard and new trading is
+//! paused, so a caller sees the divergence instead of silently receiving a bad
+//! proof. Divergence does not clear on its own, because the mirror cannot rewind.
+//! `StaleMerkleRoot (6004)` is the on-chain backstop if a stale proof is relayed
+//! anyway — not the primary signal, and not what incident response should wait
+//! for.
 
 pub mod events;
 pub mod mirror;

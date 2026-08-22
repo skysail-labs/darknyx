@@ -6,10 +6,15 @@
 //! holds all K shard signers, and they must be registered in shard order —
 //! `keys[j]` settles shard `j`. See `docs/tee-architecture.md` §11.
 //!
-//! A malformed value fails startup rather than falling back; an EMPTY value
-//! falls back to the default. That asymmetry is deliberate, but it means a
-//! variable silently reverting to its default is indistinguishable from one
-//! that was never set.
+//! Most malformed values fail startup rather than falling back, and an EMPTY
+//! value falls back to the default. That asymmetry is deliberate, but it means a
+//! variable silently reverting to its default is indistinguishable from one that
+//! was never set.
+//!
+//! The fail-closed rule is not universal, so do not rely on it as an invariant:
+//! a non-UTF-8 value reads as unset, some out-of-range numerics are clamped
+//! rather than rejected, and `DARKNYX_TEE_SOLANA_RPC_URL` is not validated at
+//! load time — a malformed URL surfaces later as an RPC failure.
 
 use std::collections::HashSet;
 

@@ -1,8 +1,14 @@
 //! Encrypted on-disk state.
 //!
-//! Everything here lives on the dstack LUKS mount. The disk-encryption key is
-//! derived by dstack-kms from the app root key, so state survives CVM migration
-//! without this code participating — see `docs/tee-architecture.md` §8.
+//! When persistence is enabled, everything here lives on the dstack LUKS mount.
+//! The disk-encryption key is derived by dstack-kms from the app root key, so
+//! state survives CVM migration without this code participating — see
+//! `docs/tee-architecture.md` §8.
+//!
+//! **`state_dir` is optional.** With it unset — tests, and any deployment
+//! without a volume — auth snapshots and the settlement journal are in-memory
+//! only and do not survive a restart. Nothing below is a durability guarantee in
+//! that mode.
 //!
 //!   - [`auth`] — the account registry and JWT revocation denylist, written to
 //!     `accounts.db` on change.

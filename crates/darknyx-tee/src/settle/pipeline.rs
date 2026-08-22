@@ -2,19 +2,24 @@
 //!
 //! `tee_forced_settle_batched` is the only transaction in the pipeline that must be
 //! a v0 transaction stacking Address Lookup Tables, because it does not otherwise
-//! fit under Solana's 1232-byte limit. It carries two instructions:
+//! fit under Solana's 1232-byte limit. It carries three instructions, in order:
 //!
-//!   1. the Ed25519 precompile instruction verifying the TEE signature over the
+//!   1. `ComputeBudget::SetComputeUnitLimit` (and, when a priority fee is bid,
+//!      `SetComputeUnitPrice`) — first, so the right-sized CU limit applies to
+//!      everything after it;
+//!   2. the Ed25519 precompile instruction verifying the TEE signature over the
 //!      canonical payload hash ([`super::ed25519`]);
-//!   2. the settle instruction itself ([`super::settle_batched`]).
+//!   3. the settle instruction itself ([`super::settle_batched`]).
 //!
-//! Both compile into a `v0::Message` referencing two lookup tables — the static
-//! settle ALT built at devnet setup (`vault_config`, `instructions_sysvar`,
-//! `system_program`) and the per-batch ALT built by Tx C (`note_lock_a/b/e/f`,
-//! `consumed_a/b`, `batch_validity_marker`). The TEE keypair signs as both
-//! fee-payer and `tee_authority`.
+//! These compile into a `v0::Message` over the lookup tables the worker supplies.
+//! In the configured deployment that is two: the static settle ALT built at
+//! devnet setup (`vault_config`, `instructions_sysvar`, `system_program`) and the
+//! per-batch ALT built by Tx C. `static_alt` is optional, and with it unset the
+//! transaction rides on the per-batch ALT alone and is correspondingly larger.
+//! The TEE keypair signs as both fee-payer and `tee_authority`.
 //!
-//! The assembled transaction measures ~1173 bytes, leaving 59 bytes of headroom.
+//! On the two-ALT path the assembled transaction measures ~1173 bytes, leaving 59
+//! bytes of headroom.
 //! Adding an account or payload field here overflows the limit and surfaces as
 //! `TransactionTooLarge` at send time — see `CRYPTOGRAPHY.md` §9 before changing
 //! either instruction's accounts or data.

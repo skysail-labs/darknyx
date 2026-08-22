@@ -219,7 +219,7 @@ async fn assembler_witness_proves_and_verifies_n16() {
     );
 
     // 6. Optionally dump the on-chain proof bytes + root as a fixture
-    //    for the litesvm on-chain-acceptance test (real-N16 step 2),
+    //    for the litesvm on-chain-acceptance test,
     //    so that test doesn't have to pull in the (heavy) prover.
     //    Layout: pi_a(64) ‖ pi_b(128) ‖ pi_c(64) ‖ merkle_root(32) = 288 B.
     if std::env::var("DUMP_N16_FIXTURE").ok().as_deref() == Some("1") {

@@ -7,13 +7,20 @@
 //! ```text
 //!   Tx A  lock_note × 2                 pin both inputs between match and settle
 //!   Tx B  verify_match_batch            Groth16 VALID_MATCH_BATCH, writes the marker
-//!   Tx C  per-batch ALT create + extend  the 7 payload-derived PDAs
+//!   Tx C  per-batch ALT create/extend   payload-derived PDAs, all matches
 //!   Tx D  tee_forced_settle_batched     the settlement itself (v0 tx, 2 ALTs)
 //!   Tx E  close_batch_validity_marker   rent reclaim, at or after expiry
 //! ```
 //!
 //! Tx D is the finality point. Tx E is asynchronous rent bookkeeping and a job is
 //! `Done` without it.
+//!
+//! Tx C does not always create a fresh table: `alt_pool` keeps a rolling set and
+//! reuses or extends one where it can, because ALT deactivation has a ~512-slot
+//! cooldown. Its address set is the **union across every match in the batch**,
+//! deduplicated — so it is not a fixed seven entries. An exact-fill match
+//! contributes fewer (the `[0;32]` change-note locks collapse to one PDA); a
+//! multi-match batch contributes more.
 //!
 //! Module map:
 //!

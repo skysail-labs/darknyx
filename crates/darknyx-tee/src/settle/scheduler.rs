@@ -10,10 +10,15 @@
 //!     status queries take the read lock, the scheduler and stage workers take
 //!     brief write locks to advance a job.
 //!
-//! Retention is bounded. Jobs are evicted at `MAX_RETAINED_BATCHES` batches, so
-//! the status table cannot grow without limit on a long-running enclave (audit
-//! SW-08). A status query for an evicted batch is indistinguishable from one for a
-//! batch that never existed, which is intentional.
+//! Retention is bounded, but only over **terminal** batches. Once the table
+//! exceeds `MAX_RETAINED_BATCHES`, `prune_retained_batches` evicts the oldest
+//! batches that have reached a terminal state (audit SW-08). Batches still in
+//! flight are never evicted, so a large enough set of stuck batches can hold the
+//! table above the cap — that is a stalled pipeline, not a retention bug, but it
+//! means the cap is not an unconditional bound.
+//!
+//! A status query for an evicted batch is indistinguishable from one for a batch
+//! that never existed. That is intentional.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;

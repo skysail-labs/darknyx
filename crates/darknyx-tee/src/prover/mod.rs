@@ -14,7 +14,7 @@
 //! ```text
 //!   ark_prover.rs        ark-circom: witness generation + zkey-backed proving
 //!   rapidsnark_prover.rs rapidsnark via rapidsnark_sys.rs (FFI)
-//!   icicle_prover.rs     ICICLE CUDA, for GPU-equipped enclaves
+//!   icicle_prover.rs     ICICLE, device=CPU (default) or CUDA
 //! ```
 //!
 //! A GPU backend is only safe where the GPU itself is in confidential-compute mode:

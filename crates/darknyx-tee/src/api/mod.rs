@@ -20,8 +20,8 @@
 //!     rather than `layer`, so the bearer check runs only on declared routes; with
 //!     `layer` the middleware would also wrap the 404 fallback and answer `401` for
 //!     every unknown path.
-//!   - **Admin-gated** — `/admin/accounts` and the drain controls, gated inside
-//!     their handlers on top of the bearer scope.
+//!   - **Admin-gated** — `/admin/accounts`, `/admin/metrics/settlement`, and the
+//!     drain controls, gated inside their handlers on top of the bearer scope.
 //!
 //! `/v1/stream` is the sole WebSocket surface. It authenticates **in-band** via an
 //! `op: login` frame, then multiplexes orders, fills, tree events, and trading ops

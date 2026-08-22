@@ -13,10 +13,12 @@
 //!     fee-payer keypair. The dstack SDK's own `solana.to_keypair()` helper is
 //!     Python-only, so this conversion is ours to maintain.
 //!
-//! `/info` exposes only the primary (shard 0) signer. The full K-shard set appears
-//! in the boot log, and **all K must be registered in `vault_config.tee_pubkeys` in
-//! shard order and funded** — `keys[j]` settles shard `j`, so a missing or
-//! unfunded key silently disables that shard rather than failing at boot.
+//! `/info` serves the full K-shard set as `tee_pubkeys`, in shard order, so a
+//! client can cross-check the whole set against `vault_config.tee_pubkeys` on
+//! chain; the singular `tee_pubkey` field is retained for compatibility and
+//! carries the shard-0 primary only. **All K must be registered in shard order
+//! and funded** — `keys[j]` settles shard `j`, so a missing or unfunded key
+//! silently disables that shard rather than failing at boot.
 //!
 //! Keys are deterministic per `app_id`, so registration and funding are one-time
 //! per CVM and survive restarts.

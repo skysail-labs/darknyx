@@ -3,7 +3,7 @@
 //! The trait + error type + output struct live here; the real
 //! implementations are [`super::ark_prover`], plus the feature-gated
 //! `rapidsnark_prover` and `icicle_prover`. The settle worker holds a
-//! `Box<dyn Prover>`,
+//! `Arc<dyn Prover>`,
 //! so the backend is selected at boot without any call-site knowing which one
 //! is active.
 //!

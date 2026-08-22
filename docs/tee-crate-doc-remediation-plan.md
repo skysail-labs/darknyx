@@ -1,8 +1,17 @@
 # `crates/darknyx-tee` — documentation remediation plan
 
-> **Status:** plan, not yet executed. Written 2026-08-22.
+> **Status: EXECUTED.** This is the pre-implementation design record that led to
+> the rollout; the work it describes is complete and landed in the same change.
+> Written 2026-08-22.
+>
+> Two deviations from the plan as written, both deliberate:
+> Phases 1, 2 and 4 were merged into one pass per module (they touch the same
+> lines, so three passes would have edited each line three times), and
+> **`transport/` was NOT deferred** — the changes proved comment-only and
+> conflict-cheap, so it was completed with the rest.
+>
 > **Scope:** `crates/darknyx-tee` only (108 files, 41,095 lines). Other crates
-> are explicitly out of scope and will be handled separately.
+> remain out of scope.
 > **Goal:** header comments that tell a new developer what a file *is* and what
 > it *guarantees*, with no leftover implementation-process narration.
 

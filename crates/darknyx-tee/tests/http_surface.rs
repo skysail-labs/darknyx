@@ -195,10 +195,8 @@ async fn unknown_route_returns_404() {
     let resp = app
         .oneshot(
             Request::builder()
-                // pick a path nothing
-                // has claimed yet to keep this test future-proof.
-                // /account, /tree, /settlement, /transparency are
-                // all PR 4g placeholders.
+                // pick a path nothing has claimed yet, so this
+                // test stays valid as routes are added.
                 .uri("/this-route-does-not-exist")
                 .body(Body::empty())
                 .unwrap(),

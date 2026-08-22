@@ -18,11 +18,11 @@ below changed the recommended cut.
 `src/ui/` has **no dependency on any security code in the package**. Its entire
 outside import surface is:
 
-```
+```text
 react, react-dom, lucide-react
 ./types.js, ./trader-shell.js, ./mark.js, ./trader-product.js, ./styles.css
 import type { ... } from "@darknyx/client-core"     <- TYPE-ONLY, 4 names
-```
+```text
 
 It imports nothing from `custody/`, `prover/`, `inventory/`, `venue/`,
 `wallet/`, or `account/`. The contract is explicit and already named:
@@ -93,22 +93,22 @@ pages, or its own transport. Until then the workshop cut is doing its job.
 
 ### 3.1 Moves (synced, lives in both)
 
-```
+```text
 packages/browser-client/src/ui/index.ts            20 lines
 packages/browser-client/src/ui/types.ts           143 lines   <- the contract
 packages/browser-client/src/ui/trader-shell.tsx   965 lines
 packages/browser-client/src/ui/trader-product.tsx  27 lines
 packages/browser-client/src/ui/mark.tsx            26 lines
 packages/browser-client/src/ui/styles.css          24 KB
-```
+```text
 
 ### 3.2 Copied once, then diverges freely (new repo owns it)
 
-```
+```text
 packages/browser-client/tests/ui-preview.tsx      118 lines   <- fixture harness, ALREADY EXISTS
 packages/browser-client/tests/ui-preview.html      16 lines
 packages/browser-client/tests/trader-shell.test.tsx 174 lines
-```
+```text
 
 > **A fixture harness already exists.** `tests/ui-preview.tsx` renders
 > `<TraderShell snapshot={snapshot} actions={actions} />` against a static
@@ -138,7 +138,7 @@ import type {
   SubmitIntentResult,      // types.ts:50
   VaultStatus,             // types.ts:76
 } from "@darknyx/client-core";
-```
+```text
 
 Type-only means **no runtime code is duplicated** — the new repo carries nothing
 that can drift into a security bug.
@@ -156,7 +156,7 @@ monorepo (forces every UI contributor to have monorepo access).
 
 ## 5. Repository layout
 
-```
+```text
 darknyx-trader-ui/
 ├── src/ui/                    <- SUBTREE. Do not restructure; see §6.
 │   ├── index.ts
@@ -179,7 +179,7 @@ darknyx-trader-ui/
 ├── package.json               <- React/design deps live HERE
 ├── vite.config.ts
 └── README.md                  <- MUST carry the §7 warning
-```
+```text
 
 > **`src/ui/` is subtree-managed.** Renaming, splitting, or moving files inside
 > it breaks the sync path mapping. Reorganising is a deliberate, coordinated
@@ -194,15 +194,15 @@ darknyx-trader-ui/
 Path mapping (both sides carry a prefix; the shared branch is the root-level
 canonical form):
 
-```
+```text
 monorepo  packages/browser-client/src/ui/   <──> ui-sync branch (files at root) <──>  src/ui/  ui repo
-```
+```text
 
 ### 6.1 Seeding (once)
 
 ```sh
 # --- in the monorepo ---
-cd /path/to/nyx-monorepo
+cd /path/to/darknyx
 git checkout main && git pull
 git subtree split --prefix=packages/browser-client/src/ui -b ui-sync
 git push origin ui-sync
@@ -213,7 +213,7 @@ git init && git commit --allow-empty -m "chore: initial commit"
 git remote add monorepo git@github.com:skysail-labs/darknyx.git
 git fetch monorepo ui-sync
 git subtree add --prefix=src/ui monorepo ui-sync
-```
+```text
 
 `src/ui/` now carries its real per-file history, not one squashed import.
 
@@ -228,7 +228,7 @@ git push origin ui-sync --force-with-lease
 # ui repo
 git fetch monorepo ui-sync
 git subtree pull --prefix=src/ui monorepo ui-sync
-```
+```text
 
 ### 6.3 UI repo → monorepo (bring design work home) — **the gated direction**
 
@@ -241,7 +241,7 @@ git push monorepo ui-sync --force-with-lease
 git checkout -b ui/sync-$(date +%Y-%m-%d)
 git fetch origin ui-sync
 git subtree merge --prefix=packages/browser-client/src/ui origin/ui-sync
-```
+```text
 
 Then **the gate** — this is what makes the shim in §4 safe:
 
@@ -250,7 +250,7 @@ Then **the gate** — this is what makes the shim in §4 safe:
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json             # emits dist/
 ./node_modules/.bin/tsc -p packages/browser-client/tsconfig.json --noEmit
 ( cd packages/browser-client && npm run build && npm run test:unit )
-```
+```text
 
 If the shim drifted from real `client-core`, the third line fails here. Open a
 normal PR; the existing `pr-checks` browser-client jobs run on it.
@@ -289,6 +289,11 @@ safe:
 ---
 
 ## 8. Execution steps
+
+> **Do not run any step below until §9 is answered.** These commands create a
+> repository and start syncing code; the direction of that sync is the open
+> question in §9. Seeding before it is decided commits you to a topology that
+> is awkward to reverse once design work exists in the new repo.
 
 | # | Step | Where |
 |---|---|---|
