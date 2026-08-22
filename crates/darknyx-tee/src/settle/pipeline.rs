@@ -71,9 +71,9 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //
 // Re-measured 2026-06-23 (image tee-v3-hardening-40, post amount-privacy +
 // encrypted output recovery):
-//   verify_match_batch       100,533 CU (litesvm) — up from 87,224: amount-privacy
-//     (P1b) added fee-binding + more public inputs to VALID_MATCH_BATCH, so the
-//     on-chain groth16 verify got heavier. DEVNET runs the alt_bn128 syscalls
+//   verify_match_batch       100,533 CU (litesvm) — up from 87,224: amount
+//     privacy added fee-binding and more public inputs to VALID_MATCH_BATCH, so
+//     the on-chain groth16 verify got heavier. DEVNET runs the alt_bn128 syscalls
 //     HOTTER than litesvm (a -39 deploy with a 101,000 limit died
 //     `ComputationalBudgetExceeded` at ~100,850), so the on-chain limit carries
 //     a generous margin over the litesvm figure — NOT the usual ×1.15.

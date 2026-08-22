@@ -501,7 +501,7 @@ pub struct OrderUpdateMsg {
 /// attached is NOT a loss: output amounts are recoverable from the permanent
 /// on-chain recovery-v3 ciphertext via the chain/indexer +
 /// `recoverFillFromChain`, which is why the durable per-account memo
-/// log (the old P7 `fill_log` + `GET /fills/replay`) was retired.
+/// log (the old `fill_log` + `GET /fills/replay`) was retired.
 const FILLS_CHANNEL_CAP: usize = 1024;
 
 /// Global `tree`-channel depth. Sized larger than the per-account channels
@@ -1152,7 +1152,7 @@ impl ApiState {
     /// client) is not a loss: output amounts ride the settle ix ENCRYPTED
     /// on-chain, so an offline client recovers them via
     /// `recoverFillFromChain`/`recoverNotesFromChain`. The old
-    /// durable per-account memo log (`fill_log` + `GET /fills/replay`, P7) was
+    /// durable per-account memo log (`fill_log` + `GET /fills/replay`) was
     /// retired once the chain became the permanent source.
     pub async fn route_fill(&self, memo: &FillMemo) -> bool {
         let account = self.order_owner.read().await.get(&memo.order_id).cloned();
@@ -1317,7 +1317,7 @@ impl ApiState {
     /// `(registry, revoked_jtis)` to install on `ApiState`.
     ///
     /// `state_dir == None` (persistence disabled) falls back to the
-    /// pure env bootstrap, identical to the Phase-1a behaviour.
+    /// pure env bootstrap, identical to the behaviour.
     fn load_or_seed_auth(
         state_dir: Option<&std::path::Path>,
     ) -> (AccountRegistry, HashMap<String, u64>) {
@@ -1406,7 +1406,7 @@ mod persist_tests {
     const FAR_FUTURE_EXPIRY: u64 = 4_000_000_000;
 
     /// A registration that's persisted is recovered by a subsequent
-    /// boot-load from the same directory — the core Phase-1b
+    /// boot-load from the same directory — the core
     /// durability guarantee. Drives `persist_auth` (write) +
     /// `load_or_seed_auth` (read) end to end.
     #[tokio::test]

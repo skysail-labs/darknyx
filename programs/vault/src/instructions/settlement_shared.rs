@@ -19,10 +19,10 @@ use crate::errors::VaultError;
 use crate::state::*;
 use anchor_lang::prelude::*;
 
-/// Phase-5 MatchResultPayload — carries the commitments + relock plumbing
+/// MatchResultPayload — carries the commitments + relock plumbing
 /// the on-chain settle handler needs.
 ///
-/// **Amount-privacy (P3b).** The plaintext amounts (`base_amount`,
+/// **Amount-privacy.** The plaintext amounts (`base_amount`,
 /// `quote_amount`, `buyer/seller_change_amt`, `buyer/seller_fee_amt`,
 /// `clearing_price`) USED to live here so the chain could re-check the
 /// conservation law + fee. They have been REMOVED: VALID_MATCH_BATCH now proves
@@ -107,7 +107,7 @@ pub struct MatchResultPayload {
     /// path, not the sole one. (Ops follow-up: alert on recovery-decrypt
     /// failure. No on-chain fix — it's inside the accepted TEE-honesty boundary.)
     pub fill_recovery: [u8; 128],
-    // Amount-privacy (P3b): `clearing_price` was removed alongside the other
+    // Amount-privacy: `clearing_price` was removed alongside the other
     // plaintext amounts — the price is proven in-circuit
     // (`quote === floor(base*price/price_scale)`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
@@ -225,7 +225,7 @@ pub struct TradeSettled {
     /// indexer routes the (note_*_leaf) indices into this shard.
     pub tree_id: u8,
     pub match_id: [u8; 16],
-    // Amount-privacy (P3b): the trade amounts / change / fees / clearing price
+    // Amount-privacy: the trade amounts / change / fees / clearing price
     // were dropped from this event — they were a public leak (events are
     // on-chain). The event now carries only the leaf INDICES + relock flags +
     // root; a client reconstructs its own amounts from the per-account FillMemo.
@@ -255,7 +255,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
     hashv(&[
-        // v7: amount-privacy (P3b) dropped the seven plaintext amount fields
+        // v7: amount-privacy dropped the seven plaintext amount fields
         // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
         // from the payload — they're proven in-circuit + bound by the note
         // commitments. v8: encrypted output recovery appended the

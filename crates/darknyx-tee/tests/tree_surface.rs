@@ -1,4 +1,4 @@
-//! End-to-end tests for the Phase-2a `/tree/*` indexer surface
+//! End-to-end tests for the `/tree/*` indexer surface
 //! (`GET /tree/root` public, `/tree/inclusion` + `/tree/leaves`
 //! bearer). Drives the router via `tower::ServiceExt::oneshot` — no
 //! TCP — and seeds the shared Merkle mirror directly through the

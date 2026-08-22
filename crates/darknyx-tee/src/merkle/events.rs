@@ -137,7 +137,7 @@ struct NoteCreatedEvent {
 struct TradeSettledEvent {
     tree_id: u8,
     _match_id: [u8; 16],
-    // Amount-privacy (P3b): the trade amounts / change / fees / clearing price
+    // Amount-privacy: the trade amounts / change / fees / clearing price
     // were removed from the on-chain TradeSettled event, so they're gone from
     // this borsh mirror too. The event now carries only leaf indices.
     note_c_leaf: u64,

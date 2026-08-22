@@ -268,7 +268,7 @@ impl ConsumedNoteEntry {
 
 /// PDA locking a note to a specific order. Automatically expires at `expiry_slot`.
 ///
-/// Amount-privacy (P3b): the `amount` field (the locked note's full value) was
+/// Amount-privacy: the `amount` field (the locked note's full value) was
 /// REMOVED. It was only ever read by the old on-chain conservation check in
 /// `tee_forced_settle*`, which is now proven in-circuit by VALID_MATCH_BATCH
 /// over private, range-checked amounts. The note commitment binds the amount;

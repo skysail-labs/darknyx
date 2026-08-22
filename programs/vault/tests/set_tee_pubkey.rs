@@ -1,4 +1,4 @@
-//! Phase-3 governance setter: `set_tee_pubkey`
+//! Governance setter: `set_tee_pubkey`
 //!
 //! Verifies:
 //!   - happy path rotates `vault_config.tee_pubkey`

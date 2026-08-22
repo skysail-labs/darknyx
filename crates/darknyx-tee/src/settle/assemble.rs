@@ -360,7 +360,7 @@ pub fn assemble_match(
         note_f_commitment: note_f,
         order_id_a: inp.order_id_a,
         order_id_b: inp.order_id_b,
-        // Amount-privacy (P3b): the amounts (base/quote/change/fee/price) stay
+        // Amount-privacy: the amounts (base/quote/change/fee/price) stay
         // in the WITNESS (private prover inputs) but no longer ride the payload
         // — VALID_MATCH_BATCH proves conservation + the exact fee over them and
         // the note commitments bind them, so the on-chain settle ix carries no
@@ -676,7 +676,7 @@ mod tests {
         // This zero-fee match has canonical zero fee commitments.
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
-        // clearing = quote/base. Amount-privacy (P3b): the clearing price lives
+        // clearing = quote/base. Amount-privacy: the clearing price lives
         // only in the witness now (the payload no longer carries it).
         assert_eq!(w.clearing_price, 100);
     }

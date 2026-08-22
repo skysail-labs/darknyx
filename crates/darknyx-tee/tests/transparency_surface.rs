@@ -1,4 +1,4 @@
-//! Phase-2c surface test: `GET /transparency` (public). In test mode
+//! Surface test for `GET /transparency` (public). In test mode
 //! there's no Solana RPC client, so `per_mint` reserves are empty — but
 //! the mirror root/leaf_count, the engine identity, and the stats are
 //! still served. Driven via `tower::ServiceExt::oneshot`.

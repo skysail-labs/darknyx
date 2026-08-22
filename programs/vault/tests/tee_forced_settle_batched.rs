@@ -433,7 +433,7 @@ fn settle_rejects_relock_expiry_beyond_ttl_cap() {
 }
 
 // NOTE: the on-chain fee-FLOOR + conservation regression test that lived here
-// was removed with P3a — both checks moved IN-CIRCUIT (amount-privacy), so the
+// was removed — both checks moved IN-CIRCUIT (amount-privacy), so the
 // settle handler no longer reads plaintext amounts to enforce them. The floor's
 // enforcement is now covered by the circuit negative tests in
 // `packages/sdk/tests/match-batch-prototype.test.ts` (charging exactly the

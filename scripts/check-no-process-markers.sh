@@ -50,19 +50,37 @@ done
 # buckets") plus a spec citation ("Spec §20.6 step 73"), and darknyx-tee had a
 # numeric increment ("0..=100 step 10"). At ~8% precision the rule stops being
 # a guard and starts pressuring correct prose into being reworded around it.
-PATTERN='(\bPR ?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase [0-9]+[a-z]?\b)'
+# Two patterns, because they need different case sensitivity.
+#
+# CI_PATTERN is case-insensitive: "PR 4g.3", "PR-4d", "4e.2", "Phase 2",
+# "Phase-1b", "slice 5". Spellings were added as earlier sweeps missed them —
+# the hyphenated "Phase-5" and "PR-4d" forms both slipped past a pattern built
+# only from the space-separated examples already seen.
+CI_PATTERN='(\bPR[- ]?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase[- ][0-9]+[a-z]?\b)'
+
+# CS_PATTERN is case-SENSITIVE: the "P0".."P7" work-item series, as in
+# "Amount-privacy (P3b)". It must not be folded into the case-insensitive pass —
+# lowercase p0/p1/p2 are ordinary local variable names in this codebase
+# (`let p0 = dummy_payload();`), and matching them produced 57 false positives
+# against 31 real ones.
+CS_PATTERN='\bP[0-9][a-z]?\b'
 
 # -i so lowercase "step 2" is caught too. grep exit 1 means "no matches"; any
 # other non-zero status is a real failure (unreadable target, bad pattern) and
 # must NOT be reported as a pass.
 set +e
-hits=$(grep -rniE "$PATTERN" --include='*.rs' "${TARGETS[@]}")
-rc=$?
+ci_hits=$(grep -rniE "$CI_PATTERN" --include='*.rs' "${TARGETS[@]}")
+rc_ci=$?
+cs_hits=$(grep -rnE "$CS_PATTERN" --include='*.rs' "${TARGETS[@]}")
+rc_cs=$?
 set -e
-if [ "$rc" -gt 1 ]; then
-  echo "ERROR: grep failed with status $rc while scanning ${TARGETS[*]}" >&2
-  exit "$rc"
-fi
+for rc in "$rc_ci" "$rc_cs"; do
+  if [ "$rc" -gt 1 ]; then
+    echo "ERROR: grep failed with status $rc while scanning ${TARGETS[*]}" >&2
+    exit "$rc"
+  fi
+done
+hits=$(printf '%s\n%s' "$ci_hits" "$cs_hits" | grep -v '^$' | sort -u || true)
 
 if [ -n "$hits" ]; then
   echo "ERROR: implementation-process markers found" >&2

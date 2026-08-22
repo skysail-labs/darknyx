@@ -24,7 +24,7 @@
 //! Internal Merkle node: `Poseidon3(DOMAIN_BATCH_ROOT = 22, left,
 //! right)`.
 //!
-//! Commitment-only (amount-privacy, P1b): the six note commitments + two fee
+//! Commitment-only (amount-privacy): the six note commitments + two fee
 //! notes bind the amounts/mints/price transitively (each commitment is itself
 //! a Poseidon6 of mint+amount+owner+inner), so the leaf no longer hashes the
 //! plaintext amounts the old two-stage (Poseidon12+Poseidon9) leaf did — and
@@ -39,7 +39,7 @@ use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
 // ── Domain-separation tags. MUST match the circuit constants. ───
 pub const DOMAIN_BATCH_ROOT: u8 = 22;
-/// Commitment-only leaf (amount-privacy, P1b). A fresh tag avoids any
+/// Commitment-only leaf (amount-privacy). A fresh tag avoids any
 /// overlap with the old two-stage leaf (the retired DOMAIN_LEAF_INNER=20 /
 /// DOMAIN_LEAF_TOP=21 tags, removed when the leaf collapsed to one Poseidon11).
 pub const DOMAIN_LEAF_V2: u8 = 23;
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn changing_a_note_commitment_changes_leaf() {
-        // The commitment-only leaf (P1b) binds the note commitments, NOT the
+        // The commitment-only leaf binds the note commitments, NOT the
         // mints/amounts directly — those are bound transitively inside each
         // commitment. So a different note commitment must change the leaf
         // (whereas mutating only `quote_mint`, which no longer feeds the leaf,

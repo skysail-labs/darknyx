@@ -1,4 +1,4 @@
-//! Phase-5 governance setter: `set_protocol_config`
+//! Governance setter: `set_protocol_config`
 //!
 //! Verifies:
 //!   - happy path rewrites `protocol_owner_commitment` + `fee_rate_bps`

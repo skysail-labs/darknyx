@@ -47,7 +47,7 @@ const ALLOW_INSECURE_GPU: &str = "DARKNYX_TEE_ICICLE_ALLOW_INSECURE_GPU";
 /// The `.wtns` handed to `groth16_prove` encodes the **full private witness** —
 /// every per-slot `base_amount` / `quote_amount`, both owner commitments, the
 /// change and fee amounts, and the clearing price. Those are exactly the values
-/// the amount-privacy work (P1b/P3b) exists to keep off-chain.
+/// the amount-privacy work exists to keep off-chain.
 ///
 /// Selecting CUDA moves that witness into GPU device memory. On a
 /// confidential-compute GPU it is encrypted and attested; on an ordinary one it

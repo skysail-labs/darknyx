@@ -106,7 +106,7 @@ pub fn signer_set_hash(signers: &[DerivedSigner]) -> [u8; 32] {
 ///   3. Construct `SigningKey::from_bytes(&seed)`. The same 32-byte
 ///      seed is what Python's `solders.Keypair.from_seed(...)` uses
 ///      (which is what we validated end-to-end against a real
-///      Phala Cloud CVM in the Phase-1 smoke test), so the Solana
+///      Phala Cloud CVM in the smoke test), so the Solana
 ///      pubkey produced here is byte-identical to that path.
 pub async fn derive(client: &DstackClient, index: u8) -> Result<DerivedSigner> {
     let path = signer_path(index);
