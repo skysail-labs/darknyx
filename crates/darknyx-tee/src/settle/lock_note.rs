@@ -1,36 +1,39 @@
-//! `lock_note` instruction builder (Tx A of the v3.5 settle pipeline).
+//! Builder for the `vault::lock_note` instruction — Tx A of the settle pipeline,
+//! which pins a note between matching and settlement.
 //!
-//! Constructs the Solana `Instruction` the on-chain `vault::lock_note`
-//! handler expects. The on-chain side
-//! (`programs/vault/src/instructions/lock_note.rs`) takes:
+//! The TEE relays a **user-supplied** VALID_INPUT Groth16 proof; it does not
+//! generate one. The on-chain handler
+//! (`programs/vault/src/instructions/lock_note.rs`) enforces
+//! `tee_authority ∈ vault_config.tee_pubkeys` and verifies that proof against the
+//! recent-roots ring of the shard named by `tree_id`.
 //!
-//!   - 5 accounts: `tee_authority` (signer, writable), `vault_config`
-//!     (PDA, read-only), `merkle_tree[tree_id]` (PDA, read-only — the
-//!     shard whose recent-roots ring the `merkle_root` is checked
-//!     against), `note_lock` (PDA, writable — init), `system_program`.
-//!   - 7 instruction-data args, Anchor-style (8-byte discriminator
-//!     + Borsh-encoded args in declaration order):
-//!       1. `tree_id: u8` (post-sharding: selects the `merkle_tree` account)
-//!       2. `note_use_tag: [u8; 32]`
-//!       3. `order_id: [u8; 16]`
-//!       4. `expiry_slot: u64`
-//!       5. `token_mint: Pubkey` (32 bytes)
-//!       6. `merkle_root: [u8; 32]`
-//!       7. `proof: Groth16Proof` (256 bytes — pi_a 64 + pi_b 128 + pi_c 64)
+//! Two layouts are pinned to that handler and must change in lockstep with it.
+//! Both are covered by the tests at the bottom of this file:
 //!
-//! The handler enforces `tee_authority ∈ vault_config.tee_pubkeys`
-//! and verifies the VALID_INPUT Groth16 proof against the merkle
-//! root. **The proof is user-supplied** — the TEE just relays it.
-//! 4g.3 takes the proof bytes as a builder input; integrating it
-//! with `POST /orders` (so the TEE actually has a proof to relay)
-//! is its own follow-up — for now the LockingNotes stage worker
-//! fails the job with a clear "missing valid_input_proof" reason
-//! when no proof is attached.
+//!   - **Instruction data** — the 8-byte Anchor discriminator followed by Borsh
+//!     args in declaration order: `tree_id: u8`, `note_use_tag: [u8; 32]`,
+//!     `order_id: [u8; 16]`, `expiry_slot: u64`, `token_mint: Pubkey`,
+//!     `merkle_root: [u8; 32]`, `proof: Groth16Proof` (256 bytes) — 385 bytes
+//!     total. Reordering these deserialises into the wrong fields on-chain rather
+//!     than failing at the boundary, so the layout is pinned by an offset test.
 //!
-//! Wire spec for the discriminator is the same as Anchor's:
-//! `sha256("global:lock_note")[..8]`. We compute it at runtime
-//! once and cache via `LazyLock` — same constant the SDK's
-//! `idl/vault-client.ts::anchorDiscriminator("lock_note")` produces.
+//!   - **Account list** — 6 accounts, positional, matching `LockNote<'info>`:
+//!     `tee_authority` (signer, writable — pays both the tx fee and the
+//!     `note_lock` rent), `vault_config`, `merkle_tree[tree_id]`, `note_lock`
+//!     (writable, init), `consumed_note`, `system_program`.
+//!
+//! `consumed_note` is passed read-only and **must be absent**: its existence is
+//! the consume-once guard that stops an already-spent note being locked again
+//! (audit U-02).
+//!
+//! `token_mint` is the 32-byte Solana mint address, not the `(lo, hi)` field-element
+//! pair the VALID_INPUT circuit uses internally — the handler does that split
+//! itself.
+//!
+//! The discriminator is `sha256("global:lock_note")[..8]`, the same constant
+//! `packages/sdk/src/idl/vault-client.ts::anchorDiscriminator` produces. A drift
+//! here surfaces on-chain as a failed instruction dispatch, so it is pinned to a
+//! literal in `discriminator_pins_to_anchor_global_lock_note`.
 
 use std::sync::LazyLock;
 
@@ -70,7 +73,7 @@ impl Groth16ProofBytes {
     pub const WIRE_LEN: usize = 64 + 128 + 64;
 
     /// Parse from the 256-byte `pi_a ‖ pi_b ‖ pi_c` concatenation —
-    /// the wire form a client relays a VALID_INPUT proof in (4g.7c).
+    /// the wire form a client relays a VALID_INPUT proof in.
     pub fn from_concat(bytes: &[u8; Self::WIRE_LEN]) -> Self {
         let mut pi_a = [0u8; 64];
         let mut pi_b = [0u8; 128];
@@ -109,7 +112,7 @@ impl LockNoteArgs {
 
 /// Build the full `Instruction`. Caller composes this into a
 /// `Message`, signs with the TEE keypair (which is BOTH the
-/// `tee_authority` Signer AND the tx fee-payer — see PR 4g.3 doc),
+/// `tee_authority` Signer AND the tx fee-payer),
 /// and submits via `SolanaRpcClient::send_transaction`.
 ///
 /// Accounts (positional, in the order the on-chain `LockNote<'info>`
@@ -122,8 +125,9 @@ impl LockNoteArgs {
 ///     &[tree_id]] — the shard whose recent-roots ring is checked.
 ///   - `[3]` `note_lock`: writable PDA (init), seeds=[b"note_lock",
 ///     note_use_tag].
-///   - `[4]` `consumed_note`: read-only PDA (U-02 consume-once guard — must be
-///     ABSENT), seeds=[b"consumed_note", note_use_tag].
+///   - `[4]` `consumed_note`: read-only PDA, seeds=[b"consumed_note",
+///     note_use_tag]. Must be ABSENT — its existence is the consume-once
+///     guard (audit U-02).
 ///   - `[5]` `system_program`: read-only.
 pub fn build_lock_note_ix(tee_authority: &Address, args: LockNoteArgs) -> Instruction {
     let program_id = vault_program_id();
@@ -137,7 +141,7 @@ pub fn build_lock_note_ix(tee_authority: &Address, args: LockNoteArgs) -> Instru
         AccountMeta::new_readonly(vault_cfg_pda, false),
         AccountMeta::new_readonly(merkle_tree, false), // shard recency source
         AccountMeta::new(note_lock_pda_addr, false),   // writable (init)
-        AccountMeta::new_readonly(consumed_note_pda_addr, false), // U-02: must be absent
+        AccountMeta::new_readonly(consumed_note_pda_addr, false), // must be absent
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
 
@@ -276,7 +280,7 @@ mod tests {
         assert!(!ix.accounts[3].is_signer);
         assert!(ix.accounts[3].is_writable);
 
-        // [4] consumed_note: readonly (U-02 must-be-absent guard)
+        // [4] consumed_note: readonly, must-be-absent consume-once guard
         assert_eq!(ix.accounts[4].pubkey, consumed_note_pda(&[0xAA; 32]).0);
         assert!(!ix.accounts[4].is_signer);
         assert!(!ix.accounts[4].is_writable);
