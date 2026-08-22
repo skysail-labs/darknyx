@@ -1,25 +1,20 @@
 //! Solana keypair helpers.
 //!
-//! **History**: PR 4g.2 introduced a separate fee-payer derivation
-//! from a distinct dstack path (`"darknyx/solana-fee-payer/v1"`). PR
-//! 4g.3 walked that back when it became clear `lock_note` (and
-//! every other settle-pipeline ix) requires `tee_authority` —
-//! `vault_config.tee_pubkey` — as a signer. Having two separate
-//! Solana addresses both needing devnet SOL doubled the operational
-//! burden without any compromise-isolation benefit (both keys live
-//! in the same TEE memory).
+//! **One Ed25519 keypair, derived from `"darknyx/ed25519-signer/v2"` (see
+//! [`crate::keys::ed25519`]), fills all three roles:**
 //!
-//! The unified model: **one Ed25519 keypair** derived from
-//! `"darknyx/ed25519-signer/v2"` (see [`crate::keys::ed25519`]) acts as
-//! all three roles:
+//!   - the TEE `canonical_payload_hash` signer, authenticating
+//!     `MatchResultPayload` in `tee_forced_settle_batched`;
+//!   - the on-chain `tee_authority` signer in `lock_note` and
+//!     `tee_forced_settle_batched`, checked against `vault_config.tee_pubkeys`;
+//!   - the Solana transaction fee-payer, paying per-instruction rent and tx fees.
 //!
-//!   - the TEE `canonical_payload_hash` signer
-//!     (`MatchResultPayload` auth in `tee_forced_settle_batched`)
-//!   - the on-chain `tee_authority` Signer in `lock_note` /
-//!     `tee_forced_settle_batched` (the registered key check)
-//!   - the Solana tx fee-payer (pays per-ix rent + tx fees)
+//! Deriving a separate fee-payer from its own dstack path is possible but was
+//! rejected: every settle-pipeline instruction already requires `tee_authority` as
+//! a signer, so a second address would need funding and monitoring in parallel
+//! while offering no compromise isolation — both keys would live in the same
+//! enclave memory anyway.
 //!
-//! Conversion is via [`crate::keys::ed25519::DerivedSigner::solana_keypair`].
-//! This module is intentionally near-empty — kept around as the
-//! home for future Solana-specific key utilities (e.g. priority-fee
-//! sub-accounts in 4g.5, if we end up needing them).
+//! Conversion is [`crate::keys::ed25519::DerivedSigner::solana_keypair`]. This
+//! module is deliberately near-empty; it is the home for Solana-specific key
+//! utilities should any be needed.

@@ -73,7 +73,7 @@ pub const DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS: u64 = 1_000;
 pub struct MatcherState {
     book: OrderBook,
     next_match_id: u64,
-    /// Per-order input-note openings (4g.7a). Populated at intake
+    /// Per-order input-note openings. Populated at intake
     /// after the opening verifies against the signed commitment;
     /// read by the settle assembler; pruned on cancel / settle.
     openings: super::openings::OpeningStore,

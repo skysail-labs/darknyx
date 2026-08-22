@@ -1,9 +1,29 @@
-//! Pyth oracle boundary. Exactly one boot-selected producer writes the shared
-//! cache: either the authenticated upgraded router service (verified 3-of-5 in
-//! process) or finalized upgraded Pyth Core push accounts on Solana. The
-//! matcher reads only the cache and therefore never waits on oracle I/O.
+//! Pyth oracle boundary.
 //!
-//! See `docs/tee-architecture.md` §6 for the source and freshness model.
+//! Exactly one boot-selected producer writes the shared cache: either the
+//! authenticated Pyth router service (verified 3-of-5 in process) or finalized Pyth
+//! Core push accounts on Solana. **The matcher reads only the cache**, so a match
+//! tick never waits on oracle I/O and a slow or unreachable oracle degrades price
+//! freshness rather than stalling matching.
+//!
+//! ```text
+//!   source.rs       the boot selection between producers
+//!   sync.rs         the producer loop that refreshes the cache
+//!   cache.rs        the shared cache the matcher reads, and its freshness state
+//!   push.rs         Pyth Core push accounts on Solana
+//!   hermes.rs       the Pyth router service client
+//!   vaa.rs          VAA parsing and signature verification
+//!   accumulator.rs  accumulator-proof handling — see docs/oracle-accumulator-notes.md
+//! ```
+//!
+//! Two distinct checks, easy to conflate. The producer validates on **write** —
+//! a feed whose local arrival is already too old is rejected before it reaches
+//! the cache. The cache read itself does **not** check staleness: `get` returns
+//! whatever is present and reports its age, and the matching tick owns the
+//! staleness policy from there. So a stale entry is visible to the matcher as
+//! stale rather than silently withheld, and the admission gate decides.
+//!
+//! See `docs/tee-architecture.md` §6.
 
 pub mod accumulator;
 pub mod cache;

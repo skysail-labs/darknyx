@@ -18,7 +18,7 @@
 //! opening that still hashes to the signed commitment — the opening
 //! is cryptographically pinned to the signature WITHOUT having to
 //! expand the canonical order encoding (and therefore without a
-//! cross-language signing-contract change — CLAUDE.md §6).
+//! cross-language signing-contract change — CLAUDE.md §7).
 //!
 //! The order schema used to carry a `nullifier` here too. It was
 //! removed (audit 2026-07-25, S-09): payload v9 dropped nullifiers
@@ -156,7 +156,7 @@ pub struct OrderOpening {
 /// carries `note_buyer` / `note_seller` (commitments, not order ids),
 /// so keying by commitment lets the settle assembler resolve both
 /// sides of a match directly. Inserted at intake (after the opening
-/// verifies), read by the assembler (4g.7d), removed on cancel /
+/// verifies), read by the settle assembler, removed on cancel /
 /// expiry / settle so the table tracks the live book.
 #[derive(Default, Debug)]
 pub struct OpeningStore {

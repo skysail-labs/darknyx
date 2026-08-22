@@ -1,13 +1,15 @@
-//! Per-match settle job — identity + state machine + status snapshot.
+//! Per-match settle job — identity, state machine, and status snapshot.
 //!
-//! One [`SettleJob`] per match in a `RunBatchOutput`. The scheduler
-//! enqueues jobs in `Queued` and (in PRs 4g.3–4g.6) drives them
-//! through the pipeline stages. Status is exposed read-only via
-//! `GET /settlement/status/{batch_id}`.
+//! One [`SettleJob`] exists per match in a `RunBatchOutput`. The scheduler enqueues
+//! it in `Queued` and the stage workers advance it through the pipeline described
+//! in [`super`]. `MatchPair` is snapshotted at enqueue time so each stage can build
+//! its instruction without re-reading matcher state, which may have moved on.
 //!
-//! `MatchPair` is snapshotted at enqueue time so each downstream
-//! stage has everything it needs to construct the on-chain ix
-//! without re-looking-up the matcher's state.
+//! Two things are deliberately asymmetric between what the enclave knows and what
+//! it serves. A job's failure carries both a closed-set [`SettleFailureKind`] label
+//! and a free-form `reason`; only the label leaves the enclave. And the stage that
+//! failed is not published directly — it is implied by which signatures are filled
+//! in, so the status surface cannot be used to probe internal progress.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,16 +47,16 @@ pub struct SettleJobId {
 pub enum SettleJobStage {
     /// Enqueued; no stage worker has picked it up yet.
     Queued,
-    /// Tx A (lock_note × 2) in flight. PR 4g.3.
+    /// Tx A (lock_note × 2) in flight.
     LockingNotes,
-    /// Groth16 proof generation in progress. PR 4g.4.
+    /// Groth16 proof generation in progress.
     Proving,
-    /// Tx B (verify_match_batch) in flight. PR 4g.5.
+    /// Tx B (verify_match_batch) in flight.
     Verifying,
     /// Tx C (per-batch ALT) + Tx D (tee_forced_settle_batched) in
-    /// flight. PR 4g.5.
+    /// flight.
     Settling,
-    /// Tx E (close_batch_validity_marker) in flight. PR 4g.6.
+    /// Tx E (close_batch_validity_marker) in flight.
     Closing,
     /// Tx D confirmed for this match. Marker close is asynchronous rent
     /// bookkeeping and is not part of settlement finality.
@@ -76,13 +78,14 @@ pub enum SettleJobStage {
 
 /// What class of thing went wrong, as a closed set.
 ///
-/// SW-01: a settle failure's free-form text used to be serialized straight into
-/// `GET /settlement/status/{batch_id}`, which any authenticated account may
-/// poll. That text is built from internal errors, and one of them interpolated
-/// the RPC endpoint — credential included.
+/// A settle failure's diagnostic text is built from internal errors and never
+/// leaves the enclave; only one of these labels does. The distinction matters
+/// because `GET /settlement/status/{batch_id}` is pollable by any authenticated
+/// account, and internal error text has previously interpolated the RPC
+/// endpoint — credential included (audit SW-01).
 ///
-/// Redacting that endpoint (see `solana_rpc::redact_endpoint`) fixes the leak
-/// that existed. This type fixes the *channel*: a fixed set of labels cannot
+/// Redaction (`solana_rpc::redact_endpoint`) removes that specific credential.
+/// This type removes the *channel*: a fixed set of labels cannot
 /// carry whatever the next internal error happens to embed. It restores the
 /// premise `api/settlement.rs` was written against — "the response leaks only
 /// stage labels + tx signatures".
@@ -180,15 +183,15 @@ pub struct SettleJob {
     /// the on-chain ix builders need.
     pub match_pair: MatchPair,
     /// Base58 signature of `lock_note` for the buyer's input note.
-    /// Filled by 4g.3.
+    /// Filled by Tx A.
     pub lock_buyer_sig: Option<String>,
-    /// Symmetric — seller's input note lock. Filled by 4g.3.
+    /// Symmetric — seller's input note lock. Filled by Tx A.
     pub lock_seller_sig: Option<String>,
-    /// `verify_match_batch` tx signature. Filled by 4g.5.
+    /// `verify_match_batch` tx signature. Filled by Tx B.
     pub verify_sig: Option<String>,
-    /// `tee_forced_settle_batched` tx signature. Filled by 4g.5.
+    /// `tee_forced_settle_batched` tx signature. Filled by Tx D.
     pub settle_sig: Option<String>,
-    /// `close_batch_validity_marker` tx signature. Filled by 4g.6.
+    /// `close_batch_validity_marker` tx signature. Filled by Tx E.
     pub close_sig: Option<String>,
 }
 
@@ -211,7 +214,7 @@ impl SettleJob {
     }
 
     /// Set the stage + stamp `last_transition_at`. Callers (the
-    /// stage workers in 4g.3+) must hold the scheduler's write
+    /// stage workers) must hold the scheduler's write
     /// lock when invoking.
     pub fn transition(&mut self, next: SettleJobStage) {
         self.stage = next;

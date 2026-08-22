@@ -190,7 +190,7 @@ By domain, additionally:
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** |
 | `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave calls `PreparedMatchTick::next_page` (`single_fill_per_order: true`), NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
-| `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). |
+| `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). **Comment conventions: [§10.5](#105-comment-conventions)** — enforced by `scripts/check-no-process-markers.sh`. |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
 | Settlement plumbing | `CRYPTOGRAPHY.md` §9 (size analysis + ALT story). The 1232-byte cap is tight — see [§6](#6-the-1232-byte-transaction-size-budget). |
@@ -304,6 +304,9 @@ bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writ
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check-no-debug-endpoints.sh            # /__debug must stay off by default (SW-33)
+bash scripts/check-no-process-markers.sh            # darknyx-tee headers must say what is TRUE
+                                                    #   now, not which PR made it true. See
+                                                    #   See §10.5.
 bash scripts/check-no-doctests.sh                   # nextest skips doctests; this
                                                     #   fails if one ever appears
 cargo nextest run --workspace                       # unit + litesvm integration.
@@ -1041,6 +1044,50 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
 
 ---
 
+## 10.5 Comment conventions
+
+Applies to `crates/darknyx-tee` today (enforced there by
+`scripts/check-no-process-markers.sh`); extend it to other crates as they are
+cleaned up. Much of this repo is pinned by contracts it does not own — on-chain
+account layouts, circuit public inputs, wire formats mirrored in the SDK — and a
+header comment is usually the only place those constraints sit next to the code
+that depends on them.
+
+**A module header answers four questions, in order:** what this is (one
+sentence, present tense); where it sits (what calls it, what it calls); what
+must not break (wire layouts, ordering, arity caps — and what fails if
+violated); and where the authority lives (the canonical doc, or the counterpart
+implementation it must stay byte-identical to).
+
+* **Present tense.** Never "will be", "for now", "was added in", "used to". A
+  reader cannot verify a claim about the past and should not have to. **Nine
+  such statements in `darknyx-tee` turned out to be false**, including a proving
+  key documented as 74 MB that is 130 MB.
+* **No implementation-process references.** No PR numbers, phase names, slice or
+  step numbers. They resolve to nothing within months.
+* **State invariants as invariants, not as history.** "The account list must
+  match the on-chain struct order" — not "PR 4g.3 reordered the accounts".
+* **Keep load-bearing numbers exact.** Byte widths, account indices,
+  discriminators, arities are the contract.
+* **Do not restate the code.** Explain what it cannot say: why an order is
+  mandatory, what breaks if it changes, where the mirror lives.
+* **Name the failure.** Say how a violation surfaces — `InvalidProof (6000)`,
+  `ConstraintSeeds (2006)`, `StaleMerkleRoot (6004)`. That is what turns a
+  comment into a debugging aid.
+
+**Audit IDs may be cited only alongside the substance, never as the sole
+explanation.** `consumed_note is read-only (U-02)` explains nothing;
+"`consumed_note` must be ABSENT — its existence is the consume-once guard
+(audit U-02)" keeps the path back to `audits/residual-backlog.md`, which still
+indexes them and where some findings are open. If you cannot state the invariant
+in plain language, the ID is not a substitute for understanding it.
+
+On a docs-only change also run `cargo doc --no-deps -p <crate>`: doc comments on
+public items take part in intra-doc link resolution, so a malformed link is a
+build warning rather than a silent typo.
+
+---
+
 ## 11. Committing
 
 Every commit uses `git commit -s` (adds `Signed-off-by` from `user.email`).
@@ -1073,6 +1120,7 @@ it after; never commit a secret).**
 3. Touching cryptography in either language → re-read [§7](#7-cross-language-byte-equality-contracts).
 4. Touching markers / the settle handler → re-read [§8](#8-marker--pda-lifecycle-conventions).
 5. Deploying/testing on a CVM → [§3](#3-the-phala-cvm--build--deploy--test) + stop it after.
+6. Writing or editing a comment → [§10.5](#105-comment-conventions).
 
 > **Fee model.** Both legs pay their own protocol fee and BOTH fee notes
 > (base + quote) mint. Each order locks `nominal + its own fee` collateral —

@@ -1,9 +1,17 @@
-//! Privacy-preserving settlement benchmark telemetry.
+//! Settlement benchmark telemetry.
 //!
-//! This state is intentionally in-memory and bounded. It records only batch
-//! identity, timing, queueing, prover configuration and terminal outcome
-//! counts. Prices, amounts, order ids, commitments, owners and witnesses never
-//! enter this module.
+//! Records per-batch timing, queueing, prover configuration, and terminal outcome
+//! counts, so settle throughput can be measured without a profiler attached to a
+//! live enclave. Served through the metrics endpoints and consumed by the
+//! throughput work in `docs/throughput-roadmap.md`.
+//!
+//! **What may never enter this module: prices, amounts, order ids, commitments,
+//! owners, and witnesses.** Metrics are the one settle surface that is aggregated
+//! and long-lived, which makes it the easiest place to reintroduce the amount
+//! leakage the payload design removed. Batch identity plus timing is the ceiling.
+//!
+//! State is in-memory and bounded ([`SETTLEMENT_METRICS_RECENT_CAP`]); nothing here
+//! survives a restart, and nothing here is authoritative for settlement itself.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};

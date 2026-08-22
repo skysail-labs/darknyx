@@ -1,4 +1,4 @@
-//! ICICLE (CPU) prover parity + smoke test (Phase 1 of the GPU-prove track).
+//! ICICLE (CPU) prover parity + smoke test.
 //!
 //! Proves a REAL N=16 VALID_MATCH_BATCH (from the settle assembler) with the
 //! `icicle-snark` backend on `device=CPU`, then verifies the resulting proof

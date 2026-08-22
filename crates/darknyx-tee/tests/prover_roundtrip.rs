@@ -1,5 +1,5 @@
 //! End-to-end prove + verify for the in-TEE VALID_MATCH_BATCH
-//! prover (PR 4g.4b).
+//! prover.
 //!
 //! Proves a 2-slot batch against the `match_batch_n2` zkey and
 //! verifies the resulting Groth16 proof against the zkey's own
@@ -13,7 +13,8 @@
 //! same `MatchSlot()` template body as N=16 — only the Merkle tree
 //! depth differs. Proving N=2 validates the entire pipeline at a
 //! fraction of N=16's cost. The N=16-against-the-real-on-chain-VK
-//! verification (via groth16-solana + litesvm) lands in PR 4g.6.
+//! verification (via groth16-solana + litesvm) lives in
+//! `programs/vault/tests/match_batch_verify.rs`.
 //!
 //! ## Why this test is gated
 //!
@@ -53,7 +54,7 @@ fn n2_artifacts_present(build_dir: &Path) -> bool {
 // ark-circom's wasmer-backed witness calculator requires a Tokio
 // reactor in scope (virtual-fs uses tokio). `prove()` is itself
 // synchronous + CPU-heavy, so in production the settle-stage
-// worker (PR 4g.6) must call it via `tokio::task::spawn_blocking`
+// worker must call it via `tokio::task::spawn_blocking`
 // from inside the runtime. Here we just run the test body under a
 // multi-thread runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -111,7 +112,7 @@ async fn prove_and_verify_n2_dummy_batch() {
 
     // 4. The on-chain byte conversion produces a well-formed
     //    256-byte proof (64 + 128 + 64). The actual on-chain
-    //    groth16-solana acceptance lands in 4g.6 (N=16 + litesvm).
+    //    groth16-solana acceptance is covered by litesvm at N=16.
     let onchain = prover.prove(&slots).expect("prove → on-chain bytes");
     assert_eq!(onchain.proof.pi_a.len(), 64);
     assert_eq!(onchain.proof.pi_b.len(), 128);
@@ -136,7 +137,7 @@ fn load_rejects_missing_artifacts() {
     }
 }
 
-// `tokio::test`: since the witness-calc cache (Step 0) moved the circom wasm
+// `tokio::test`: since the witness-calc cache moved the circom wasm
 // compile into `load()`, loading the prover spins up wasmer's virtual-fs, which
 // needs a Tokio 1.x reactor. The batch-size rejection itself still happens in
 // `prove()` before any witness gen — this just gives `load()` a runtime.

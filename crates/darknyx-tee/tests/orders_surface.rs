@@ -1,4 +1,4 @@
-//! End-to-end tests for the PR-4e.3 orders surface
+//! End-to-end tests for the orders surface
 //! (`POST /orders` + `DELETE /orders/{id}` + `GET /orders/{id}`).
 //!
 //! Drives the router via `tower::ServiceExt::oneshot` so we never
@@ -115,7 +115,7 @@ struct PlaceOrderBuilder {
     expiry_slot: u64,
     order_id: [u8; 16],
     arrival_nonce: u64,
-    // Input-note opening (4g.7a). The note_commitment is DERIVED from
+    // Input-note opening. The note_commitment is DERIVED from
     // these via NoteOpening::commitment() so the handler's intake
     // verification passes; tests that want to break the opening
     // override the emitted JSON directly.
@@ -249,7 +249,7 @@ impl PlaceOrderBuilder {
             "trading_key_signature": hex::encode(sig.to_bytes()),
             "owner_commitment": hex::encode(self.owner_commitment),
             "note_inner_hash": hex::encode(self.note_inner_hash),
-            // VALID_INPUT proof relay (4g.7c). Intake stores these
+            // VALID_INPUT proof relay. Intake stores these
             // opaquely (on-chain lock_note verifies the proof), so
             // dummy bytes are fine for the orders-surface tests.
             "merkle_root": hex::encode([0xDDu8; 32]),
@@ -405,7 +405,7 @@ async fn place_rejects_collateral_below_the_required_floor() {
 
 #[tokio::test]
 async fn place_populates_opening_store_keyed_by_commitment_and_cancel_clears_it() {
-    // 4g.7c: a placed order's settle inputs (opening + order_id +
+    // A placed order's settle inputs (opening + order_id +
     // VALID_INPUT proof relay) land in the in-enclave store keyed by
     // the collateral note commitment, and a cancel drops them.
     let matcher_state = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
@@ -1544,7 +1544,7 @@ async fn modify_collateral_conflict_leaves_both_existing_orders_untouched() {
     }
 }
 
-// ─── error envelope + request-id correlation (Phase 1) ──────────────────────
+// ─── error envelope + request-id correlation ────────────────────────────────
 
 #[tokio::test]
 async fn error_responses_use_the_structured_envelope_with_a_numeric_code() {

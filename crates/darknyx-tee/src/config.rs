@@ -1,9 +1,20 @@
 //! Env-driven config. The full set of allowed env vars must also
 //! appear in `app-compose.json::allowed_envs` — changing this list
 //! changes `compose_hash` and therefore requires a new image
-//! authorization in dstack governance + a multisig rotation of
-//! `vault_config.tee_pubkey` on Solana. See
-//! `docs/tee-architecture.md` §11.
+//! authorization in dstack governance and a multisig rotation of the
+//! `vault_config.tee_pubkeys` set on Solana. Under tree sharding that set
+//! holds all K shard signers, and they must be registered in shard order —
+//! `keys[j]` settles shard `j`. See `docs/tee-architecture.md` §11.
+//!
+//! Most malformed values fail startup rather than falling back, and an EMPTY
+//! value falls back to the default. That asymmetry is deliberate, but it means a
+//! variable silently reverting to its default is indistinguishable from one that
+//! was never set.
+//!
+//! The fail-closed rule is not universal, so do not rely on it as an invariant:
+//! a non-UTF-8 value reads as unset, some out-of-range numerics are clamped
+//! rather than rejected, and `DARKNYX_TEE_SOLANA_RPC_URL` is not validated at
+//! load time — a malformed URL surfaces later as an RPC failure.
 
 use std::collections::HashSet;
 
@@ -56,7 +67,7 @@ struct MarketSpecJson {
 /// Deliberately an explicit enum rather than a bool: a client reading `/info`
 /// must be able to tell the legacy gateway-terminated path apart *by name*,
 /// not infer it from a missing field. Production release assembly rejects
-/// `GatewayTerminated` once the RA-TLS cutover lands (Phase 3).
+/// `GatewayTerminated`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportModeConfig {
     /// TLS terminated by the dstack gateway. The legacy path.
@@ -115,7 +126,7 @@ impl TransportModeConfig {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Phase 1 stub: fields are read once the api/settle modules wire in.
+#[allow(dead_code)] // Not every field is read on every build profile.
 pub struct Config {
     /// Boot-static market routing table. `DARKNYX_TEE_MARKETS_JSON` is the
     /// preferred governed multi-market input. The legacy singular envs are

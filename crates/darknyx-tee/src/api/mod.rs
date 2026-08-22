@@ -1,12 +1,68 @@
-//! HTTP + WS surface. Wire contract: `docs/tee-api-openapi.yaml`.
+//! The enclave's HTTP and WebSocket surface.
 //!
-//! Landed: `health`, `info`, `attestation` (PR 4d); `auth` + `orders`
-//! (PR 4e); `settlement` (PR 4g.1); `auth/token/revoke` + admin
-//! `account` registration (Phase 1a); `tree/*` over the Merkle mirror
-//! (Phase 2a/2b); `instruments` + `transparency` + the open-order account
-//! snapshot (Phase 2c).
-//! WebSockets are consolidated on the in-band-authenticated `/v1/stream`
-//! multiplexed session (orders, fills, trading ops, and live tree events).
+//! The wire contract is `docs/tee-api-openapi.yaml`; the auth model is
+//! `docs/tee-architecture.md` §11. This module is where every external request
+//! enters the TEE, which makes it the boundary that decides what a client may do
+//! and what it may learn.
+//!
+//! # Three trust tiers
+//!
+//! Routes are mounted in one of three scopes, and which scope a route belongs to is
+//! a security decision, not an organisational one:
+//!
+//!   - **Public** — `/health`, `/info`, `/attestation`, `/transport-attestation`,
+//!     `/auth/token`, `/tree/root`, `/instruments`, `/transparency`,
+//!     `/system/status`, `/time`. `/transport-attestation` is unauthenticated *by
+//!     necessity*: a client must be able to verify the transport before it sends a
+//!     credential, so it is rate-limited in the handler rather than gated.
+//!   - **Bearer-protected** — orders, settlement status, Merkle inclusion and leaf
+//!     reads, the account snapshot, token revocation. Attached with `route_layer`
+//!     rather than `layer`, so the bearer check runs only on declared routes; with
+//!     `layer` the middleware would also wrap the 404 fallback and answer `401` for
+//!     every unknown path.
+//!   - **Admin-gated** — `/admin/accounts`, `/admin/metrics/settlement`, and the
+//!     drain controls, gated inside their handlers on top of the bearer scope.
+//!
+//! `/v1/stream` is the sole WebSocket surface. It authenticates **in-band** via an
+//! `op: login` frame, then multiplexes orders, fills, tree events, and trading ops
+//! over one session.
+//!
+//! # Module map
+//!
+//! ```text
+//!   mod.rs                  router assembly and the scope layering above
+//!   auth.rs                 token issue/revoke, account registration, admin gate
+//!   orders.rs               place / cancel / modify / get — the intake path
+//!   order_router.rs         routes an order to its market's book
+//!   stream.rs               the /v1/stream session and its channels
+//!   fills_router.rs         per-account fills fan-out
+//!   state.rs                ApiState — the shared handle every handler reads
+//!   error.rs                the error type, and what it is allowed to disclose
+//!   rate_limit.rs           per-account request metering
+//!   conn_limit.rs           per-account and global connection caps
+//!   account.rs              caller's open-order snapshot and settings
+//!   instruments.rs          market metadata
+//!   tree.rs                 Merkle mirror reads (root public, rest bearer)
+//!   transparency.rs         proof-of-reserves, engine identity, stats
+//!   attestation.rs          the enclave quote
+//!   transport_attestation.rs  binds the served TLS cert to this boot and signer set
+//!   settlement.rs           settle job status by batch id
+//!   system.rs, info.rs, health.rs, metrics.rs   liveness and identity reads
+//!   drain.rs                planned-stop control
+//!   debug.rs                feature-gated; must never be on in production
+//! ```
+//!
+//! # What must not break
+//!
+//! Handlers must not widen what leaves the enclave. Settle failures are served as a
+//! closed set of labels, never their diagnostic text; the account snapshot returns
+//! only the caller's open orders, with balances and note openings staying
+//! client-side; and errors are mapped through [`error`] rather than formatted from
+//! internal values. Each of these has leaked a credential or an amount at least
+//! once — see [`error`] and [`crate::settle::job::SettleFailureKind`].
+//!
+//! `debug.rs` compiles only under the `debug_endpoints` cargo feature and is
+//! verified off by `scripts/check-no-debug-endpoints.sh`.
 
 pub mod account;
 pub mod attestation;
@@ -50,32 +106,33 @@ pub use state::{ApiState, BootAppInfo};
 ///
 /// Route map:
 ///
-/// | Method | Path           | Auth          | Lands in |
-/// |--------|----------------|---------------|----------|
-/// | GET    | `/health`      | public        | PR 4d    |
-/// | GET    | `/info`        | public        | PR 4d    |
-/// | GET    | `/attestation` | public        | PR 4d    |
-/// | GET    | `/transport-attestation` | public | T-03P |
-/// | POST   | `/auth/token`  | public        | PR 4e.2  |
-/// | POST   | `/orders`      | bearer (4e.2) | PR 4e.3  |
-/// | DELETE | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
-/// | GET    | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
-/// | GET    | `/settlement/status/{batch_id}` | bearer | PR 4g.1 |
-/// | POST   | `/auth/token/revoke` | bearer   | Phase 1a |
-/// | POST   | `/admin/accounts` | bearer+admin | Phase 1a |
-/// | GET    | `/tree/root`   | public        | Phase 2a |
-/// | GET    | `/tree/inclusion` | bearer     | Phase 2a |
-/// | GET    | `/tree/leaves` | bearer        | Phase 2a |
-/// | GET    | `/instruments` | public        | Phase 2c |
-/// | GET    | `/instruments/{symbol}` | public | Phase 2c |
-/// | GET    | `/account`     | bearer        | Phase 2c |
-/// | GET    | `/transparency` | public       | Phase 2c |
-/// | GET    | `/admin/metrics/settlement` | bearer+admin | benchmark telemetry |
+/// | Method | Path | Auth | Notes |
+/// |--------|------|------|-------|
+/// | GET    | `/health` | public | |
+/// | GET    | `/info` | public | primary shard signer |
+/// | GET    | `/attestation` | public | enclave quote |
+/// | GET    | `/transport-attestation` | public | must precede any credential |
+/// | POST   | `/auth/token` | public | metered in-handler, not by the bearer layer |
+/// | GET    | `/tree/root` | public | cross-checkable against `VaultConfig` on Solana |
+/// | GET    | `/instruments`, `/instruments/{symbol}` | public | market metadata |
+/// | GET    | `/transparency` | public | proof-of-reserves + engine identity |
+/// | GET    | `/system/status` | public | liveness / degraded mode |
+/// | GET    | `/time` | public | server slot, for GTT conversion |
+/// | GET    | `/v1/stream` | in-band | `op: login`; the only WebSocket |
+/// | POST   | `/orders` | bearer | |
+/// | PUT/DELETE/GET | `/orders/{id}` | bearer | PUT is atomic cancel + replace |
+/// | GET    | `/settlement/status/{batch_id}` | bearer | closed-set failure labels only |
+/// | GET    | `/tree/inclusion`, `/tree/leaves` | bearer | |
+/// | GET    | `/account` | bearer | caller's open orders only |
+/// | POST   | `/auth/token/revoke` | bearer | denylists the caller's own token |
+/// | POST   | `/admin/accounts` | bearer + admin | |
+/// | GET    | `/admin/metrics/settlement` | bearer + admin | benchmark telemetry |
+/// | GET/POST | `/admin/drain` | bearer + admin | planned stop |
 ///
-/// `POST /auth/token` is intentionally public (rate-limited at the
-/// reverse-proxy layer in production); everything inside the
-/// session bearer-token scope is mounted via
-/// [`build_protected_router`] in PR 4e.3.
+/// `POST /auth/token` is public by necessity — it is how a client obtains the
+/// bearer token everything else requires. It is metered inside the handler
+/// rather than by the bearer layer it sits outside of. The rest of the session
+/// scope is mounted via [`build_protected_router`].
 pub fn build_router(state: Arc<ApiState>) -> Router {
     let public = Router::new()
         .route("/health", get(health::handler))
@@ -105,7 +162,7 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/v1/stream", get(stream::stream_ws));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
-    // cargo feature is on. Used by `darknyx-tee-loadgen` (PR 4f) for
+    // cargo feature is on. Used by `darknyx-tee-loadgen` for
     // deterministic local-simulator runs; MUST be off in any
     // production build. See `api::debug` for the security
     // implications.
@@ -136,9 +193,9 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .with_state(state)
 }
 
-/// The bearer-protected sub-router. Mounts the per-order
-/// (Layer B) routes + the Phase 1a account-management routes
-/// (`/auth/token/revoke`, admin-gated `/admin/accounts`).
+/// The bearer-protected sub-router. Mounts the per-order routes and the
+/// account-management routes (`/auth/token/revoke`, and `/admin/accounts`,
+/// which is admin-gated inside its handler).
 /// Exposed `pub` so integration tests can mount additional
 /// test-only routes alongside the production ones.
 pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
@@ -170,7 +227,7 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
             "/account/settings",
             get(account::get_settings).put(account::put_settings),
         )
-        // Layer A account management — bearer-protected. `revoke`
+        // Account management — bearer-protected. `revoke`
         // denylists the caller's own token; `/admin/accounts` is
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))

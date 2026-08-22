@@ -1,11 +1,9 @@
-//! Batch settle worker — drives one matched batch through the full
-//! on-chain pipeline, updating each match's `SettleJob` stage as it
-//! goes.
+//! Batch settle worker — drives one matched batch through the on-chain pipeline,
+//! advancing each match's [`super::job::SettleJob`] as it goes.
 //!
-//! The `SettleScheduler` (4g.1) enqueues per-match jobs in `Queued`;
-//! this worker is what actually moves them to `Done`. One call
-//! settles ONE batch (the VALID_MATCH_BATCH proof + the
-//! `BatchValidityMarker` are per-batch, 1:N):
+//! The scheduler enqueues per-match jobs in `Queued`; this worker moves them to
+//! `Done`. One call settles one batch, because the VALID_MATCH_BATCH proof and the
+//! `BatchValidityMarker` are per-batch and cover all N matches (1:N):
 //!
 //! ```text
 //!   1. LockingNotes  per match: lock_note × 2 (Tx A)
@@ -15,16 +13,18 @@
 //!   5. Closing       once: close_batch_validity_marker (Tx E)
 //! ```
 //!
-//! Stage workers in 4g.7 will assemble [`BatchSettleInputs`] from a
-//! `RunBatchOutput` (the note_c/d + nullifier derivation) and wire
-//! this worker to the live scheduler; here it takes pre-assembled
-//! inputs so the orchestration is testable against the mock RPC
-//! with a fake `Prover` (no circuit artifacts, no minutes-long
-//! N=16 proof).
+//! `prove()` is synchronous, CPU-heavy, and needs a Tokio reactor in scope
+//! (wasmer), so it runs inside `tokio::task::spawn_blocking` rather than stalling a
+//! runtime worker for the duration of an N=16 proof.
 //!
-//! `prove()` is synchronous + CPU-heavy AND needs a Tokio reactor
-//! in scope (wasmer); it runs inside `tokio::task::spawn_blocking`
-//! so it doesn't stall a runtime worker.
+//! The worker takes pre-assembled [`BatchSettleInputs`] rather than a
+//! `RunBatchOutput`. That boundary is what makes the orchestration testable against
+//! the mock RPC with a fake `Prover` — no circuit artifacts, no minutes-long proof —
+//! and assembly itself is unit-tested separately in [`super::assemble`].
+//!
+//! Where a send's outcome is ambiguous, the authority is the consumed-note PDA and
+//! never the transaction signature; see `reconcile_consumed_pdas` here and the same
+//! reasoning applied to journal entries in [`super::recover`].
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -69,7 +69,7 @@ use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-match inputs the worker needs to settle one match.
 pub struct MatchSettleInputs {
-    /// The settle payload (assembled from the match — 4g.7).
+    /// The settle payload, assembled from the match.
     pub payload: MatchResultPayload,
     /// VALID_INPUT lock inputs for the buyer + seller notes (Tx A).
     pub buyer_lock: LockSideInputs,
@@ -265,7 +265,7 @@ impl SettleWorkerCtx {
     }
 
     /// Transition every job in the batch to `stage`. Best-effort —
-    /// an evicted job (4g.6 retention) is skipped.
+    /// an evicted job (see the scheduler's retention bound) is skipped.
     async fn set_all_stages(&self, batch_id: u64, n: usize, stage: SettleJobStage) {
         let mut st = self.settle_state.write().await;
         for idx in 0..n {

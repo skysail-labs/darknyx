@@ -20,7 +20,7 @@
 //! (cross-checked against the recompute reference in tests).
 //!
 //! Powers the `/tree/*` indexer endpoints (D6, `docs/tee-architecture.md`
-//! §5.5). The mirror is fed by the sync task (`super::sync`, Phase 2b);
+//! §5.5). The mirror is fed by the sync task (`super::sync`);
 //! until that wires up it simply starts empty.
 
 use std::collections::{HashMap, VecDeque};
@@ -137,7 +137,7 @@ pub struct MerkleMirror {
     /// (cryptographically impossible) duplicate commitment.
     index_by_commitment: HashMap<[u8; 32], u64>,
     /// Solana slot at which the mirror was last synced from on-chain
-    /// `VaultConfig`. Stamped by the sync task (Phase 2b); 0 until then.
+    /// `VaultConfig`. Stamped by the sync task; 0 until then.
     on_chain_slot: u64,
     /// Roots this shard has held, most-recent-last, capped at
     /// [`MIRROR_ROOT_HISTORY`]. Mirrors the intent of the on-chain

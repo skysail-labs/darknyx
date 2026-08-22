@@ -1,11 +1,11 @@
 //! Groth16 prover interface.
 //!
 //! The trait + error type + output struct live here; the real
-//! implementation is [`super::ark_prover::ArkMatchBatchProver`]
-//! (PR 4g.4b, ark-circom-backed). Call-sites (the settle-stage
-//! worker in 4g.6) hold a `Box<dyn Prover>` so the prover backend
-//! can be swapped (e.g. to rapidsnark, if a CVM benchmark forces
-//! it) without touching the trait surface.
+//! implementations are [`super::ark_prover`], plus the feature-gated
+//! `rapidsnark_prover` and `icicle_prover`. The settle worker holds a
+//! `Arc<dyn Prover>`,
+//! so the backend is selected at boot without any call-site knowing which one
+//! is active.
 //!
 //! Image path for the production proving key:
 //! `/circuits/build/match_batch_n16/circuit_final.zkey`. The path
@@ -84,7 +84,7 @@ pub enum ProverError {
 }
 
 /// Generic prover interface — same signature for the stub today
-/// and the ark-groth16 impl in 4g.4b. Call-sites (the future
+/// and the ark-groth16 impl. Call-sites (the
 /// `Proving` stage worker) hold a `Box<dyn Prover>` so the swap
 /// is internal to this module.
 pub trait Prover: Send + Sync {

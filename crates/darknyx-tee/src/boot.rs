@@ -8,9 +8,9 @@
 //!   3. Derive the Ed25519 signer via
 //!      `dstack.get_key("darknyx/ed25519-signer/v2")` →
 //!      `SigningKey::from_bytes(seed)`.
-//!   4. Log the resulting Solana base58 pubkey so an operator can
-//!      cross-check against the on-chain `vault_config.tee_pubkey`
-//!      before running the rotation ceremony.
+//!   4. Log the resulting Solana base58 pubkeys — the full K-shard set —
+//!      so an operator can cross-check them against the on-chain
+//!      `vault_config.tee_pubkeys` before running the rotation ceremony.
 //!
 //! Returns the derived signer to `main.rs`, which threads it
 //! through to the settle-pipeline + the API server's `/info`

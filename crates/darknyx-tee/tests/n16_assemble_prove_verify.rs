@@ -1,6 +1,4 @@
 //! Real N=16 VALID_MATCH_BATCH proof, from the settle assembler
-//! (TEE v2 PR 4g.7 — real-N16-proof, step 1 of 2).
-//!
 //! Closes the loop the `prover_roundtrip` (N=2, dummy slots) test
 //! left open: take a witness produced by the REAL settle assembler
 //! (`settle::assemble::assemble_match`, from a `MatchPair` + verified
@@ -10,13 +8,13 @@
 //!
 //! A passing verify proves the whole chain is byte-consistent:
 //! opening → assembler witness → circuit witness gen → root
-//! cross-check → ark-groth16 prove → verify. Step 2 (a follow-up)
-//! drives the same proof through the on-chain `verify_match_batch`
-//! via litesvm for groth16-solana acceptance.
+//! cross-check → ark-groth16 prove → verify. On-chain acceptance of the same
+//! proof by `verify_match_batch` is covered separately, via litesvm in
+//! `programs/vault/tests/match_batch_verify.rs`.
 //!
 //! ## Gated — opt in
 //!
-//! N=16 needs the pot18 ceremony + a 74 MB proving key; loading it
+//! N=16 needs the pot19 ceremony + a 130 MB proving key; loading it
 //! (debug) takes ~minutes, proving more. So this is gated behind
 //! `RUN_N16_PROVE=1` AND artifact presence (`circuit.wasm` is
 //! gitignored). Run it in release for a sane wall-clock:
@@ -221,7 +219,7 @@ async fn assembler_witness_proves_and_verifies_n16() {
     );
 
     // 6. Optionally dump the on-chain proof bytes + root as a fixture
-    //    for the litesvm on-chain-acceptance test (real-N16 step 2),
+    //    for the litesvm on-chain-acceptance test,
     //    so that test doesn't have to pull in the (heavy) prover.
     //    Layout: pi_a(64) ‖ pi_b(128) ‖ pi_c(64) ‖ merkle_root(32) = 288 B.
     if std::env::var("DUMP_N16_FIXTURE").ok().as_deref() == Some("1") {

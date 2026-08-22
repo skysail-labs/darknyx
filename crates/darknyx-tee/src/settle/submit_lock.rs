@@ -1,29 +1,18 @@
-//! End-to-end: build + sign + submit + confirm the two `lock_note`
-//! txs for one match.
+//! Build, sign, submit, and confirm the two `lock_note` transactions for one match.
 //!
-//! Per match, the v3.5 settle pipeline locks two notes (the
-//! buyer's input + the seller's input). PR 4g.3 ships these as
-//! **two separate transactions**, NOT batched. The reason:
+//! Each match locks two input notes — the buyer's and the seller's — as **two
+//! separate transactions, not one batched transaction.** Two reasons, and the
+//! second is the durable one:
 //!
-//!   - Batching into one tx is feasible but consumes much more headroom
-//!     but only with ALT-based account deduplication. The ALT
-//!     plumbing lands in 4g.5; pre-ALT, two txs is the only path
-//!     that stays under the 1232 B tx-size cap.
-//!   - Two txs are independent. If one fails (proof rejected,
-//!     blockhash expired), the other has already landed and we
-//!     can resubmit just the failed one. With a batched tx, a
-//!     single-side failure aborts both and we re-send both proofs instead of
-//!     valid bytes.
+//!   - Batching both locks into a single transaction only fits under the
+//!     1232-byte cap with ALT-based account deduplication.
+//!   - The two transactions are independent. If one fails — proof rejected,
+//!     blockhash expired — the other has already landed and only the failed side is
+//!     resubmitted. A batched transaction turns any single-side failure into a
+//!     resend of both, including the proof bytes that were already accepted.
 //!
-//! When PR 4g.5 introduces the per-batch ALT, this module can be
-//! upgraded to a single batched tx behind the same public helper
-//! signature.
-//!
-//! Both txs are signed with the SAME TEE keypair — that key plays
-//! both `tee_authority` (the registered signer the vault checks)
-//! AND the Solana fee-payer (pays per-ix rent + tx fee). See
-//! [`crate::keys::ed25519::DerivedSigner::solana_keypair`] for the
-//! unification rationale (PR 4g.3 walk-back).
+//! Both are signed with the same TEE keypair, acting as both `tee_authority` and
+//! fee-payer; see [`super::submit`].
 
 use base64::Engine as _;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -41,7 +30,7 @@ use crate::solana_rpc::{RpcError, SolanaRpcClient};
 /// `note_use_tag` typically comes from the `MatchPair` the matcher emitted;
 /// `token_mint` + `expiry_slot` are config-
 /// or order-derived; `merkle_root` + `proof` are the user-supplied
-/// VALID_INPUT inputs the TEE relays (see 4g.3 doc on the proof
+/// VALID_INPUT inputs the TEE relays (see the proof
 /// integration gap).
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct LockSideInputs {
@@ -96,7 +85,7 @@ pub struct LockPairOutcome {
 /// `sendTransaction` calls succeed. Confirmation polling is a
 /// separate step — see [`confirm_lock_pair`] — so callers can
 /// orchestrate the wait themselves (e.g. concurrently with the
-/// 4g.4 prover task).
+/// prover task).
 ///
 /// The two txs share the same blockhash, fetched once via
 /// `getLatestBlockhash`. If the blockhash expires between submit

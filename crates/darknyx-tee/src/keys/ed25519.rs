@@ -6,7 +6,7 @@
 //! `docs/tee-attestation-flow.md` §5. Same seed → same signing
 //! key, deterministically, for the lifetime of the compose-hash.
 //!
-//! Tree-sharding (Phase 2) derives **K** signers — one per shard —
+//! Tree sharding derives **K** signers — one per shard —
 //! at the indexed sub-paths `"darknyx/ed25519-signer/v2/{i}"` for
 //! `i ∈ 0..K`. Each key is simultaneously a shard fee-payer +
 //! `tee_authority` + Ed25519 settle-signer, so the K concurrent
@@ -38,7 +38,7 @@ pub fn signer_path(index: u8) -> String {
 /// One keypair, two type views: `key` for `canonical_payload_hash`
 /// signing (settle pipeline payload auth); [`Self::solana_keypair`]
 /// for Solana tx signing (the same key acts as `tee_authority` AND
-/// the tx fee-payer for every settle-pipeline tx — see PR 4g.3 for
+/// the tx fee-payer for every settle-pipeline tx — see [`super::solana`] for
 /// the walk-back rationale).
 pub struct DerivedSigner {
     /// The full Ed25519 keypair. **Private**: never serialise,

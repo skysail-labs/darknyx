@@ -1,17 +1,21 @@
 //! `GET /settlement/status/{batch_id}` — read-only status for one
 //! settle-pipeline batch.
 //!
-//! Authenticated via the bearer middleware (PR 4e.2). Same scope
-//! as `/orders` — any authenticated caller can query any batch.
-//! Per-account scoping isn't a meaningful security boundary here:
-//! the matcher's batch is a global event, not user-specific, and
-//! the response leaks only stage labels + tx signatures (which are
-//! observable on-chain anyway).
+//! Authenticated via the bearer middleware, but **not scoped by account**: any
+//! authenticated caller can query any batch. The reasoning is that a matcher
+//! batch is a global event rather than user-specific.
+//!
+//! Be precise about what that exposes. Stage labels, the closed-set failure
+//! label, and the transaction signatures are all observable on-chain anyway. The
+//! `created_at_ms` and `last_transition_at_ms` timestamps are **not** — they are
+//! enclave-internal wall-clock at millisecond resolution, finer than block time,
+//! and they are served to every authenticated account. Treat them as the part of
+//! this response whose disclosure is not already implied by the chain.
 //!
 //! Returns:
 //!   200 + `BatchSettleStatus` JSON when the batch exists.
 //!   404 when the batch is unknown to the scheduler (either it
-//!     never happened or it was evicted — see 4g.6 retention).
+//!     never happened or it was evicted — see the scheduler's retention bound).
 //!   503 when no scheduler is wired (for example, in tests
 //!     that opt out of spawning the scheduler).
 

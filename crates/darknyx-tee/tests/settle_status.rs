@@ -1,4 +1,4 @@
-//! HTTP integration test for the PR 4g.1 status endpoint
+//! HTTP integration test for the settle status endpoint
 //! (`GET /settlement/status/{batch_id}`).
 //!
 //! Coverage:
@@ -9,7 +9,7 @@
 //!   - 404 when the batch is unknown.
 //!   - 200 + JSON body listing jobs after a RunBatchOutput has
 //!     been enqueued. Stage = "queued" for every job since no
-//!     stage workers exist yet (those land in 4g.3 / 4g.5 / 4g.6).
+//!     stage worker runs in this test's wiring.
 //!
 //! Run with: `cargo test -p darknyx-tee --test settle_status`
 
@@ -167,7 +167,7 @@ async fn status_returns_jobs_after_enqueue() {
         assert_eq!(j["match_idx"], i);
         assert_eq!(j["stage"], "queued");
         assert_eq!(j["outcome"]["kind"], "pending");
-        // 4g.1 hasn't wired any stage worker, so no tx sigs.
+        // No stage worker runs here, so no tx sigs.
         // JobStatus serialises None as omitted, so accessing
         // `lock_buyer_sig` returns Null rather than a string.
         assert!(j.get("lock_buyer_sig").is_none() || j["lock_buyer_sig"].is_null());

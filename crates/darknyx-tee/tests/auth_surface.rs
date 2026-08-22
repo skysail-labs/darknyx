@@ -1,4 +1,4 @@
-//! End-to-end tests for the PR-4e.2 auth surface (`POST /auth/token`
+//! End-to-end tests for the auth surface (`POST /auth/token`
 //! + `bearer_middleware`).
 //!
 //! Drives the router via `tower::ServiceExt::oneshot` so we never
@@ -15,9 +15,9 @@
 //!       * tampered token (truncated / wrong signature),
 //!       * expired token,
 //!       * token signed with a different secret.
-//!   - Phase 1a: `POST /auth/token/revoke` denylists a token's `jti`
+//!   - `POST /auth/token/revoke` denylists a token's `jti`
 //!     so the same token is rejected on the next request.
-//!   - Phase 1a: admin-gated `POST /admin/accounts` registers a new
+//!   - admin-gated `POST /admin/accounts` registers a new
 //!     argon2id-hashed account (which can then mint its own token),
 //!     rejects a non-admin caller (403) + a duplicate api_key (409).
 //!
@@ -53,7 +53,7 @@ fn public_app() -> Router {
 
 /// Build a tiny test router with one bearer-protected route that
 /// echoes the authenticated `account_id`. We use this in place of
-/// `POST /orders` (which lands in PR 4e.3) to exercise
+/// `POST /orders` to exercise
 /// `bearer_middleware` in isolation.
 fn protected_app() -> Router {
     let st = state();
@@ -355,7 +355,7 @@ async fn middleware_does_not_leak_secret_in_error_message() {
     );
 }
 
-// ─────── Phase 1a — revocation + admin registration ─────────────────────────
+// ─────── revocation + admin registration ────────────────────────────────────
 
 /// Exchange credentials for a bearer token via `POST /auth/token`.
 /// Asserts 200 + returns the `access_token`.

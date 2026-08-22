@@ -5,7 +5,7 @@
 //! `batch_validity_marker`). Hoisting these into an ALT is what
 //! lets the settle tx (Tx D) reference them by 1-byte index instead
 //! of 32-byte pubkey, keeping it under the 1232-byte cap (see
-//! CRYPTOGRAPHY.md §9 + CLAUDE.md §5).
+//! CRYPTOGRAPHY.md §9 + CLAUDE.md §6).
 //!
 //! **`recent_slot` gotcha** (CRYPTOGRAPHY.md §9): the slot fed to
 //! `create_lookup_table` MUST come from

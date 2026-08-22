@@ -2,7 +2,7 @@
 //!
 //! `ApiState::for_tests()` has `dstack: None` and no RA-TLS identity, so a
 //! successful quote cannot be produced here — that needs a real dstack socket
-//! and is covered by the live CVM run in Phase 3. What these tests pin is
+//! and is covered by the live CVM run. What these tests pin is
 //! everything a client can reach *before* the quote: the input surface, the
 //! rejection behaviour, and the fact that the route refuses to invent evidence
 //! when it has none.

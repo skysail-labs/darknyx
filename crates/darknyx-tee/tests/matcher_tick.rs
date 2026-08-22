@@ -1,6 +1,6 @@
 //! End-to-end test of the in-TEE matching tick.
 //!
-//! Wires up everything PR 4c builds:
+//! Wires up the matching tick's collaborators:
 //!   - The `MatcherDriver`
 //!   - The `OrderBook` (in-memory book)
 //!   - The `OracleCache` — pre-populated with a synthetic price;
@@ -528,8 +528,8 @@ async fn tick_sweeps_expired_orders() {
 }
 
 /// AtomicU64 read smoke — useful for catching a downstream
-/// breakage in the slot-source abstraction when PR 4d adds a
-/// Solana RPC poller.
+/// breakage in the slot-source abstraction, which the Solana RPC
+/// poller drives in production.
 #[test]
 fn slot_source_compiles() {
     let s = AtomicU64::new(42);

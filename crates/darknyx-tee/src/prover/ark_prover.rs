@@ -1,7 +1,7 @@
-//! Real ark-circom-backed VALID_MATCH_BATCH prover (PR 4g.4b).
+//! ark-circom-backed VALID_MATCH_BATCH prover.
 //!
 //! Implements the [`super::groth16::Prover`] trait by:
-//!   1. Running the 4g.4a deterministic pre-flight (conservation
+//!   1. Running the deterministic pre-flight (conservation
 //!      constraints + leaf/root + public-input vector).
 //!   2. Building a Circom witness from the slot inputs via
 //!      ark-circom (wasmer-backed witness calc consuming
@@ -112,7 +112,7 @@ impl ArkMatchBatchProver {
             });
         }
 
-        // 1. Deterministic pre-flight (4g.4a). Surfaces bad batches
+        // 1. Deterministic pre-flight. Surfaces bad batches
         //    as named-constraint violations BEFORE the expensive
         //    witness calc + prove.
         super::constraints::validate_conservation(slots)?;

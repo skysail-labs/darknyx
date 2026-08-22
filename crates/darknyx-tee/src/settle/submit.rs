@@ -1,17 +1,18 @@
-//! Shared transaction build/sign/send + confirmation helpers.
+//! Shared transaction build / sign / send / confirm helpers.
 //!
-//! Every settle-pipeline tx (lock_note, verify_match_batch,
-//! settle_batched, close_marker) follows the same lifecycle:
-//! compose instruction(s) → sign with the TEE keypair (which is
-//! BOTH the fee-payer AND the `tee_authority` signer) → bincode +
-//! base64 → `sendTransaction` → poll `getSignatureStatuses`. This
-//! module is the single home for that machinery so each builder
-//! only owns its instruction construction.
+//! Every settle-pipeline transaction follows the same lifecycle: compose the
+//! instructions, sign with the TEE keypair, bincode and base64 the result, send it,
+//! then poll `getSignatureStatuses`. This module is the single home for that
+//! machinery so each builder owns only its instruction construction.
 //!
-//! The TEE keypair plays the fee-payer role for every tx (PR 4g.3
-//! walk-back unified it with the Ed25519 settle signer); legacy
-//! (pre-v0) transactions are used here. The v0 + ALT path for the
-//! tx-size-constrained settle tx (Tx D) lands in PR 4g.5c.
+//! The TEE keypair fills two roles at once on every transaction — Solana fee-payer
+//! and the `tee_authority` signer the vault checks against
+//! `vault_config.tee_pubkeys`. They are deliberately the same key; see
+//! [`crate::keys::ed25519::DerivedSigner::solana_keypair`].
+//!
+//! The helpers here build legacy (pre-v0) transactions, which is sufficient for
+//! every pipeline transaction except Tx D. Tx D needs v0 plus two lookup tables to
+//! fit under the size cap and is assembled in [`super::pipeline`] instead.
 
 use base64::Engine as _;
 use solana_hash::Hash;

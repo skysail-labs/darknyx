@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn picks_75th_percentile() {
-        // 0..=100 step 10 → 11 samples; idx = (10 * 75)/100 = 7 → value 70.
+        // 0..=100 in increments of 10 → 11 samples; idx = (10 * 75)/100 = 7 → value 70.
         let s: Vec<u64> = (0..=10).map(|i| i * 10).collect();
         assert_eq!(priority_fee_bid(&s, 1_000_000), 70);
     }

@@ -1,23 +1,30 @@
-//! Settle-tx assembly — the v0 (versioned) transaction that
-//! carries Tx D.
+//! Assembly of Tx D — the settlement transaction itself.
 //!
-//! `tee_forced_settle_batched` is the one tx in the pipeline that
-//! must be a v0 transaction stacking Address Lookup Tables to fit
-//! under the 1232-byte cap (CLAUDE.md §5). It bundles TWO
-//! instructions:
-//!   1. the Ed25519 precompile ix (the TEE signature over the
-//!      canonical payload hash — [`super::ed25519`]);
-//!   2. the settle ix itself ([`super::settle_batched`]).
+//! `tee_forced_settle_batched` is the only transaction in the pipeline that must be
+//! a v0 transaction stacking Address Lookup Tables, because it does not otherwise
+//! fit under Solana's 1232-byte limit. It carries three instructions, in order:
 //!
-//! Both are compiled into a `v0::Message` referencing the static
-//! settle ALT (created once at devnet-setup: vault_config,
-//! instructions_sysvar, system_program) + the per-batch ALT
-//! (created by Tx C: note_lock_a/b/e/f + batch_validity_marker).
-//! The result is signed by the TEE keypair (fee-payer +
-//! tee_authority) and base64-encoded for `sendTransaction`.
+//!   1. `ComputeBudget::SetComputeUnitLimit` (and, when a priority fee is bid,
+//!      `SetComputeUnitPrice`) — first, so the right-sized CU limit applies to
+//!      everything after it;
+//!   2. the Ed25519 precompile instruction verifying the TEE signature over the
+//!      canonical payload hash ([`super::ed25519`]);
+//!   3. the settle instruction itself ([`super::settle_batched`]).
 //!
-//! Mirrors `packages/sdk/tests/helpers/batched-settle.ts`'s v0 tx
-//! assembly.
+//! These compile into a `v0::Message` over the lookup tables the worker supplies.
+//! In the configured deployment that is two: the static settle ALT built at
+//! devnet setup (`vault_config`, `instructions_sysvar`, `system_program`) and the
+//! per-batch ALT built by Tx C. `static_alt` is optional, and with it unset the
+//! transaction rides on the per-batch ALT alone and is correspondingly larger.
+//! The TEE keypair signs as both fee-payer and `tee_authority`.
+//!
+//! On the two-ALT path the assembled transaction measures ~1173 bytes, leaving 59
+//! bytes of headroom.
+//! Adding an account or payload field here overflows the limit and surfaces as
+//! `TransactionTooLarge` at send time — see `CRYPTOGRAPHY.md` §9 before changing
+//! either instruction's accounts or data.
+//!
+//! Mirrored by `packages/sdk/tests/helpers/batched-settle.ts`.
 
 use base64::Engine as _;
 use solana_address::Address;

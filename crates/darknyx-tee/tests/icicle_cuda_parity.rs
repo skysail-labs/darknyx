@@ -1,4 +1,4 @@
-//! ICICLE **CUDA** prover parity gate (Phase 2 of the GPU-prove track).
+//! ICICLE **CUDA** prover parity gate.
 //!
 //! This is the **go/no-go correctness gate for GPU proving**. It proves a REAL
 //! N=16 VALID_MATCH_BATCH (from the settle assembler) with the `icicle-snark`
@@ -8,7 +8,7 @@
 //! proves the identical witness on ark (CPU) and asserts both backends agree on
 //! the public inputs.
 //!
-//! Mirror of `icicle_parity.rs` (which covers `device=CPU`, Phase 1). Keep the
+//! Mirror of `icicle_parity.rs` (which covers `device=CPU`). Keep the
 //! two in step: same fixture, same assertions, different device.
 //!
 //! ## What "parity" means here (and what it does NOT)

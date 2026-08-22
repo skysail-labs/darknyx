@@ -1,36 +1,38 @@
-//! `MatchPair` + input-note openings → (`MatchSlotWitness`,
-//! `MatchResultPayload`).
+//! `MatchPair` + input-note openings → (`MatchSlotWitness`, `MatchResultPayload`).
 //!
-//! This is the byte-critical bridge between the matcher's output and
-//! the settle pipeline. For one real match it produces:
+//! The byte-critical bridge between the matcher's output and the settle pipeline.
+//! For one match it produces:
 //!
-//!   - the **proof witness** the VALID_MATCH_BATCH circuit consumes
-//!     (input-note openings + derived output-note openings +
-//!     conservation fields), and
-//!   - the **settle payload** the TEE signs + the on-chain handler
-//!     verifies (commitments + nullifiers + amounts + re-lock + fee).
+//!   - the **proof witness** the VALID_MATCH_BATCH circuit consumes (input-note
+//!     openings, derived output-note openings, conservation fields), and
+//!   - the **settle payload** the TEE signs and the on-chain handler verifies.
 //!
-//! Every derivation here mirrors the canonical TS reference
-//! (`packages/sdk/tests/helpers/e2e-helpers.ts` +
-//! `change-note-flow.test.ts`), because the user must be able to
-//! re-derive the output notes' openings later to spend them:
+//! Every derivation here is mirrored by the canonical TypeScript reference
+//! (`packages/sdk/tests/helpers/e2e-helpers.ts`), and the mirroring is load-bearing:
+//! a user must be able to re-derive these openings later in order to spend the
+//! notes at all. A divergence does not fail loudly here — it produces notes whose
+//! owner cannot reconstruct them.
 //!
-//!   - note_c/e (buyer outputs): owner = buyer input's owner commitment;
-//!     inner = Poseidon3(24, buyer_input_inner, output_role).
-//!   - note_d/f (seller outputs): owner = seller input's owner commitment;
-//!     inner = Poseidon3(24, seller_input_inner, output_role).
-//!   - note_fee (protocol cut): owner = protocol_owner_commitment;
-//!     inner = Poseidon3(25, consumed_input_commitment, fee_role).
+//! ```text
+//!   note_c/e  buyer outputs   owner = buyer input's owner commitment
+//!                             inner = Poseidon3(24, buyer_input_inner, role)
+//!   note_d/f  seller outputs  owner = seller input's owner commitment
+//!                             inner = Poseidon3(24, seller_input_inner, role)
+//!   note_fee  protocol cut    owner = protocol_owner_commitment
+//!                             inner = Poseidon3(25, consumed_input_commitment, role)
+//! ```
 //!
-//! Conservation is enforced up front (the same equalities the circuit
-//! constrains), so a malformed match fails here with a named error
-//! rather than as an opaque `InvalidProof` on-chain.
+//! Deriving outputs from the *consumed input* rather than from caller-supplied
+//! randomness is what lets the matcher rotate partial-fill residuals without a
+//! client roundtrip.
 //!
-//! The input-note openings come from [`crate::matcher::openings`]
-//! (captured + verified at order intake, 4g.7a). The `order_id_a/b`
-//! and the MatchPair→orders linkage are supplied by the caller
-//! (4g.7c live wiring); this function is pure so it's exhaustively
-//! unit-testable without a matcher tick or a real proof.
+//! Conservation is checked up front, using the same equalities the circuit
+//! constrains, so a malformed match fails here with a named error instead of as an
+//! opaque `InvalidProof (6000)` after a full N=16 proof has been generated.
+//!
+//! Input-note openings come from [`crate::matcher::openings`], captured and
+//! verified at order intake. This function is pure, so it is exhaustively testable
+//! without a matcher tick or a real proof.
 
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash, note_use_tag};

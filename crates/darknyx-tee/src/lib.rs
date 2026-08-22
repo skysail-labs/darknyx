@@ -1,8 +1,7 @@
 //! `darknyx-tee` library surface. Exists so integration tests can
 //! exercise the internal modules without going through the
-//! binary's `main.rs` boot path. Re-exports the public APIs that
-//! external consumers (today: test code; later: PR-5+ admin tools
-//! and observability glue) need.
+//! binary's `main.rs` boot path. Re-exports the public APIs external
+//! consumers need — today that is test code.
 //!
 //! The binary in `main.rs` is the production entry point. It
 //! pulls these same modules into its own scope and threads them
@@ -32,5 +31,5 @@ pub mod test_layout;
 // See the module doc comment for the full story.
 mod probestack;
 
-// Phase 1b — best-effort auth-state persistence (accounts.db).
+// Best-effort auth-state persistence (accounts.db).
 pub mod persistence;

@@ -38,8 +38,8 @@ pub struct RapidsnarkMatchBatchProver {
     /// reused per prove). The wasmer fallback when native witness is off.
     cfg: Mutex<CircomConfig<Fr>>,
     /// `Some(binary)` → use the native circom `--c` C++ witness generator
-    /// (~18× faster than wasmer on amd64, byte-identical witness; see Step 1
-    /// bench). Set when `DARKNYX_TEE_WITNESS=native` AND the binary is present in
+    /// (~18× faster than wasmer on amd64, byte-identical witness). Set when
+    /// `DARKNYX_TEE_WITNESS=native` AND the binary is present in
     /// the image. `None` → the wasmer path (`cfg`). Lets us A/B native vs
     /// wasmer on the SAME image by flipping the env, like `DARKNYX_TEE_PROVER`.
     native_witness_bin: Option<PathBuf>,

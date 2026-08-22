@@ -13,7 +13,7 @@
 //!     reach "confirmed".
 //!
 //! End-to-end against a real on-chain vault BPF is deferred to PR
-//! 4g.6 (where the full pipeline + the proof story land together).
+//! the full-pipeline tests, where the proof story is covered together.
 //!
 //! Run with: `cargo test -p darknyx-tee --test lock_note_submit`
 

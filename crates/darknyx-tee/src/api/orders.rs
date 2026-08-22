@@ -1,27 +1,31 @@
-//! Layer B — per-order cryptographic auth.
+//! Order intake — the per-order cryptographic tier ("Layer B").
+//!
+//! This is the auth that matters. The bearer middleware in [`super::auth`] gates
+//! these routes at the account level, but the trading-key Ed25519 signature checked
+//! here is what on-chain settlement relies on.
 //!
 //! Handlers:
 //!
-//!   - `POST /orders` — accepts a `PlaceOrderRequest`, verifies the
-//!     trading-key Ed25519 signature over the canonical body bytes
-//!     from PR 4e.1, and inserts the resulting `Order` into the
-//!     matcher's in-memory book.
-//!   - `DELETE /orders/{order_id}` — accepts a `CancelOrderRequest`
-//!     body, verifies a fresh signature from the SAME trading_key
-//!     that owns the order, removes it from the book.
-//!   - `GET /orders/{order_id}` — read-only status lookup.
+//!   - `POST /orders` — verifies the trading-key signature over the canonical body
+//!     bytes, then inserts the `Order` into the matcher's book.
+//!   - `PUT /orders/{order_id}` — atomic cancel and replace.
+//!   - `DELETE /orders/{order_id}` — verifies a fresh signature from the *same*
+//!     trading key that owns the order, then removes it.
+//!   - `GET /orders/{order_id}` — read-only status.
 //!
-//! Auth model: the bearer middleware (PR 4e.2) gates these routes
-//! at the account level; this module adds the per-order signature
-//! check that the on-chain settlement relies on. The `account_id`
-//! from the bearer is NOT required to match the order's
-//! `trading_key` — one account may operate many trading keys
-//! (different sub-portfolios, market-maker fleets). This is the
-//! same separation-of-concerns godarkdex documented. The
-//! `trading_key` IS the cryptographic identity; the JWT only
-//! enables rate-limiting + audit.
+//! **The bearer's `account_id` is deliberately not required to match the order's
+//! `trading_key`.** One account may operate many trading keys — separate
+//! sub-portfolios, or a market-maker fleet. The trading key is the cryptographic
+//! identity; the JWT only enables metering and audit. Tightening this to an
+//! equality check would break fleet operation while adding no custody guarantee,
+//! since the signature is already the thing that authorises the order.
 //!
-//! See `docs/tee-architecture.md` §11 for the full design.
+//! Canonical signing bytes are produced by `darkpool-matcher`'s `order_canonical`,
+//! the single source of truth shared with the SDK. A divergence here rejects every
+//! well-formed order rather than accepting a malformed one, which is the safe
+//! direction but presents as a total intake outage.
+//!
+//! See `docs/tee-architecture.md` §11.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -72,7 +76,7 @@ pub struct PlaceOrderRequest {
     /// `sha256(order_canonical_bytes)`, hex.
     pub trading_key_signature: String,
 
-    // ─── Input-note opening (4g.7a) ──────────────────────────────
+    // ─── Input-note opening ──────────────────────────────────────
     // The TEE prover opens this note inside VALID_MATCH_BATCH, so it
     // needs the secret opening fields the `note_commitment` hides.
     // They're verified at intake against the signed commitment (so
@@ -90,7 +94,7 @@ pub struct PlaceOrderRequest {
     /// note_blinding pair). Anchors both the commitment and the nullifier.
     pub note_inner_hash: String,
 
-    // ─── VALID_INPUT proof relay (4g.7c) ─────────────────────────
+    // ─── VALID_INPUT proof relay ─────────────────────────────────
     // `lock_note` (settle Tx A) requires a per-note VALID_INPUT
     // Groth16 proof. The TEE cannot generate it (it needs the user's
     // spending key + merkle witness), so the client generates it and
