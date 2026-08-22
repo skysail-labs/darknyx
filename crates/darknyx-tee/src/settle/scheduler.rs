@@ -1,23 +1,19 @@
-//! The scheduler task — consumes `RunBatchOutput`s from the
-//! matcher's mpsc and queues per-match jobs.
-//!
-//! PR 4g.1 scope: ingestion + status table only. Subsequent
-//! sub-PRs (4g.3 / 4g.5 / 4g.6) plug stage workers into the same
-//! state by reading the queue + writing back stage transitions
-//! under the existing RwLock.
+//! The scheduler task — consumes `RunBatchOutput`s from the matcher's channel,
+//! queues per-match jobs, and drives each batch through [`super::worker`].
 //!
 //! Concurrency model:
 //!
-//! - One scheduler task owns the matcher's `mpsc::Receiver` and
-//!   bumps a `next_batch_id` counter.
-//! - All other readers/writers go through
-//!   `Arc<RwLock<SettleSchedulerState>>` — same pattern as the
-//!   matcher's `MatcherState`. Read-mostly: status queries take
-//!   the read lock; the scheduler + future stage workers take
-//!   brief write locks.
+//!   - One scheduler task owns the matcher's `mpsc::Receiver` and bumps a
+//!     `next_batch_id` counter.
+//!   - Everything else goes through `Arc<RwLock<SettleSchedulerState>>`, the same
+//!     pattern the matcher uses for `MatcherState`. The workload is read-mostly:
+//!     status queries take the read lock, the scheduler and stage workers take
+//!     brief write locks to advance a job.
 //!
-//! Retention: jobs accumulate forever in 4g.1. PR 4g.6 adds an
-//! eviction policy: see `MAX_RETAINED_BATCHES` (SW-08).
+//! Retention is bounded. Jobs are evicted at [`MAX_RETAINED_BATCHES`] batches, so
+//! the status table cannot grow without limit on a long-running enclave (audit
+//! SW-08). A status query for an evicted batch is indistinguishable from one for a
+//! batch that never existed, which is intentional.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -33,7 +29,7 @@ pub(crate) const DEFAULT_SETTLE_CONCURRENCY: usize = 1;
 /// How many settled batches stay queryable through
 /// `GET /settlement/status/{batch_id}`.
 ///
-/// SW-08: the module doc promised this eviction "in PR 4g.6" and it was never
+/// Eviction was documented long before it existed; it was never
 /// written — `jobs` and `by_batch` retained every match the process had ever
 /// settled, and `update`'s "evicted" return path was dead code. Each job holds
 /// a full `MatchPair` (six 32-byte commitments plus amounts) and up to five
@@ -133,7 +129,7 @@ impl SettleSchedulerState {
         Some(out)
     }
 
-    /// Snapshot of a single job. Used by stage workers in 4g.3+
+    /// Snapshot of a single job. Used by the stage workers
     /// to fetch the latest state without holding the lock across
     /// long-running operations (Solana RPC, Groth16 proving).
     pub fn get_job(&self, id: &SettleJobId) -> Option<SettleJob> {
@@ -881,7 +877,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_advances_a_jobs_stage() {
-        // Foreshadows the pattern PR 4g.3+ uses: pick a job,
+        // The pattern the stage workers use: pick a job,
         // mutate its stage via `state.update(id, |j| ...)`.
         let (tx, rx) = mpsc::channel::<RunBatchOutput>(4);
         let (_handle, state) = SettleScheduler::spawn(rx);
@@ -909,7 +905,7 @@ mod tests {
         assert_eq!(job.lock_buyer_sig.as_deref(), Some("sig-A"));
     }
 
-    // ─── Live settle driver (4g.7e) ───────────────────────────────
+    // ─── Live settle driver ───────────────────────────────────────
 
     #[tokio::test(flavor = "multi_thread")]
     async fn live_driver_settles_a_batch_and_evicts_openings() {

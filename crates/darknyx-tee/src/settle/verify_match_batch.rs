@@ -12,7 +12,7 @@
 //! Args (Borsh, declaration order):
 //!   1. `merkle_root: [u8; 32]`  — the batch root (first public input)
 //!   2. `proof: Groth16Proof`    — 256 bytes (pi_a 64 + pi_b 128 +
-//!      pi_c 64), produced by the 4g.4b prover
+//!      pi_c 64), produced by the prover
 //!
 //! The marker TTL is NOT an argument (S-04). It used to be, bounded only to
 //! `(current_slot, current_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, which

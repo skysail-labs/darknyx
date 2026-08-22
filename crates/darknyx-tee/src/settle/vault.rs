@@ -1,10 +1,17 @@
-//! Vault program — constants + PDA derivation helpers.
+//! Vault program constants and PDA derivation.
 //!
-//! Mirrors `programs/vault/src/lib.rs::declare_id!()` and the
-//! `*::SEED` consts in `programs/vault/src/state.rs`. Hand-mirrored
-//! the same way `packages/sdk/src/idl/seeds.ts` is hand-mirrored
-//! from Rust — there's no IDL runtime in this crate, so any new
-//! PDA in vault must add a parallel `*_pda` helper here.
+//! Hand-mirrored from `programs/vault/src/lib.rs::declare_id!()` and the `*::SEED`
+//! constants in `programs/vault/src/state.rs`, the same way
+//! `packages/sdk/src/idl/seeds.ts` mirrors them for TypeScript. This crate carries
+//! no Anchor IDL runtime, so **a new PDA in the vault program needs a parallel
+//! `*_pda` helper added here by hand.** Nothing in CI catches the omission; it
+//! surfaces at runtime as `AccountNotFound` or `ConstraintSeeds (2006)`.
+//!
+//! Note which namespace each seed takes. `note_lock` and `consumed_note` are keyed
+//! by the **note-use tag**, while Merkle leaves and `DepositedNoteEntry` are keyed
+//! by the **commitment**. Both are `[u8; 32]`, so passing one where the other
+//! belongs compiles, derives a plausible-looking address, and fails only on-chain —
+//! see `CRYPTOGRAPHY.md` §2.1.
 
 use solana_address::Address;
 

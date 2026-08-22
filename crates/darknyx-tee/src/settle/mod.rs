@@ -1,26 +1,43 @@
-//! In-TEE settle scheduler.
+//! Settlement pipeline — turns matcher output into confirmed on-chain settlements.
 //!
-//! Consumes `RunBatchOutput`s from the matcher driver (PR 4c) and
-//! orchestrates the five-tx settle pipeline documented in
-//! `docs/tee-architecture.md` §6 + `CRYPTOGRAPHY.md` §9:
+//! The scheduler consumes `RunBatchOutput`s from the matcher driver and drives one
+//! job per match through a five-transaction sequence, documented in
+//! `docs/tee-architecture.md` §6 and `CRYPTOGRAPHY.md` §9:
 //!
 //! ```text
-//!   Tx A  lock_note × 2              (PR 4g.3)
-//!   Tx B  verify_match_batch         (PR 4g.5 — Groth16 from 4g.4)
-//!   Tx C  per-batch ALT create+ext   (PR 4g.5 — uses alt.rs)
-//!   Tx D  tee_forced_settle_batched  (PR 4g.5 — uses payload.rs)
-//!   Tx E  close_batch_validity_marker (PR 4g.6 — rent reclaim)
+//!   Tx A  lock_note × 2                 pin both inputs between match and settle
+//!   Tx B  verify_match_batch            Groth16 VALID_MATCH_BATCH, writes the marker
+//!   Tx C  per-batch ALT create + extend  the 7 payload-derived PDAs
+//!   Tx D  tee_forced_settle_batched     the settlement itself (v0 tx, 2 ALTs)
+//!   Tx E  close_batch_validity_marker   rent reclaim, at or after expiry
 //! ```
 //!
-//! PR 4g.1 (current commit) lands the orchestration skeleton only.
-//! The scheduler receives matcher outputs and queues per-match
-//! jobs in an in-memory table; subsequent sub-PRs wire each
-//! pipeline stage. Jobs stay in `Queued` until 4g.3 wires Tx A.
+//! Tx D is the finality point. Tx E is asynchronous rent bookkeeping and a job is
+//! `Done` without it.
 //!
-//! Status surface: `GET /settlement/status/{batch_id}` returns
-//! every job for a batch with its current stage + on-chain tx
-//! signatures collected so far. Authenticated under the bearer
-//! middleware (same scope as `/orders`).
+//! Module map:
+//!
+//!   - `scheduler.rs` / `worker.rs` — the stage workers and the loop that advances
+//!     jobs; `job.rs` is the per-match state machine.
+//!   - `lock_note.rs`, `verify_match_batch.rs`, `settle_batched.rs`,
+//!     `close_marker.rs` — one instruction builder per transaction above.
+//!   - `assemble.rs` / `payload.rs` — build the settlement payload and its
+//!     canonical hash; `sign.rs` / `ed25519.rs` produce the TEE signature over it.
+//!   - `pipeline.rs` — assembles Tx D as a v0 transaction over two lookup tables.
+//!   - `alt.rs` / `alt_pool.rs` — per-batch lookup tables and the rolling pool that
+//!     amortises their ~512-slot deactivation cooldown.
+//!   - `recover.rs` / `drain.rs` — crash recovery and planned shutdown.
+//!   - `lock_sweep.rs` / `marker_sweep.rs` — reclaim expired locks and markers.
+//!   - `vault.rs` — PDA derivations shared by every builder above.
+//!
+//! Two constraints govern changes here. Tx D sits at 1173 of the 1232-byte
+//! transaction limit, so any new account or payload field must be checked against
+//! `CRYPTOGRAPHY.md` §9. And settlement is idempotent by construction: the
+//! consume-once PDAs make a replayed transaction fail rather than double-spend, so
+//! recovery re-runs a job rather than tracking whether it already ran.
+//!
+//! Status is exposed read-only via `GET /settlement/status/{batch_id}`, under the
+//! same bearer scope as `/orders`.
 
 pub mod job;
 pub mod scheduler;
@@ -30,10 +47,7 @@ pub mod scheduler;
 // anchor-lang here.
 pub mod vault;
 
-// Tx-construction modules — one per pipeline stage. PR 4g.3 lands
-// `lock_note` (Tx A); 4g.5a `verify_match_batch` (Tx B); 4g.5b the
-// payload; 4g.5c the per-batch ALT (Tx C) + settle_batched (Tx D)
-// builders. 4g.6 wires the close marker (Tx E) + the stage workers.
+// Instruction builders — one per pipeline transaction.
 pub mod alt;
 pub mod alt_pool;
 pub mod assemble;
