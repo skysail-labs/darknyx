@@ -1,7 +1,7 @@
 //! Per-market in-memory order book. Re-uses the
 //! `darkpool_matcher::book::Order` type so the snapshot handed to
-//! `darkpool_matcher::PreparedMatchTick::next_page(...)` needs no field
-//! conversion — same struct on both sides of the boundary.
+//! `darkpool_matcher::PreparedMatchTick::new(...)` needs no field conversion —
+//! same struct on both sides of the boundary.
 //!
 //! Indices:
 //!   - `bids` / `asks`: BTreeMap<Price, FifoQueue> for the

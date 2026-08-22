@@ -6,19 +6,28 @@
 //!
 //! # Two entry points, and production uses only one
 //!
-//! **The enclave calls [`PreparedMatchTick::next_page`] with
-//! `single_fill_per_order: true`.** [`run_batch`] chains partial fills within one
-//! batch and exists for tests and legacy callers; **production does not use it.**
+//! **The enclave matches through [`PreparedMatchTick`]** — [`PreparedMatchTick::new`]
+//! takes the book snapshot and the `MatchConfig`, and
+//! [`PreparedMatchTick::next_page`] then pages through matches, filling each
+//! order at most once per page. [`run_batch`] instead chains partial fills
+//! within one batch and exists for tests and legacy callers; **production does
+//! not use it.**
+//!
 //! Reasoning about matcher behaviour against `run_batch` therefore does not
-//! transfer — the chaining it performs is the difference (audit SW-28).
+//! transfer — the chaining is the difference (audit SW-28). Note that
+//! `single_fill_per_order` is an internal parameter of the lower-level entry
+//! points, not an argument to `next_page`.
 //!
 //! # Invariants
 //!
 //! * Uniform clearing price across the batch.
 //! * FIFO tie-break at each price level.
 //! * Pyth-TWAP circuit breaker (`circuit_breaker_bps`).
-//! * Change-note construction stays byte-identical to [`change_note`] and its
-//!   TypeScript port in `packages/sdk/tests/helpers/e2e-helpers.ts`.
+//! * Output inner-hash construction stays byte-identical to
+//!   `darkpool_crypto::match_output` and its TypeScript port in
+//!   `packages/sdk/src/utxo/match-output.ts`. ([`change_note`] holds the role
+//!   constants only; its old `derive_inner` was retired with the v2 SHA-256
+//!   construction.)
 //! * No floating point anywhere.
 //! * Deterministic given the same inputs — the matcher reads no clock;
 //!   `current_slot` is an input.

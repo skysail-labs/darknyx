@@ -1,9 +1,15 @@
 //! Order-book primitives. Pure data — no async, no I/O, no Anchor.
 //!
-//! Borsh on the wire. `OrderSide`, `OrderType`, and `OrderStatus` are `#[repr(u8)]`
-//! so their discriminants stay explicit and stable: they are serialised into
-//! messages the SDK and the enclave both decode, so reordering a variant silently
-//! reinterprets existing orders rather than failing to compile.
+//! Borsh on the wire. `OrderSide`, `OrderType`, and `OrderStatus` carry
+//! `#[borsh(use_discriminant = true)]`, which is what makes Borsh emit each
+//! variant's explicit `= N` value as the wire byte instead of its positional
+//! index; `#[repr(u8)]` alone would not. The values are chosen to equal the
+//! on-chain `u8` constants.
+//!
+//! Reordering variants is therefore safe — the tags travel with the values.
+//! **Changing a value is not**: the SDK, the enclave, and the on-chain program
+//! all decode these bytes, so a tag change must land in all three together or
+//! existing orders are silently reinterpreted as a different variant.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 

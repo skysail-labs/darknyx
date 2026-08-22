@@ -592,7 +592,7 @@ impl MatcherState {
 /// Configuration for one matching tick loop. Production creates one driver per
 /// configured market and shares only the venue-wide settlement resources.
 pub struct DriverConfig {
-    /// `MatchConfig` passed to `darkpool_matcher::PreparedMatchTick::next_page(...)`.
+    /// `MatchConfig` passed to `darkpool_matcher::PreparedMatchTick::new(...)`.
     /// Constructed from the on-chain `MarketConfig` + the v2
     /// `VaultConfig.fee_rate_bps` + `protocol_owner_commitment`
     /// snapshot at startup. The finalized governance monitor pauses trading on
