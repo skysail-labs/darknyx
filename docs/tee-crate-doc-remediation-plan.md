@@ -8,7 +8,9 @@
 > Phases 1, 2 and 4 were merged into one pass per module (they touch the same
 > lines, so three passes would have edited each line three times), and
 > **`transport/` was NOT deferred** — the changes proved comment-only and
-> conflict-cheap, so it was completed with the rest.
+> conflict-cheap, so it was completed with the rest. The conventions landed as
+> `CLAUDE.md` §10.5 rather than a per-crate `CONTRIBUTING.md`, which duplicated
+> the §2.5 gate.
 >
 > **Scope:** `crates/darknyx-tee` only (108 files, 41,095 lines). Other crates
 > remain out of scope.
@@ -197,7 +199,7 @@ so that no rewrite collides with in-flight feature work.
 
 ### Phase 0 — Conventions and inventory *(no bulk edits)*
 
-- Land §2 as `crates/darknyx-tee/CONTRIBUTING.md` (or a `docs/` section).
+- Land §2 as a section of `CLAUDE.md` (§10.5, Comment conventions).
 - Convert `settle/lock_note.rs` as the exemplar; **get sign-off on the style
   before touching 107 more files.**
 - Generate the full marker inventory to a checked-in worklist so Phase 2's
@@ -318,5 +320,7 @@ Scoped to this crate initially, widened when the other crates are done.
    Needed before Phase 1.
 2. **One PR per phase, or a stacked series?** Phase 4 is 10 sub-PRs; `gh-stack`
    handles that well, and comment-only diffs rebase cleanly.
-3. **Does `CONTRIBUTING.md` belong in the crate or in `docs/`?** The crate is
-   more discoverable for the developer editing it.
+3. ~~**Does `CONTRIBUTING.md` belong in the crate or in `docs/`?**~~ Resolved:
+   neither. It became `CLAUDE.md` §10.5, so the conventions sit in the file
+   agents and contributors already load rather than in a second document that
+   restates the §2.5 gate.

@@ -5,10 +5,10 @@
 # "Phase 2", "slice 5") that resolve to nothing outside the crate. They
 # accumulate during implementation and then tell a later reader that a change
 # happened without saying what is true now. The convention that replaces them
-# is crates/darknyx-tee/CONTRIBUTING.md.
+# is CLAUDE.md §10.5.
 #
 # Audit finding IDs (T-06, SW-01, U-02, ...) are NOT matched here: they still
-# resolve to audits/residual-backlog.md and some are open. CONTRIBUTING.md
+# resolve to audits/residual-backlog.md and some are open. CLAUDE.md §10.5
 # governs how they may be cited — alongside the substance, never alone.
 set -euo pipefail
 
@@ -46,7 +46,7 @@ if [ -n "$hits" ]; then
   echo "$hits" >&2
   echo >&2
   echo "State what is true now instead of which change made it true." >&2
-  echo "See crates/darknyx-tee/CONTRIBUTING.md." >&2
+  echo "See CLAUDE.md §10.5 (Comment conventions)." >&2
   exit 1
 fi
 
