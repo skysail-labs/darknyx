@@ -1,8 +1,17 @@
 //! Canonical inner-hash derivation for VALID_MATCH_BATCH v3 outputs.
 //!
-//! User outputs derive from the consumed input opening; protocol fee outputs
-//! derive from the consumed input commitment. This removes prover-selected
-//! output randomness and makes every fee note unique to the value it consumes.
+//! User outputs derive from the consumed input's opening; protocol fee outputs
+//! derive from the consumed input's commitment. This removes prover-selected output
+//! randomness and makes every fee note unique to the value it consumes — which is
+//! what lets the matcher rotate partial-fill residuals without a client roundtrip.
+//!
+//! The derivation is load-bearing for spendability, not just for uniqueness: an
+//! owner re-derives these inners from their own consumed input in order to spend
+//! the outputs later. A divergence produces notes nobody can reconstruct, and it
+//! fails as a parity assertion rather than at runtime here.
+//!
+//! Mirrored by `packages/sdk/tests/helpers/e2e-helpers.ts::deriveInner` and pinned
+//! by `match-output-parity.test.ts` and `inner-hash-parity.test.ts`.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};

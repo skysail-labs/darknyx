@@ -1,8 +1,18 @@
 //! Deterministic inner-hash derivation for VALID_MERGE outputs.
 //!
-//! The output inner is derived from the exact commitment slots consumed by the
-//! proof, not from mutable client state:
-//! `Poseidon6(26, c0, c1, c2, c3, active_bitmap)`.
+//! The output inner derives from the exact commitment slots the proof consumes,
+//! not from mutable client state:
+//!
+//! ```text
+//!   Poseidon6(DOMAIN_MERGE_INNER = 26, c0, c1, c2, c3, active_bitmap)
+//! ```
+//!
+//! Binding to the consumed slots is what stops a merge output being re-derived
+//! against a different input set. `active_bitmap` is part of the preimage, so the
+//! K=2 and K=4 circuits cannot produce the same inner from the same slots.
+//!
+//! Pinned by `merge-inner-parity.test.ts` via `examples/merge-inner-hash`, and by
+//! `merge-prover.test.ts` against the circuit itself.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};

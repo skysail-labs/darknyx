@@ -1,9 +1,16 @@
 //! Canonical governed-config digest for VALID_MATCH_BATCH.
 //!
-//! The circuit exposes `[batch_root, config_digest]` and keeps the digest
-//! preimage private. The vault recomputes the same digest from authoritative
-//! `VaultConfig` + `MarketConfig` fields, while the TEE supplies it to the
-//! prover. Field order and big-endian encoding are consensus-critical.
+//! The circuit exposes `[batch_root, config_digest]` and keeps the digest preimage
+//! private. The vault recomputes the same digest from authoritative `VaultConfig`
+//! and `MarketConfig` fields; the TEE supplies it to the prover. Field order and
+//! big-endian encoding are consensus-critical.
+//!
+//! Three implementations must agree — this one, the vault's recomputation in
+//! `verify_match_batch`, and the TypeScript mirror — so a change here is a change
+//! in all three. Pinned by `match-config-parity.test.ts` via
+//! `examples/match-config-digest`. A drift does not fail locally: the proof
+//! verifies against a digest the vault does not recompute, and the settle is
+//! rejected on-chain.
 
 use crate::errors::CryptoError;
 use crate::poseidon::poseidon_hash_bytes;
