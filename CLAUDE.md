@@ -189,7 +189,7 @@ By domain, additionally:
 | A circom circuit | `CRYPTOGRAPHY.md` §7, then the circuit + its `vk_*.rs` + its `*-prover.test.ts`. **See [§5](#5-touching-circuits-the-failure-mode-thats-bitten-us) — the disaster section.** |
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive with a TS counterpart has a byte-equality contract with it** — `viewing_keys.rs` is Rust-only and deliberately has neither, so a changed derivation there breaks previously issued keys with no test to catch it. Comment conventions: [§10.5](#105-comment-conventions). |
-| `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave calls `PreparedMatchTick::next_page` (`single_fill_per_order: true`), NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
+| `crates/darkpool-matcher` | `tests/parity.rs` + `tests/paging_differential.rs` + `tests/chaining_sentinel.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave matches through `PreparedMatchTick::new` + `next_page`, NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. Output inner hashes live in `darkpool-crypto::match_output`, not here — `change_note.rs` holds role constants only. |
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). **Comment conventions: [§10.5](#105-comment-conventions)** — enforced by `scripts/check-no-process-markers.sh`. |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
@@ -904,7 +904,7 @@ check fails, or proofs don't verify.
 | **Note-use tag** | `darkpool-crypto/src/note_use.rs::note_use_tag` | `sdk/src/utxo/note-use.ts::deriveNoteUseTag` | `note-use-tag-parity.test.ts` |
 | Deposit inner (arity **4**) | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
 | Note secret | `darkpool-crypto/src/keys.rs::derive_note_secret` | `sdk/src/keys/key-generators.ts::deriveNoteSecret` | `keys-parity.test.ts` |
-| `inner_hash` (change/trade/fee) | `darkpool-matcher/src/change_note.rs::derive_inner` | `tests/helpers/e2e-helpers.ts::deriveInner` | `change-note-inner-parity.test.ts` + `inner-hash-parity.test.ts` |
+| Output `inner_hash` (trade/change/fee) | `darkpool-crypto/src/match_output.rs::{match_output_inner_hash, match_fee_inner_hash}` | `sdk/src/utxo/match-output.ts` | `match-output-parity.test.ts` + `inner-hash-parity.test.ts` |
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
@@ -1032,7 +1032,9 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
   guard): the client resolves the exact consumed input, derives
   `Poseidon3(24, input_inner, role)`, and rejects substituted inners or
   commitments.
-* `helpers/` — `e2e-helpers.ts` (keypairs, `deriveInner`, byte conv),
+* `helpers/` — `e2e-helpers.ts` (keypairs, byte conv; its `deriveInner` is the
+  RETIRED v2 SHA-256 construction with no remaining caller — the live path is
+  `src/utxo/match-output.ts`),
   `merkle-shadow.ts`, `match-batch-prover.ts`, `valid-input-prover.ts`,
   `snarkjs-prover.ts`.
 * env-gated devnet/CVM flows: `devnet-setup` (`RUN_DEVNET_E2E`),

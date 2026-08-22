@@ -20,6 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_TARGETS=(
   "$ROOT/crates/darknyx-tee"
   "$ROOT/crates/darkpool-crypto"
+  "$ROOT/crates/darkpool-matcher"
 )
 
 if [ "$#" -gt 0 ]; then
@@ -37,11 +38,18 @@ for t in "${TARGETS[@]}"; do
   fi
 done
 
-# Matched forms: 4g.3 / PR 4e.2 / bare "PR 4g" / Phase 2 / slice 5 / step 3.
-# The bare "PR <n><letter>" form matters: an earlier revision of this script
-# required a ".N" suffix and so reported OK while "PR 4c" and "PR 4d" sat in
-# tests/ untouched.
-PATTERN='(\bPR ?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase [0-9]+[a-z]?\b|\bstep [0-9]+\b)'
+# Matched forms: 4g.3 / PR 4e.2 / bare "PR 4g" / Phase 2 / slice 5.
+#
+# The bare "PR <n><letter>" form matters: an earlier revision required a ".N"
+# suffix and so reported OK while "PR 4c" and "PR 4d" sat in tests/ untouched.
+#
+# "step N" is deliberately NOT matched. Measured across the three crates that
+# have had the pass, it produced 1 true positive against 11 false ones —
+# darkpool-matcher alone has nine numbered algorithm stages ("Step 4 — fee
+# buckets") plus a spec citation ("Spec §20.6 step 73"), and darknyx-tee had a
+# numeric increment ("0..=100 step 10"). At ~8% precision the rule stops being
+# a guard and starts pressuring correct prose into being reworded around it.
+PATTERN='(\bPR ?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase [0-9]+[a-z]?\b)'
 
 # -i so lowercase "step 2" is caught too. grep exit 1 means "no matches"; any
 # other non-zero status is a real failure (unreadable target, bad pattern) and

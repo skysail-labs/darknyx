@@ -1,9 +1,14 @@
-//! Differential coverage for the P-03 prepared matcher pager.
+//! Differential test: the paged path must equal the legacy re-snapshotting path.
 //!
-//! The reference path deliberately repeats `run_batch_capped` over a book with
-//! every prior page's touched orders removed. That is the pre-P-03 production
-//! behavior. The prepared path must produce byte-identical Borsh outputs while
-//! sorting and aggregating only once.
+//! `PreparedMatchTick::next_page` is the production entry point, and it exists to
+//! avoid re-snapshotting the book between pages. That optimisation is only safe if
+//! paging observes exactly what repeated snapshotting would have — otherwise the
+//! enclave and any caller reasoning from `run_batch` diverge silently, producing
+//! fills that are individually plausible and collectively wrong.
+//!
+//! These tests assert byte-exact equality between the two paths rather than
+//! equivalence of summary statistics, because a divergence in ordering or residual
+//! rotation would pass the looser check.
 
 use std::collections::HashSet;
 use std::time::Instant;
