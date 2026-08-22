@@ -1,5 +1,5 @@
 //! Decode on-chain leaf-append events into `(leaf_index, value)` pairs
-//! for the Merkle mirror sync (Phase 2b).
+//! for the Merkle mirror sync.
 //!
 //! The vault appends Merkle leaves in three instructions; only two
 //! actually create leaves, and they expose the data differently:

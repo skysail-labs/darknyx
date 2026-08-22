@@ -1,32 +1,48 @@
-//! In-TEE VALID_MATCH_BATCH prover surface.
+//! In-enclave VALID_MATCH_BATCH proving.
 //!
-//! Mirror of `packages/sdk/tests/helpers/match-batch-prover.ts`,
-//! split across:
+//! Generates the Groth16 proof that `verify_match_batch` (Tx B) checks on-chain.
+//! This is the pipeline's dominant cost — an N=16 proof takes long enough that the
+//! worker runs it under `spawn_blocking` — and the most byte-sensitive code in the
+//! crate, because the witness it builds must agree exactly with what the circuit
+//! expects.
 //!
-//!   - [`witness`] — `MatchSlotWitness` type + `dummy_slot` +
-//!     `pad_batch` (the all-zero-padding strategy for batches
-//!     smaller than N).
-//!   - [`leaf`] — Poseidon leaf + Merkle root + inclusion path,
-//!     matching the circuit's `MatchSlot()` and `MerkleRoot(N)`
-//!     templates byte-for-byte.
-//!   - [`constraints`] — conservation validators that surface
-//!     three named errors before the circuit ever sees a bad
-//!     witness.
-//!   - [`inputs`] — the snarkjs-format public-input vector
-//!     `groth16-solana` consumes on-chain.
-//!   - [`groth16`] — the `Prover` trait + error type + output
-//!     struct (the stable abstraction the settle-stage worker
-//!     depends on).
-//!   - [`convert`] — ark-groth16 `Proof<Bn254>` → on-chain
-//!     `groth16-solana` 256-byte layout (PR 4g.4b).
-//!   - [`ark_prover`] — the real ark-circom-backed `Prover` impl
-//!     (PR 4g.4b): witness gen + zkey-backed Groth16 prove.
+//! # Backends
 //!
-//! Architecturally: PR 4g.4a shipped the deterministic, byte-
-//! equality foundation (witness / leaf / constraints / inputs).
-//! PR 4g.4b wired the actual Groth16 proving behind the same
-//! `Prover` trait — no public-API changes at the trait surface,
-//! so a future rapidsnark swap stays internal.
+//! Selected at boot by `DARKNYX_TEE_PROVER`, all behind the [`groth16::Prover`]
+//! trait so the settle worker is unaware of which is active:
+//!
+//! ```text
+//!   ark_prover.rs        ark-circom: witness generation + zkey-backed proving
+//!   rapidsnark_prover.rs rapidsnark via rapidsnark_sys.rs (FFI)
+//!   icicle_prover.rs     ICICLE CUDA, for GPU-equipped enclaves
+//! ```
+//!
+//! A GPU backend is only safe where the GPU itself is in confidential-compute mode:
+//! the witness holds private amounts, so a non-CC GPU would place them outside the
+//! enclave boundary. `gpu_cc.rs` is that check, and it must fail **closed** — an
+//! unrecognised device is not evidence of confidential compute.
+//!
+//! # Deterministic core
+//!
+//! The rest is byte-equality machinery mirroring
+//! `packages/sdk/tests/helpers/match-batch-prover.ts`:
+//!
+//! ```text
+//!   witness.rs      MatchSlotWitness, dummy_slot, and the all-zero padding
+//!                   strategy for batches smaller than N
+//!   leaf.rs         Poseidon leaf, Merkle root, inclusion path — must match the
+//!                   circuit's MatchSlot() and MerkleRoot(N) templates exactly
+//!   constraints.rs  conservation checks that fail with named errors before the
+//!                   circuit sees a bad witness
+//!   inputs.rs       the snarkjs-format public-input vector groth16-solana consumes
+//!   convert.rs      ark-groth16 Proof<Bn254> → the on-chain 256-byte layout
+//!   snarkjs.rs, wtns.rs, scratch.rs   witness-file and workspace plumbing
+//! ```
+//!
+//! A drift in `leaf.rs` does not fail here. It fails inside the circuit, as
+//! `merkle_root != merkle.root`, after a full proof has been generated — which is
+//! why `match-batch-prototype.test.ts` pins the construction on the TypeScript side
+//! too.
 
 pub mod ark_prover;
 pub mod constraints;

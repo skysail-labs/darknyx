@@ -156,7 +156,7 @@ pub struct OrderOpening {
 /// carries `note_buyer` / `note_seller` (commitments, not order ids),
 /// so keying by commitment lets the settle assembler resolve both
 /// sides of a match directly. Inserted at intake (after the opening
-/// verifies), read by the assembler (4g.7d), removed on cancel /
+/// verifies), read by the settle assembler, removed on cancel /
 /// expiry / settle so the table tracks the live book.
 #[derive(Default, Debug)]
 pub struct OpeningStore {

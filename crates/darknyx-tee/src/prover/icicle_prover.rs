@@ -5,8 +5,9 @@
 //! This backend proves with the vendored `icicle-snark` crate, which reads our
 //! standard snarkjs `.zkey` + `.wtns` and emits a snarkjs-format proof, so the
 //! result routes through the SAME [`proof_to_onchain_bytes`] converter as ark +
-//! rapidsnark. One crate covers both `device="CPU"` (Phase 1 — no GPU) and
-//! `device="CUDA"` (Phase 2 — confidential-GPU TEE); the device is chosen per
+//! rapidsnark. One crate covers both `device="CPU"` (no GPU required) and
+//! `device="CUDA"` (which requires a confidential-compute GPU, since the
+//! witness holds private amounts); the device is chosen per
 //! prove via `DARKNYX_TEE_ICICLE_DEVICE` (default `CPU`).
 //!
 //! ## Threading
@@ -120,7 +121,7 @@ pub struct IcicleMatchBatchProver {
     /// faster than wasmer, byte-identical witness). `None` → the wasmer `cfg`.
     /// Selected by `DARKNYX_TEE_WITNESS` exactly like the rapidsnark backend.
     native_witness_bin: Option<PathBuf>,
-    /// The icicle device the worker thread proves on: `CPU` (Phase 1) | `CUDA`.
+    /// The icicle device the worker thread proves on: `CPU` | `CUDA`.
     device: String,
     n: usize,
 }
@@ -171,7 +172,7 @@ impl IcicleMatchBatchProver {
             }
         };
 
-        // The icicle compute device. CPU needs no GPU (Phase 1); CUDA (Phase 2)
+        // The icicle compute device. CPU needs no GPU; CUDA
         // requires a confidential-GPU TEE + the ICICLE CUDA backend in the image
         // (and ICICLE_BACKEND_INSTALL_DIR set so it's loaded). Default CPU.
         let device = std::env::var("DARKNYX_TEE_ICICLE_DEVICE")
