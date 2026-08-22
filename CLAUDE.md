@@ -935,7 +935,9 @@ test; a TS-only change fails on devnet with `InvalidProof`/`InvalidBatchBinding`
 Every value Poseidon-hashes MUST fit in BN254 Fr (be < the modulus). Raw
 `[0xFFu8; 32]` passes through almost everything WITHOUT an obvious error,
 but `light-poseidon`'s `hash_bytes_be` rejects values ≥ the modulus →
-`PoseidonFailed (6030)` / `InvalidBatchBinding`.
+`NotInField` host-side, and `InvalidProof (6000)` / `InvalidBatchBinding (6022)`
+on-chain. (There is **no** `PoseidonFailed (6030)` variant on the vault — code
+6030 is `RelockRequiresChangeNote`.)
 
 * **Test fixtures fed to Poseidon must be Fr-safe** — use `fr_safe(seed, salt)`
   (in the test harnesses) for any hashed 32-byte field.
@@ -1006,7 +1008,7 @@ this — only the integration tests do, with `AccountNotFound` /
 | Bumped `MatchResultPayload` field order | `canonical_payload_hash_fixed_vector` fails | mirror in TS `serializePayload` + recompute the fixed vector |
 | Added a vault PDA without the SDK | integration test `AccountNotFound` / `ConstraintSeeds` | add the SEED + `xxxPda()` to the SDK; update every `build*Ix` (§8.3) |
 | Added an account to a settle ix without the ALT | `TransactionTooLarge` | add it to the static ALT (re-run devnet-setup) or the per-batch ALT (§6) |
-| Raw `[0xA0u8; 32]` for a Poseidon-hashed field | `PoseidonFailed (6030)` / `InvalidBatchBinding` | `fr_safe(seed, salt)` or any Poseidon output (§7.2) |
+| Raw `[0xA0u8; 32]` for a Poseidon-hashed field | `NotInField` host-side; `InvalidProof (6000)` / `InvalidBatchBinding (6022)` on-chain | `fr_safe(seed, salt)` or any Poseidon output (§7.2) |
 | Passed a `commitment` where a `note_use_tag` was wanted (or vice versa) | Compiles; on-chain `AccountNotFound` / `ConstraintSeeds (2006)` at a PDA that looks fine | Both are `[u8;32]`. Leaves + `DepositedNoteEntry` = commitments; `NoteLock` + `ConsumedNoteEntry` + settle inputs = tags (`CRYPTOGRAPHY.md` §2.1) |
 | Upgraded a running CVM across the journal v1→v2 bump without draining | Boot reports the journal `Damaged` and demands an operator | `POST /admin/drain`, confirm `safe_to_stop`, THEN redeploy |
 | Forgot the tree reset after a wipe/migration | `StaleMerkleRoot (6004)` on first withdraw | §2.4 |

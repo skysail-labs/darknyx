@@ -1,4 +1,4 @@
-//! Darknyx dark pool — vault program (Phase 1).
+//! Darknyx dark pool — vault program.
 //!
 //! Responsibilities:
 //!   - SPL token custody via per-mint PDA token accounts.
@@ -255,7 +255,7 @@ pub mod vault {
     /// Merkle inclusion proof against this marker. See
     /// `instructions/verify_match_batch.rs`. Subsumes the legacy v3.1
     /// `verify_valid_create` + `verify_valid_price` ix pair, which
-    /// were removed in Phase 1c-hard.
+    /// have been removed.
     pub fn verify_match_batch(
         ctx: &mut Context<VerifyMatchBatch>,
         merkle_root: [u8; 32],
@@ -269,7 +269,7 @@ pub mod vault {
     /// and walks a depth-4 Merkle inclusion path to bind this
     /// specific match to it. The legacy v3.1 `tee_forced_settle` ix
     /// + its `ValidCreateMarker` / `ValidPriceMarker` per-match
-    /// dependencies were removed in Phase 1c-hard.
+    /// dependencies have been removed.
     pub fn tee_forced_settle_batched(
         ctx: &mut Context<TeeForcedSettleBatched>,
         tree_id: u8,

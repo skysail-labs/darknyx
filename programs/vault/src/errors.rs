@@ -1,3 +1,15 @@
+//! The program's error codes.
+//!
+//! **Declaration order is a wire contract.** Anchor numbers `#[error_code]`
+//! variants sequentially from 6000, so `InvalidProof` is 6000, `StaleMerkleRoot`
+//! is 6004, and `InvalidBatchBinding` is 6022. Inserting a variant anywhere but
+//! the end silently renumbers every code after it, and those numbers are quoted
+//! throughout the repo — in comments, in `CLAUDE.md`'s failure-signature table,
+//! and in client code that branches on them. **Append; do not insert.**
+//!
+//! Removing a variant is worse than renumbering, because the code it vacated is
+//! then reused by whatever follows.
+
 use anchor_lang::prelude::*;
 
 #[error_code]
@@ -80,7 +92,7 @@ pub enum VaultError {
     #[msg("Caller is not authorized for this instruction")]
     Unauthorized,
 
-    // ---- Phase 5: change-note settlement ----
+    // ---- change-note settlement ----
     #[msg("Conservation law violated: note.amount != trade_leg + change_leg + fee_leg")]
     ConservationViolation,
     #[msg(

@@ -482,7 +482,7 @@ fn parse_hex32_env(var: &str, default: [u8; 32]) -> Result<[u8; 32]> {
             // field element — e.g. the fee-note owner), so it MUST be a
             // canonical BN254 `Fr` (< the modulus). A 32-byte value that's
             // ≥ the modulus passes the length check but blows up at runtime
-            // (PoseidonFailed) when the matcher mints a fee note. Fail fast
+            // when the matcher mints a fee note. Fail fast
             // here. `fr_from_be_bytes` rejects non-canonical values.
             darkpool_crypto::fr_from_be_bytes(&k).map_err(|_| {
                 anyhow::anyhow!(

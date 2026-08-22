@@ -21,6 +21,7 @@ DEFAULT_TARGETS=(
   "$ROOT/crates/darknyx-tee"
   "$ROOT/crates/darkpool-crypto"
   "$ROOT/crates/darkpool-matcher"
+  "$ROOT/programs/vault"
 )
 
 if [ "$#" -gt 0 ]; then

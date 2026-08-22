@@ -1,3 +1,23 @@
+//! Account layouts, PDA seeds, and the protocol's sizing constants.
+//!
+//! **Every `SEED` literal here is hand-mirrored into
+//! `packages/sdk/src/idl/seeds.ts`, and nothing in CI compares the two.** Adding
+//! a PDA on this side without adding the seed and a `xxxPda()` helper to the SDK
+//! compiles cleanly and fails only at runtime, as `AccountNotFound` or
+//! `ConstraintSeeds (2006)` against an address that looks plausible. The
+//! integration tests are the only thing that catches it (`CLAUDE.md` §8.3).
+//!
+//! Which value a seed takes is equally easy to get wrong. `NoteLock` and
+//! `ConsumedNoteEntry` are keyed by the **note-use tag**; Merkle leaves and
+//! `DepositedNoteEntry` are keyed by the **commitment**. Both are `[u8; 32]`, so
+//! swapping them also compiles and also fails only on-chain — see
+//! `CRYPTOGRAPHY.md` §2.1.
+//!
+//! Per-leaf PDAs are the replay-protection backbone: `WalletEntry`,
+//! `DepositedNoteEntry`, `ConsumedNoteEntry`, and `NoteLock` all rely on `init`
+//! failing when the account already exists. Relaxing one to `init_if_needed`
+//! removes the guard rather than making it more convenient (`CLAUDE.md` §8.1).
+
 use anchor_lang::prelude::*;
 
 /// Fixed Merkle tree depth. 2^20 = 1,048,576 notes. Matches circom circuit.
@@ -370,10 +390,10 @@ impl OutstandingMint {
     pub const SPACE: usize = 8 + 32 + 8 + 1;
 }
 
-// v3.1 `ValidCreateMarker` + `ValidPriceMarker` + their TTL consts lived
-// here. Removed in Phase 1c-hard once `verify_match_batch` subsumed both
-// per-match proofs into one batched Groth16 + a single
-// `BatchValidityMarker` keyed by the batch's Merkle root.
+// v3.1 `ValidCreateMarker` + `ValidPriceMarker` and their TTL consts lived
+// here. They were removed once `verify_match_batch` subsumed both per-match
+// proofs into one batched Groth16 plus a single `BatchValidityMarker` keyed by
+// the batch's Merkle root.
 
 /// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +
