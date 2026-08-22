@@ -34,7 +34,7 @@ pub const CHANGE_ROLE_BUYER: u8 = 0xB1;
 /// Role tag for the seller's change note (`note_f`).
 pub const CHANGE_ROLE_SELLER: u8 = 0x5E;
 
-// ─── Trade-output + fee note roles (4g.7) ────────────────────────────────────
+// ─── Trade-output + fee note roles ───────────────────────────────────────────
 
 /// Role tag for the buyer's full-fill output note (`note_c`).
 pub const TRADE_ROLE_BUYER: u8 = 0xC1;

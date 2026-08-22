@@ -1,3 +1,11 @@
+//! The matcher's error type.
+//!
+//! Every variant is a **refusal to match**, not a failure of matching: a stale
+//! oracle, a tripped circuit breaker, a malformed order, or a conservation
+//! check that did not hold. The matcher returns rather than producing a batch
+//! it cannot stand behind, because a bad batch is not caught downstream —
+//! it becomes a proof obligation the circuit cannot satisfy.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -1,9 +1,17 @@
-//! End-to-end behaviour tests for the shared matcher.
+//! End-to-end auction scenarios for the shared matcher.
 //!
-//! These scenarios pin uniform clearing, price-time priority, circuit
-//! breaking, expiry, order constraints, output commitments, and paging.
+//! These pin the behaviour the whole venue is reasoned about: uniform clearing,
+//! price-time priority, circuit breaking, expiry, order constraints, output
+//! commitments, and paging.
 //!
-//! `cargo test -p darkpool-matcher --test parity`
+//! This file is the crate's behavioural contract with its two consumers. The
+//! enclave matches against this algorithm and the SDK re-derives its outputs, so a
+//! scenario changed here is a change to what both of them expect — not a local test
+//! edit.
+//!
+//! ```sh
+//! cargo test -p darkpool-matcher --test parity
+//! ```
 
 use darkpool_matcher::book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdateKind,

@@ -1,7 +1,9 @@
-//! Order-book primitives. Pure data; no async, no I/O, no Anchor.
+//! Order-book primitives. Pure data — no async, no I/O, no Anchor.
 //!
-//! Wire format: Borsh. `OrderSide` / `OrderType` / `OrderStatus` are
-//! `#[repr(u8)]` so their discriminants remain explicit and stable.
+//! Borsh on the wire. `OrderSide`, `OrderType`, and `OrderStatus` are `#[repr(u8)]`
+//! so their discriminants stay explicit and stable: they are serialised into
+//! messages the SDK and the enclave both decode, so reordering a variant silently
+//! reinterprets existing orders rather than failing to compile.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 

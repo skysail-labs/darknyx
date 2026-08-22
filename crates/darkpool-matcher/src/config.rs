@@ -13,8 +13,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Orders whose `expiry_slot` is within this many slots of the
 /// matcher's `current_slot` are drained before matching, not
-/// included in any match. Gives the follow-up settle pipeline
-/// enough runway to confirm before the implicit settle deadline.
+/// included in any match. This gives the downstream settle pipeline enough
+/// runway to confirm before the implicit settle deadline — an order matched
+/// closer to expiry than this could settle after it.
 pub const SETTLEMENT_BUFFER_SLOTS: u64 = 20;
 
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]

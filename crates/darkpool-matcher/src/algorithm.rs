@@ -1,14 +1,22 @@
-//! The matching algorithm itself. Pure functions over the
-//! `darkpool_matcher::book` + `darkpool_matcher::match_result` types.
+//! The matching algorithm itself — pure functions over [`crate::book`] and
+//! [`crate::match_result`].
 //!
-//! This is the single source of truth consumed by the in-TEE matcher.
-//! Behaviour is gated by per-function unit tests in this module and
-//! end-to-end auction scenarios in `tests/parity.rs`.
+//! Consumed by the in-TEE matcher through [`crate::PreparedMatchTick::next_page`];
+//! see the crate root for why [`crate::run_batch`] is not the production path
+//! (audit SW-28).
 //!
-//! No Anchor / no `solana_program` imports. The one place the
-//! on-chain code used `solana_program::hash::hashv` was inside
-//! `merkle_root_sha256`; the port uses `sha2::Sha256` instead and
-//! a parity test pins the byte-equivalence.
+//! Behaviour is pinned by per-function unit tests here plus end-to-end auction
+//! scenarios in `tests/parity.rs`, and the paging semantics separately in
+//! `tests/paging_differential.rs` and `tests/chaining_sentinel.rs`.
+//!
+//! No Anchor and no `solana_program` imports: this crate is built for the host and
+//! the enclave, not for BPF. `merkle_root_sha256` is the one place the on-chain
+//! code used `solana_program::hash::hashv`; it uses `sha2::Sha256` here and a
+//! parity test pins the byte-equivalence.
+//!
+//! The zero collateral-note sentinel means "not yet derived" — the settle assembler
+//! fills it in, not the matcher — and the chaining branch treats it as a stop
+//! condition rather than a value to match against.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

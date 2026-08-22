@@ -1,19 +1,31 @@
 //! Pure matching algorithm for the Darknyx dark pool.
 //!
-//! Uniform-clearing-price batch auction with FIFO tie-break and
-//! Pyth-band circuit breaker. This crate is the single source of truth
-//! consumed by the in-TEE matcher (`crates/darknyx-tee`).
+//! Uniform-clearing-price batch auction with FIFO tie-break and a Pyth-band circuit
+//! breaker. This crate is the single source of truth for matching, consumed by the
+//! in-TEE matcher (`crates/darknyx-tee`).
+//!
+//! # Two entry points, and production uses only one
+//!
+//! **The enclave calls [`PreparedMatchTick::next_page`] with
+//! `single_fill_per_order: true`.** [`run_batch`] chains partial fills within one
+//! batch and exists for tests and legacy callers; **production does not use it.**
+//! Reasoning about matcher behaviour against `run_batch` therefore does not
+//! transfer — the chaining it performs is the difference (audit SW-28).
 //!
 //! # Invariants
 //!
 //! * Uniform clearing price across the batch.
 //! * FIFO tie-break at each price level.
 //! * Pyth-TWAP circuit breaker (`circuit_breaker_bps`).
-//! * Change-note construction parity with `change_note::derive_*`
-//!   and the TS port in `packages/sdk/tests/helpers/e2e-helpers.ts`.
+//! * Change-note construction stays byte-identical to [`change_note`] and its
+//!   TypeScript port in `packages/sdk/tests/helpers/e2e-helpers.ts`.
 //! * No floating point anywhere.
-//! * Deterministic across runs given the same inputs (no clock
-//!   reads inside the matcher; pass `current_slot` as input).
+//! * Deterministic given the same inputs — the matcher reads no clock;
+//!   `current_slot` is an input.
+//!
+//! Determinism is not a preference here. The same batch is replayed by the settle
+//! assembler and, transitively, by the circuit; a matcher that varied run-to-run
+//! would produce a proof that does not correspond to the fills already reported.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
