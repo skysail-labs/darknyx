@@ -661,7 +661,7 @@ pub fn note_lock_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// v3.5 — batched-validity marker scaffolding
+// Batched-validity marker scaffolding
 // ---------------------------------------------------------------------------
 
 /// Mirrors `vault::state::BatchValidityMarker::SEED`.
@@ -835,7 +835,7 @@ pub fn build_merkle_root_and_path_n16(
 }
 
 /// Build a `tee_forced_settle_batched` ix with the supplied inclusion
-/// proof. Mirrors `build_settle_ix` but for the v3.5 ix variant: one
+/// proof. Mirrors `build_settle_ix` but for the batched ix: one
 /// extra `match_index` byte + 4 contiguous 32-byte siblings appended
 /// to ix.data; the two per-match marker accounts collapse to a single
 /// `batch_validity_marker`.
@@ -972,7 +972,7 @@ pub fn build_verify_match_batch_ix(
 }
 
 /// (ed25519_verify, tee_forced_settle_batched) tx — mirror of
-/// `build_settle_tx` for the v3.5 path.
+/// `build_settle_tx` for the batched path.
 pub fn build_settle_batched_tx(
     h: &Harness,
     tree_id: u8,
@@ -1075,7 +1075,7 @@ pub fn build_reset_merkle_tree_ix(h: &Harness, tree_id: u8) -> Instruction {
     }
 }
 
-/// One-shot: compute the v3.5 leaf + Merkle root for a single-match
+/// One-shot: compute the batch leaf + Merkle root for a single-match
 /// "batch" (slot 0, all other slots zero-padded), seed the
 /// `BatchValidityMarker` PDA at far-future expiry, and return a
 /// ready-to-send (compute_budget + ed25519 + tee_forced_settle_batched)

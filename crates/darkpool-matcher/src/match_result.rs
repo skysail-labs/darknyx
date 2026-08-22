@@ -139,7 +139,7 @@ pub struct RunBatchOutput {
     /// Merkle (SHA-256, NOT Poseidon — this is an audit log root,
     /// not a ZK input) root over the `order_inclusion_commitment`s
     /// of every order that participated in matching this batch.
-    /// Distinct from the v3.5 Poseidon batch root attested by
+    /// Distinct from the Poseidon batch root attested by
     /// VALID_MATCH_BATCH; this one is for off-chain auditability.
     pub inclusion_root: [u8; 32],
 

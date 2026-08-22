@@ -7,7 +7,7 @@
 //! it. This pool instead keeps a **long-lived `current` ALT** and just
 //! `extend`s it with each batch's 7 addresses, rotating to a fresh ALT
 //! (and deactivating the old one) only when it nears Solana's 256-address
-//! cap. See `docs/v3.5-migration.md` §"Rolling-ALT pool".
+//! cap.
 //!
 //! **What this does NOT remove:** the per-batch ~1-slot activation wait.
 //! Newly *extended* addresses (not just newly *created* ALTs) are

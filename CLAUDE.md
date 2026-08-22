@@ -1069,6 +1069,17 @@ implementation it must stay byte-identical to).
   key documented as 74 MB that is 130 MB.
 * **No implementation-process references.** No PR numbers, phase names, slice or
   step numbers. They resolve to nothing within months.
+* **No migration narration.** A version label is fine when it names something
+  that exists *now* — the `darknyx-match-v11` domain tag, Anchor v2, a v0
+  transaction, `/v1/stream`, `nullifier_v2`. It is noise when it narrates a move
+  away from something the reader cannot see: "subsumes the legacy v3.1
+  `verify_valid_price` ix, which has been removed" tells a new developer nothing,
+  because there is no v3.1 and no such instruction. State the design; delete the
+  journey. The test is whether the reader needs it to work with the code **as it
+  exists today** — which is why "legacy" is still correct for a path that is
+  deprecated but *still reachable* (`gateway-terminated` transport, the singular
+  market envs), and why a design rationale ("one keypair fills all three roles,
+  because …") stays: it stops a settled decision being re-litigated.
 * **State invariants as invariants, not as history.** "The account list must
   match the on-chain struct order" — not "PR 4g.3 reordered the accounts".
 * **Keep load-bearing numbers exact.** Byte widths, account indices,

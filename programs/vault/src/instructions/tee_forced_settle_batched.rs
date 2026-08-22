@@ -284,7 +284,7 @@ pub struct TeeForcedSettleBatched {
     #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
     pub instructions_sysvar: UncheckedAccount,
 
-    /// v3.5 — single batch-validity marker. PDA seed = the Merkle root
+    /// The batch's single validity marker. PDA seed = the Merkle root
     /// computed in the handler from (leaf, merkle_proof, match_index).
     /// Marker must already exist (written by an upstream
     /// `verify_match_batch` ix) and be unexpired.
@@ -338,7 +338,7 @@ pub fn tee_forced_settle_batched_handler(
     )?;
 
     // ────────────────────────────────────────────────────────────────────
-    // v3.5 batch-marker check. Replaces the two per-match marker checks.
+    // Batch-marker check. Replaces the two per-match marker checks.
     //
     // Recompute the leaf hash from payload + lock mints, walk the depth-4
     // Merkle path with the provided siblings + match_index, derive the

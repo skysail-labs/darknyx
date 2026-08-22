@@ -390,12 +390,10 @@ impl OutstandingMint {
     pub const SPACE: usize = 8 + 32 + 8 + 1;
 }
 
-// v3.1 `ValidCreateMarker` + `ValidPriceMarker` and their TTL consts lived
-// here. They were removed once `verify_match_batch` subsumed both per-match
-// proofs into one batched Groth16 plus a single `BatchValidityMarker` keyed by
-// the batch's Merkle root.
+// Batch validity is tracked by ONE `BatchValidityMarker` per batch, keyed by
+// the batch's Merkle root — not by per-match markers.
 
-/// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
+/// BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +
 /// VALID_PRICE for ALL N matches in a batch. The proof's first of two public
 /// inputs is a Merkle root over the per-slot leaves; the marker's PDA
