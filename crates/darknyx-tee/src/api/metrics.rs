@@ -1,4 +1,12 @@
-//! Admin-only settlement benchmark telemetry.
+//! `GET /admin/metrics/settlement` — settle benchmark telemetry.
+//!
+//! Serves the aggregated snapshot held by [`crate::settle::metrics`]: per-batch
+//! timing, queue depth, prover configuration, and terminal outcome counts.
+//!
+//! Admin-gated on top of the bearer scope, because throughput telemetry is
+//! operator data rather than client data. The underlying record type is the
+//! boundary that keeps prices, amounts, and note identities out of this surface —
+//! see [`crate::settle::metrics`] before adding a field here.
 
 use std::sync::Arc;
 

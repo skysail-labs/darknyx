@@ -1,6 +1,6 @@
 //! Debug endpoints gated by the `debug_endpoints` cargo feature.
 //!
-//! These routes exist so `darknyx-tee-loadgen` (PR 4f) can run
+//! These routes exist so `darknyx-tee-loadgen` can run
 //! end-to-end smoke benchmarks against a local-simulator `darknyx-tee`
 //! without depending on real Pyth Hermes network traffic. The
 //! feature MUST be off in production builds — there is no auth on

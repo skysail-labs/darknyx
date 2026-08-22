@@ -1,39 +1,34 @@
-//! Layer A — operational auth.
+//! Operational authentication — the account-level tier ("Layer A").
 //!
-//! Issues short-lived HS256 JWTs from `(api_key, api_secret,
-//! passphrase)` credentials and enforces `Authorization: Bearer
-//! <token>` on protected routes. See `docs/tee-architecture.md` §11.2
-//! for the design rationale.
+//! Issues short-lived HS256 JWTs from `(api_key, api_secret, passphrase)`
+//! credentials and enforces `Authorization: Bearer <token>` on protected routes.
+//! See `docs/tee-architecture.md` §11.2.
 //!
-//! Layout overview:
+//! **This tier is not the custody boundary.** It exists for rate-limiting, audit,
+//! and account management. What actually authorises a trade is the per-order
+//! trading-key signature in [`super::orders`] ("Layer B"), which is what on-chain
+//! settlement relies on. A compromised bearer token cannot move funds.
 //!
-//! - [`token_handler`] backs `POST /auth/token` — public; takes
-//!   credentials, returns a JWT with `expires_in` seconds TTL.
-//! - [`bearer_middleware`] is `axum::middleware::from_fn_with_state`
-//!   friendly — mount it on a sub-router that holds all protected
-//!   routes (PR 4e.3 mounts `/orders` under it).
-//! - [`Authorized`] is what the middleware injects into the request
-//!   extensions on success; downstream handlers read it via
-//!   `axum::Extension<Authorized>`.
+//! Layout:
 //!
-//! Credential storage (Phase 1a) is **argon2id PHC hashes** held
-//! in-memory in [`AccountRegistry`] — never plaintext. The registry
-//! is mutated at runtime by the admin-gated `POST /admin/accounts`
-//! registration endpoint ([`register_account_handler`]); the first
-//! admin is seeded from the `DARKNYX_TEE_API_*` env at boot
-//! ([`AccountRegistry::from_env_bootstrap`]) since *something* has to
-//! seed the bootstrap admin (chicken-and-egg). Token revocation is an
-//! in-memory `jti` denylist on [`ApiState`]; [`bearer_middleware`]
-//! rejects revoked tokens.
+//!   - [`token_handler`] backs the public `POST /auth/token`: credentials in, a JWT
+//!     with `expires_in` seconds of TTL out.
+//!   - [`bearer_middleware`] mounts on the protected sub-router via
+//!     `from_fn_with_state` and injects [`Authorized`] into the request extensions;
+//!     handlers read it with `axum::Extension<Authorized>`.
+//!   - [`AccountRegistry`] holds credentials as **argon2id PHC hashes, never
+//!     plaintext**, and is mutated at runtime through the admin-gated
+//!     [`register_account_handler`].
 //!
-//! Phase 1b (live): the registry + denylist are persisted to
-//! `accounts.db` under `DARKNYX_TEE_STATE_DIR` (the dstack LUKS mount) —
-//! write-on-change, best-effort, via [`crate::persistence::auth`].
-//! `ApiState::from_boot` loads the snapshot then merges the env admin;
-//! the register/revoke handlers call `ApiState::persist_auth` after
-//! mutating. This module is still Layer A only (operational); the
-//! load-bearing custody auth is Layer B (the per-order trading-key
-//! signature), untouched here. See `docs/tee-architecture.md` §11.
+//! The first admin is seeded from the `DARKNYX_TEE_API_*` environment at boot
+//! ([`AccountRegistry::from_env_bootstrap`]) — something has to break the
+//! chicken-and-egg, and a production boot rejects the public test credentials.
+//!
+//! The registry and the `jti` revocation denylist persist to `accounts.db` under
+//! `DARKNYX_TEE_STATE_DIR` (the dstack LUKS mount) via
+//! [`crate::persistence::auth`], written on change and best-effort.
+//! `ApiState::from_boot` loads the snapshot and then merges the env admin, so an
+//! operator locked out of the database can still recover through the environment.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -789,10 +784,10 @@ pub async fn validate_token(
 /// reaching here, so in practice this only fires once per token) is a
 /// no-op insert.
 ///
-/// In-memory only (Phase 1a): the denylist is lost on restart, which
+/// The denylist is also held in memory, where it is lost on restart — which
 /// is sound because every issued token also has a hard `exp` (default
 /// 1h) — a revoked token can outlive a restart by at most its
-/// remaining TTL. Phase 1b persists the denylist alongside
+/// remaining TTL. It is persisted alongside
 /// `accounts.db`.
 pub async fn revoke_token_handler(
     State(state): State<Arc<ApiState>>,

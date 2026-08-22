@@ -1,19 +1,19 @@
-//! Shared HTTP server state. Captured at boot, threaded into
-//! every handler via `axum::extract::State<Arc<ApiState>>`.
+//! Shared HTTP server state, captured at boot and threaded into every handler via
+//! `axum::extract::State<Arc<ApiState>>`.
 //!
 //! Two construction paths:
-//!   - `ApiState::from_boot(...)` — production. Captures the
-//!     dstack `info()` snapshot + the derived signer pubkey at
-//!     boot. Keeps an `Arc<DstackClient>` so `/attestation` can
-//!     fetch a fresh quote per request.
-//!   - `ApiState::for_tests(...)` — integration tests. No
-//!     dstack client; `/attestation` returns 503; everything else
-//!     serves the captured fields verbatim.
 //!
-//! Boot-time capture (rather than per-request `info()` calls) is
-//! a perf choice: app_id / instance_id / compose_hash / MRTD don't
-//! change for the lifetime of the CVM, so we pull them once and
-//! hand them to every `/info` request from memory.
+//!   - [`ApiState::from_boot`] — production. Captures the dstack `info()` snapshot
+//!     and the derived signer pubkey at boot, and keeps an `Arc<DstackClient>` so
+//!     `/attestation` can fetch a fresh quote per request.
+//!   - [`ApiState::for_tests`] — integration tests. No dstack client, so
+//!     `/attestation` answers 503; every other field serves verbatim.
+//!
+//! Identity fields (`app_id`, `instance_id`, `compose_hash`, MRTD) are captured
+//! once rather than re-read per request, because they cannot change for the
+//! lifetime of the CVM. The quote is the exception and is deliberately fetched per
+//! request: it carries a caller-supplied nonce, so a cached one would let a replayed
+//! quote pass as fresh.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -128,7 +128,7 @@ pub struct ApiState {
     /// `CARGO_PKG_VERSION` at compile time.
     pub version: &'static str,
 
-    // ── Layer A (operational) auth state ────────────────────────
+    // ── Operational (account-level) auth state ──────────────────
     /// HS256 secret for the bearer JWT. Production derives this
     /// once at boot from dstack via
     /// `get_key("darknyx/jwt-secret/v2", "jwt")`; test mode uses
@@ -177,13 +177,13 @@ pub struct ApiState {
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
 
-    /// Tradable instruments served by `GET /instruments` (Phase 2c).
+    /// Tradable instruments served by `GET /instruments`.
     /// Static for the CVM's lifetime — captured at boot from the
     /// market `MatchConfig` + the configured oracle feed. One market
     /// for now; a multi-market deploy populates more.
     pub instruments: Vec<InstrumentInfo>,
 
-    // ── Merkle mirrors (Phase 2 indexer surface; sharded Phase 3) ───
+    // ── Merkle mirrors (one per shard) ──────────────────────────
     /// One in-memory mirror per Merkle-tree shard, indexed by `tree_id`.
     /// Backs the `/tree/*` read endpoints (D6, §5.5). Always present
     /// (pure in-memory) — each starts empty and is fed by the sync task,
@@ -192,12 +192,11 @@ pub struct ApiState {
     /// Use [`Self::merkle_mirror`] to index by `tree_id` safely.
     pub merkle_mirrors: Vec<Arc<RwLock<MerkleMirror>>>,
 
-    // ── Matcher state (PR 4e.3 / 4e.4) ──────────────────────────
+    // ── Matcher state ───────────────────────────────────────────
     /// Shared order book + match-id counter. `None` in degraded
     /// boot or during early initialisation — the `/orders` handlers
-    /// return 503 in that case. PR 4e.4 will populate this with the
-    /// long-running `MatcherDriver`'s state on every production
-    /// boot.
+    /// return 503 in that case. On a production boot this holds the
+    /// long-running `MatcherDriver`'s state.
     pub matcher: Option<Arc<RwLock<MatcherState>>>,
     /// Boot-static matcher registry keyed by canonical instrument symbol.
     /// Each entry owns a completely independent book/opening store/counters,
@@ -219,40 +218,39 @@ pub struct ApiState {
     /// Monotonic counter the orders handler reads to stamp
     /// `arrival_slot` on incoming orders before they land in the
     /// book. Driven by a separate Solana-RPC poller in production
-    /// (PR 4e.4); advanced manually in tests via `set_current_slot`.
+    /// advanced manually in tests via `set_current_slot`.
     pub current_slot: Arc<std::sync::atomic::AtomicU64>,
     /// Shared oracle cache the `MatcherDriver` reads on every tick.
     /// `None` in matcher-less tests — same convention as `matcher`. The
     /// `debug_endpoints` cargo feature uses this to back the
     /// `POST /__debug/oracle/seed` endpoint; in production it's
-    /// written by `spawn_oracle_sync` (PR 4b) and read by the
+    /// written by `spawn_oracle_sync` and read by the
     /// matcher tick.
     pub oracle: Option<OracleCache>,
     /// Boot-selected oracle trust/transport mode, surfaced to clients so a
     /// mainnet release can refuse the slower development profile.
     pub oracle_mode: Option<OracleMode>,
 
-    // ── Settle scheduler state (PR 4g.1) ────────────────────────
+    // ── Settle scheduler state ──────────────────────────────────
     /// Shared state the `SettleScheduler` task writes into. The
-    /// `GET /settlement/status/{batch_id}` handler reads it; future
-    /// stage workers (4g.3 / 4g.5 / 4g.6) take brief write locks to
-    /// advance jobs. `None` until `main.rs` spawns the scheduler.
+    /// `GET /settlement/status/{batch_id}` handler reads it; the stage
+    /// workers take brief write locks to advance jobs. `None` until
+    /// `main.rs` spawns the scheduler.
     pub settle_state: Option<Arc<RwLock<SettleSchedulerState>>>,
     /// Whether a live on-chain settle driver was constructed. A scheduler state
     /// alone is not enough (simulator/loadgen boots are enqueue-only).
     pub settle_enabled: bool,
 
-    // ── Solana RPC (PR 4g.2 / walk-back in 4g.3) ────────────────
+    // ── Solana RPC ──────────────────────────────────────────────
     /// Hand-rolled JSON-RPC client pointed at the configured
     /// Solana cluster URL. `None` in isolated tests; populated by
     /// `main.rs` after construction. Cloneable cheaply (the inner
-    /// reqwest::Client is internally Arc) — stage workers in
-    /// 4g.3+ clone it into their per-job tasks.
+    /// reqwest::Client is internally Arc) — the stage workers clone it
+    /// into their per-job tasks.
     ///
-    /// The Solana fee-payer pubkey is `signer_pubkey_base58`
-    /// above: PR 4g.3 unified the TEE Ed25519 signer with the
-    /// Solana fee-payer (see `keys::ed25519::DerivedSigner::solana_keypair`
-    /// for the rationale + conversion).
+    /// The Solana fee-payer pubkey is `signer_pubkey_base58` above: the
+    /// TEE Ed25519 signer and the Solana fee-payer are the same key (see
+    /// `keys::ed25519::DerivedSigner::solana_keypair`).
     pub solana_rpc: Option<SolanaRpcClient>,
 
     // ── Per-account fills routing (fills-history) ───────────────
@@ -549,7 +547,7 @@ impl ApiState {
     /// Build production state from a successful boot. `jwt_secret`
     /// is the 32-byte value derived via dstack `get_key`. The account
     /// registry + revocation denylist are loaded from the persisted
-    /// `accounts.db` snapshot if present (Phase 1b), then the env
+    /// `accounts.db` snapshot if present, then the env
     /// bootstrap admin is merged in if its key is absent. On first
     /// boot (no snapshot yet) the seeded state is persisted immediately
     /// so the admin survives the next restart.
@@ -592,7 +590,7 @@ impl ApiState {
             instruments: Vec::new(),
             // K empty shard mirrors — the sync task fills each from chain.
             merkle_mirrors: new_shard_mirrors(num_trees),
-            // `from_boot` doesn't construct the matcher — PR 4e.4
+            // `from_boot` doesn't construct the matcher — `main.rs`
             // spawns the `MatcherDriver` and plumbs its state in via
             // a separate construction path. Until then the orders
             // handlers see `None` and return 503.
@@ -681,10 +679,10 @@ impl ApiState {
     }
 
     /// Attach the Solana RPC client. Called by `main.rs` after
-    /// constructing the client; stage workers in 4g.3+ read
-    /// `solana_rpc` to submit txs. The fee-payer pubkey is
-    /// `signer_pubkey_base58` (set at `from_boot` time) — no
-    /// separate field needed since 4g.3 unified the two.
+    /// constructing the client; the stage workers read `solana_rpc` to
+    /// submit txs. The fee-payer pubkey is `signer_pubkey_base58` (set at
+    /// `from_boot` time) — the signer and fee-payer are one key, so no
+    /// separate field is needed.
     /// Idempotent.
     pub fn with_solana_rpc(mut self, rpc: SolanaRpcClient) -> Self {
         self.solana_rpc = Some(rpc);
@@ -699,7 +697,7 @@ impl ApiState {
     /// Attach a freshly-constructed `MatcherState` + shared
     /// `current_slot` source + shared `OracleCache` to a boot-time
     /// `ApiState`. Called once by `main.rs` after the
-    /// `MatcherDriver` is spawned in PR 4e.4 — the `Arc<AtomicU64>`
+    /// `MatcherDriver` is spawned — the `Arc<AtomicU64>`
     /// and `OracleCache` must be the SAME instances the driver
     /// holds, so order arrivals + matcher ticks see a single
     /// clock + the same oracle view. Callers that build state via
@@ -1312,7 +1310,7 @@ impl ApiState {
             .retain(|_, (_, last_slot)| *last_slot >= cutoff);
     }
 
-    /// Boot-time auth load (Phase 1b). Loads the `accounts.db`
+    /// Boot-time auth load. Loads the `accounts.db`
     /// snapshot from `state_dir` if present, removes the historical public test
     /// account, merges in the env bootstrap admin if its key is absent, and
     /// persists either migration so it survives the next restart. Returns the
