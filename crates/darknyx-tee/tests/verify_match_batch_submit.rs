@@ -11,7 +11,7 @@
 //!   - confirm: a reverted sig surfaces an error.
 //!
 //! On-chain acceptance (real groth16-solana verification of an
-//! N=16 proof) lands in PR 4g.6 via litesvm.
+//! N=16 proof) is covered by litesvm in `programs/vault/tests`.
 //!
 //! Run with: `cargo test -p darknyx-tee --test verify_match_batch_submit`
 

@@ -914,7 +914,7 @@ async fn build_settle_driver(
     let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let circuits_dir =
         std::env::var("DARKNYX_TEE_CIRCUITS_DIR").unwrap_or_else(|_| "/circuits/build".to_string());
-    // The N=16 proving key is ~74 MB; `read_zkey` parses it
+    // The N=16 proving key is ~130 MB; `read_zkey` parses it
     // synchronously here, before the HTTP surface comes up. Fast in a
     // release build (the CVM), but a plain debug build takes ~minutes —
     // log around it so a slow boot doesn't look hung.

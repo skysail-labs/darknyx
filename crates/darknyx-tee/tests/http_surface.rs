@@ -195,7 +195,7 @@ async fn unknown_route_returns_404() {
     let resp = app
         .oneshot(
             Request::builder()
-                // /orders landed in PR 4e.3 — pick a path nothing
+                // pick a path nothing
                 // has claimed yet to keep this test future-proof.
                 // /account, /tree, /settlement, /transparency are
                 // all PR 4g placeholders.

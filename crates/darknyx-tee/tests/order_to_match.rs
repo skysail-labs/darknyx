@@ -1,16 +1,12 @@
-//! End-to-end PR-4e.4 verification: POST /orders × 2 (crossing
-//! bid + ask) → matcher tick → match arrives on the settle
-//! channel.
+//! End-to-end: POST /orders × 2 (crossing bid + ask) → matcher tick → match
+//! arrives on the settle channel.
 //!
-//! This is the load-bearing integration that proves all four
-//! pieces of PR 4e are wired together:
+//! The load-bearing integration proving the intake path is wired end to end:
 //!
-//!   - 4e.1 canonical encoding + 4e.3 signature verify accept the
-//!     HTTP submit,
-//!   - 4e.3 orders handler inserts into the shared `MatcherState`,
-//!   - 4e.4's tick (driven manually here for determinism, the
-//!     production loop is identical) reads the same state +
-//!     produces a `RunBatchOutput`,
+//!   - canonical encoding + signature verification accept the HTTP submit,
+//!   - the orders handler inserts into the shared `MatcherState`,
+//!   - the tick (driven manually here for determinism; the production loop is
+//!     identical) reads that same state and produces a `RunBatchOutput`,
 //!   - the matches mpsc channel that `main.rs` hands to the
 //!     drainer carries the output through.
 //!
@@ -97,7 +93,7 @@ fn sign_order(
         u
     };
 
-    // Input-note opening (4g.7a). The matcher (MatcherState::new() →
+    // Input-note opening. The matcher (MatcherState::new() →
     // zeroed mints in this test) verifies the opening against the
     // signed commitment, so derive note_commitment from the opening.
     let amount = 10_000_000u64;

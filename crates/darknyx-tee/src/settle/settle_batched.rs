@@ -374,7 +374,7 @@ mod tests {
         // [0;32], so note_lock_e and note_lock_f derive to the SAME
         // PDA. The legacy tx encoder dedups these to one key (saving
         // 32 bytes) — we surface the equality here so the
-        // 1232-byte budget analysis in CLAUDE.md §5 holds.
+        // 1232-byte budget analysis in CLAUDE.md §6 holds.
         let ix =
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 0, &proof(), &[0xAB; 32]);
         // note_lock_e [7] and note_lock_f [8] collide for an exact fill.

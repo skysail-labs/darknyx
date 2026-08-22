@@ -18,7 +18,7 @@
 //! opening that still hashes to the signed commitment — the opening
 //! is cryptographically pinned to the signature WITHOUT having to
 //! expand the canonical order encoding (and therefore without a
-//! cross-language signing-contract change — CLAUDE.md §6).
+//! cross-language signing-contract change — CLAUDE.md §7).
 //!
 //! The order schema used to carry a `nullifier` here too. It was
 //! removed (audit 2026-07-25, S-09): payload v9 dropped nullifiers

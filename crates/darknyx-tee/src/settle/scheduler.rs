@@ -10,7 +10,7 @@
 //!     status queries take the read lock, the scheduler and stage workers take
 //!     brief write locks to advance a job.
 //!
-//! Retention is bounded. Jobs are evicted at [`MAX_RETAINED_BATCHES`] batches, so
+//! Retention is bounded. Jobs are evicted at `MAX_RETAINED_BATCHES` batches, so
 //! the status table cannot grow without limit on a long-running enclave (audit
 //! SW-08). A status query for an evicted batch is indistinguishable from one for a
 //! batch that never existed, which is intentional.

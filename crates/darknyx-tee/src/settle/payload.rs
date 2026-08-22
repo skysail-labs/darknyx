@@ -1,5 +1,5 @@
 //! `MatchResultPayload` + `canonical_payload_hash` — the third leg
-//! of a CLAUDE.md §6 byte-equality contract.
+//! of a CLAUDE.md §7 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
 //!   - the SAME 552-byte Borsh serialization as the on-chain
