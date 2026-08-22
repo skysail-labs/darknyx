@@ -1,6 +1,6 @@
 //! Hierarchical viewing key tree (Umbra pattern adopted).
 //!
-//! Reference: Section 23.2.2, Appendix C of darkpool_protocol_spec_v3_changed.md
+//! See `CRYPTOGRAPHY.md` for the key model this sits in.
 //!
 //! ```text
 //!     MVK            (master, never leaves compliance team)
