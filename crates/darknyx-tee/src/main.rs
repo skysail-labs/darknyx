@@ -6,7 +6,7 @@
 //!
 //!   1. Init tracing.
 //!   2. Load config from env.
-//!   3. Dstack handshake (PR 4a) → derive Ed25519 signer +
+//!   3. Dstack handshake → derive Ed25519 signer +
 //!      JWT secret + capture app_id / instance_id / compose_hash /
 //!      MRTD.
 //!   4. Construct the boot-static market registry (one isolated matcher,
@@ -95,8 +95,8 @@ async fn main() -> Result<()> {
     darknyx_tee::boot::log_host_cpu_profile();
 
     // ─── 1. dstack handshake ─────────────────────────────────────────
-    // PR 4g.3 walk-back: the TEE Ed25519 signer (registered as
-    // `vault_config.tee_pubkey`) doubles as the Solana fee-payer.
+    // The TEE Ed25519 signer (registered in `vault_config.tee_pubkeys`)
+    // doubles as the Solana fee-payer.
     // Same Ed25519 seed → same Solana pubkey via
     // `DerivedSigner::solana_keypair()`. One address to fund on
     // devnet, one signature satisfies both the `tee_authority`
@@ -430,7 +430,7 @@ async fn main() -> Result<()> {
         Some(handle)
     };
 
-    // ─── 5. Settle scheduler + live settle driver (PR 4g.7e) ──────────
+    // ─── 5. Settle scheduler + live settle driver ─────────────────────
     // The scheduler accumulates per-match jobs; when the TEE is fully
     // configured (signer + RPC + N=16 prover) a `SettleDriver` drives
     // each batch through the full on-chain pipeline (lock → prove →
@@ -627,7 +627,7 @@ async fn main() -> Result<()> {
         _ => None,
     };
 
-    // ─── 7b. Spawn the Merkle mirror sync (Phase 2b) ──────────────────
+    // ─── 7b. Spawn the Merkle mirror sync ─────────────────────────────
     // Cold-boots the mirror from the vault program's history, then
     // live-polls. Uses its OWN read-only RPC client (independent of the
     // settle driver's). Best-effort: a failure here only means /tree/*

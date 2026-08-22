@@ -1,31 +1,41 @@
 //! Hand-rolled Solana JSON-RPC client.
 //!
-//! Sidesteps `solana-client` 1.18 (which would pull a `zeroize`
-//! major that conflicts with `ark-ec` 0.5 transitively present
-//! via `darkpool-crypto`). Instead we use:
+//! The enclave does not use `solana-client`, because it would pull a `zeroize`
+//! major that conflicts with the `ark-ec` 0.5 already present transitively through
+//! `darkpool-crypto`. Instead this module builds on `reqwest` for transport (the
+//! same client and TLS configuration `oracle/hermes.rs` uses) and the modular
+//! Solana crates — `solana-address`, `solana-hash`, `solana-keypair`,
+//! `solana-signature`, `solana-signer` — for the type system. `programs/vault`'s
+//! dev-dependencies use that same combination alongside the same `ark-*` crates, so
+//! the pairing is proven elsewhere in the workspace.
 //!
-//!   - `reqwest` for HTTP transport (already in tree for
-//!     `oracle/hermes.rs` — same pattern, same TLS config).
-//!   - The modular Solana 2.x/3.x crates (`solana-address`,
-//!     `solana-hash`, `solana-keypair`, `solana-signature`,
-//!     `solana-signer`) for the type system. `programs/vault`'s
-//!     dev-deps already use this exact set alongside the same
-//!     `ark-*` deps — so the compatibility is proven by an
-//!     existing crate in the workspace.
+//! Methods implemented are the ones the settle pipeline needs:
 //!
-//! Scope of PR 4g.2: the 6 RPC methods the settle scheduler
-//! needs across PRs 4g.3–4g.6:
+//! ```text
+//!   getLatestBlockhash            recent_blockhash for every tx
+//!   sendTransaction               submit signed bytes
+//!   getSignatureStatuses          poll for confirmation
+//!   getAccountInfo                read state, e.g. an ALT's activation slot
+//!   simulateTransaction           pre-flight before send
+//!   getRecentPrioritizationFees   priority-fee bidding hints
+//! ```
 //!
-//!   - `getLatestBlockhash`           (every tx — for `recent_blockhash`)
-//!   - `sendTransaction`              (submit signed bytes)
-//!   - `getSignatureStatuses`         (poll for confirmation)
-//!   - `getAccountInfo`               (read state, e.g. ALT slot)
-//!   - `simulateTransaction`          (pre-flight before send)
-//!   - `getRecentPrioritizationFees`  (priority-fee bidding hints)
+//! ```text
+//!   client.rs         transport, retries, and the methods above
+//!   error.rs          the error type, with endpoint redaction
+//!   vault_config.rs   parsing VaultConfig
+//!   market_config.rs  parsing MarketConfig
+//! ```
 //!
-//! Higher-level helpers (`confirm_signature_with_timeout`,
-//! `send_and_confirm`) land in later sub-PRs as call-sites need
-//! them. This module is the bottom-of-stack primitive layer.
+//! **Errors from this module must never carry the endpoint URL.** The configured
+//! URL contains the RPC provider's API key, and settle failures are surfaced
+//! through a client-pollable status endpoint; `redact_endpoint` exists for that
+//! reason (audit SW-01). A newly added error variant that formats the raw URL
+//! reintroduces the leak.
+//!
+//! Note that `getHealth` is unauthenticated on some providers and answers 200 for a
+//! revoked key, so it cannot be used to validate credentials — probe with
+//! `getSlot` or `getVersion`, which return `-32401` on a dead key.
 
 pub mod client;
 pub mod error;

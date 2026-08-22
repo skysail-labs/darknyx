@@ -1,4 +1,4 @@
-//! Phase 1b — best-effort persistence of the Layer-A **auth state**:
+//! Best-effort persistence of the operational **auth state**:
 //! the account registry + the JWT revocation denylist, so a TEE
 //! restart doesn't drop registered accounts or un-revoke tokens.
 //!

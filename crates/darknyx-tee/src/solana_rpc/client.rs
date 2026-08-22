@@ -6,7 +6,7 @@
 //! `error` field as [`super::error::RpcError::Rpc`]).
 //!
 //! The client is `Clone`-able cheaply because reqwest::Client is
-//! internally `Arc`. Call-sites in 4g.3+ clone it into per-stage
+//! internally `Arc`. Call-sites clone it into per-stage
 //! worker tasks.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -386,7 +386,7 @@ impl SolanaRpcClient {
 
     /// `getLatestBlockhash` — returns the current blockhash + the
     /// slot it was reported at (used by per-batch ALT creation in
-    /// 4g.5 — see CRYPTOGRAPHY.md §9 for why we read context.slot,
+    /// See CRYPTOGRAPHY.md §9 for why we read context.slot,
     /// not `getSlot("confirmed")`).
     pub async fn get_latest_blockhash(&self) -> Result<BlockhashWithSlot, RpcError> {
         #[derive(Deserialize)]
