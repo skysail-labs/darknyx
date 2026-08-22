@@ -7,10 +7,14 @@
 //!
 //! Three implementations must agree — this one, the vault's recomputation in
 //! `verify_match_batch`, and the TypeScript mirror — so a change here is a change
-//! in all three. Pinned by `match-config-parity.test.ts` via
-//! `examples/match-config-digest`. A drift does not fail locally: the proof
-//! verifies against a digest the vault does not recompute, and the settle is
-//! rejected on-chain.
+//! in all three.
+//!
+//! Only one of the two drifts is caught before deployment.
+//! `match-config-parity.test.ts`, via `examples/match-config-digest`, pins this
+//! implementation against the TypeScript one, so Rust↔TS drift fails there.
+//! Drift against the **vault's** recomputation is not covered by it: the proof
+//! then verifies against a digest the vault does not reproduce, and the failure
+//! appears only when a settle is rejected on-chain.
 
 use crate::errors::CryptoError;
 use crate::poseidon::poseidon_hash_bytes;

@@ -6,7 +6,8 @@
 //!
 //! # The byte-equality contract
 //!
-//! Every function here must produce **byte-identical** output in four places:
+//! Every primitive that has a counterpart elsewhere must produce
+//! **byte-identical** output in four places:
 //!
 //!   - this crate (the off-chain Rust prover and the vault's Rust tests),
 //!   - the on-chain vault program, via the `sol_poseidon` syscall,
@@ -16,10 +17,14 @@
 //! **A mismatch can permanently lock funds**, because a note whose commitment two
 //! environments disagree about cannot be proved spendable by its owner.
 //!
-//! That guarantee is not aspirational — it is pinned. Each primitive has a named
-//! parity test in `packages/sdk/tests/` that shells out to a matching binary under
-//! `examples/` and asserts byte equality against the TypeScript implementation
-//! (`CLAUDE.md` §7.1). **The `examples/` directory exists for that purpose**, which
+//! That guarantee is not aspirational — it is pinned. Each such primitive has a
+//! named parity test in `packages/sdk/tests/` that shells out to a matching
+//! binary under `examples/` and asserts byte equality against the TypeScript
+//! implementation (`CLAUDE.md` §7.1).
+//!
+//! **[`viewing_keys`] is the exception**: it is Rust-only, has no TypeScript
+//! counterpart, and therefore no parity test. Changing a derivation there breaks
+//! previously issued keys with nothing to catch it — see that module. **The `examples/` directory exists for that purpose**, which
 //! is why `cargo build --examples -p darkpool-crypto` is part of the pre-PR gate:
 //! without the binaries every one of those assertions silently skips, and
 //! `REQUIRE_PARITY_HELPERS=1` turns that skip into a hard failure.
