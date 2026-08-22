@@ -92,7 +92,7 @@ jobs:
         run: bash scripts/check-no-debug-endpoints.sh
       # Header comments must say what is true now, not which PR made it true.
       # See CLAUDE.md §10.5.
-      - name: No implementation-process markers in darknyx-tee
+      - name: No implementation-process markers (darknyx-tee, darkpool-crypto)
         run: bash scripts/check-no-process-markers.sh
       # .mjs scripts are not typechecked, so a forgotten `await` after an API
       # turns async is invisible to `node --check` -- valid syntax, broken

@@ -5,9 +5,9 @@
 //! - circomlib's `poseidon.circom` (same round constants & MDS, modulo endianness
 //!   conversions handled by snarkjs when producing witness inputs)
 //!
-//! The on-chain verifier (vault program) will call `solana_poseidon::hashv`
-//! directly. This crate exposes an equivalent API so that off-chain computation
-//! produces the same result.
+//! The vault program calls `solana_poseidon::hashv` directly on-chain. This
+//! crate exposes an equivalent API so off-chain computation produces the same
+//! result.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr, FR_BYTES};

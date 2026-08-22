@@ -1,17 +1,28 @@
-//! Hierarchical viewing key tree (Umbra pattern adopted).
-//!
-//! Reference: Section 23.2.2, Appendix C of darkpool_protocol_spec_v3_changed.md
+//! Hierarchical viewing-key tree — scoped, revocable read access for compliance.
 //!
 //! ```text
-//!     MVK            (master, never leaves compliance team)
+//!     MVK                            master; never leaves the compliance team
 //!      |
-//!      PairVK(base, quote)       = Poseidon5(mvk, base_lo, base_hi, quote_lo, quote_hi)
+//!      PairVK(base, quote)           = Poseidon5(mvk, base_lo, base_hi, quote_lo, quote_hi)
 //!      |
-//!      MonthlyVK(year, month)    = Poseidon2( Poseidon2(pair_vk, year), month )
+//!      MonthlyVK(year, month)        = Poseidon2( Poseidon2(pair_vk, year), month )
 //! ```
 //!
-//! Property: one-directional — given a child key, no function exists to recover
-//! the parent. Scope isolation is enforced by the Poseidon preimage resistance.
+//! The point of the tree is that disclosure can be **scoped**: handing over one
+//! `MonthlyVK` grants visibility into exactly one market-pair for exactly one
+//! month, and nothing else.
+//!
+//! That holds because derivation is one-directional — given a child key there is no
+//! function recovering the parent, which follows from Poseidon's preimage
+//! resistance rather than from any access control around the key. So the isolation
+//! survives a leaked child key; it does not survive a leaked MVK.
+//!
+//! Unlike most of this crate, these have **no TypeScript counterpart** and no
+//! parity test: viewing keys are used by off-chain compliance tooling on the Rust
+//! side only. Changing a derivation here therefore breaks previously issued keys
+//! rather than failing a cross-language assertion — there is nothing to catch it.
+//!
+//! See `CRYPTOGRAPHY.md` for how this sits in the wider key model.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr, Fr};

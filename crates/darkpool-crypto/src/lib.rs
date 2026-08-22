@@ -1,20 +1,42 @@
 //! Shared cryptographic primitives for the Darknyx dark pool.
 //!
-//! This crate is the single source of truth for:
-//! - Poseidon hashing over BN254 (note commitments, nullifiers, owner commitments)
-//! - Note/UTXO structure + commitment formula
-//! - Nullifier derivation
-//! - Blinding factor derivation (DarknyxShakeKdfV1)
-//! - Four-key hierarchy derivation (HKDF + DarknyxShakeKdfV1)
-//! - Hierarchical viewing key tree (MVK -> PairVK -> MonthlyVK)
+//! This crate is the single source of truth for Poseidon hashing over BN254, the
+//! note commitment and nullifier formulas, note-use tags, deposit/merge/match inner
+//! hashes, the four-key hierarchy, and the hierarchical viewing-key tree.
 //!
-//! All functions MUST produce byte-identical output in:
-//! - the off-chain Rust prover (ark-groth16)
-//! - the off-chain Rust vault tests (this crate's tests)
-//! - the on-chain vault program (via `sol_poseidon` syscall)
-//! - the circom/snarkjs proving pipeline (via circomlib's poseidon.circom)
+//! # The byte-equality contract
 //!
-//! If any cross-env byte mismatch occurs, funds can be permanently locked.
+//! Every primitive that has a counterpart elsewhere must produce
+//! **byte-identical** output in four places:
+//!
+//!   - this crate (the off-chain Rust prover and the vault's Rust tests),
+//!   - the on-chain vault program, via the `sol_poseidon` syscall,
+//!   - the circom/snarkjs proving pipeline, via circomlib's `poseidon.circom`,
+//!   - the TypeScript SDK.
+//!
+//! **A mismatch can permanently lock funds**, because a note whose commitment two
+//! environments disagree about cannot be proved spendable by its owner.
+//!
+//! That guarantee is not aspirational — it is pinned. Each such primitive has a
+//! named parity test in `packages/sdk/tests/` that shells out to a matching
+//! binary under `examples/` and asserts byte equality against the TypeScript
+//! implementation (`CLAUDE.md` §7.1).
+//!
+//! **[`viewing_keys`] is the exception**: it is Rust-only, has no TypeScript
+//! counterpart, and therefore no parity test. Changing a derivation there breaks
+//! previously issued keys with nothing to catch it — see that module. **The `examples/` directory exists for that purpose**, which
+//! is why `cargo build --examples -p darkpool-crypto` is part of the pre-PR gate:
+//! without the binaries every one of those assertions silently skips, and
+//! `REQUIRE_PARITY_HELPERS=1` turns that skip into a hard failure.
+//!
+//! So a change here is a change in two languages. Editing a formula on this side
+//! alone fails the parity test; editing the TypeScript side alone fails on devnet
+//! as `InvalidProof (6000)` instead.
+//!
+//! Values reaching Poseidon must also fit in BN254 Fr. Raw 32-byte inputs pass
+//! through most of this crate without complaint and are rejected only at
+//! `light-poseidon`, surfacing on-chain as `PoseidonFailed (6030)` — see
+//! `CLAUDE.md` §7.2 and [`field`].
 
 #![allow(clippy::too_many_arguments)]
 

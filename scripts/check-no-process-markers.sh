@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fail if implementation-process markers reappear in crates/darknyx-tee.
+# Fail if implementation-process markers reappear in the crates listed below.
 #
 # These are references to an internal PR/phase sequence (4g.3, PR 4e.2,
-# "Phase 2", "slice 5") that resolve to nothing outside the crate. They
+# "Phase 2", "slice 5") that resolve to nothing outside the code. They
 # accumulate during implementation and then tell a later reader that a change
 # happened without saying what is true now. The convention that replaces them
 # is CLAUDE.md §10.5.
@@ -13,14 +13,29 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="${1:-$ROOT/crates/darknyx-tee}"
+
+# Crates that have had the pass and must stay clean. Add one here the moment
+# its cleanup lands — a crate absent from this list is simply unguarded, and an
+# unguarded crate re-accumulates markers within months.
+DEFAULT_TARGETS=(
+  "$ROOT/crates/darknyx-tee"
+  "$ROOT/crates/darkpool-crypto"
+)
+
+if [ "$#" -gt 0 ]; then
+  TARGETS=("$@")
+else
+  TARGETS=("${DEFAULT_TARGETS[@]}")
+fi
 
 # Fail closed on a target we cannot scan. Without this the guard reports OK
 # for a path that was renamed or typo'd, which is worse than no guard.
-if [ ! -d "$TARGET" ] || [ ! -r "$TARGET" ]; then
-  echo "ERROR: target is not a readable directory: $TARGET" >&2
-  exit 2
-fi
+for t in "${TARGETS[@]}"; do
+  if [ ! -d "$t" ] || [ ! -r "$t" ]; then
+    echo "ERROR: target is not a readable directory: $t" >&2
+    exit 2
+  fi
+done
 
 # Matched forms: 4g.3 / PR 4e.2 / bare "PR 4g" / Phase 2 / slice 5 / step 3.
 # The bare "PR <n><letter>" form matters: an earlier revision of this script
@@ -32,16 +47,16 @@ PATTERN='(\bPR ?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\b
 # other non-zero status is a real failure (unreadable target, bad pattern) and
 # must NOT be reported as a pass.
 set +e
-hits=$(grep -rniE "$PATTERN" --include='*.rs' "$TARGET")
+hits=$(grep -rniE "$PATTERN" --include='*.rs' "${TARGETS[@]}")
 rc=$?
 set -e
 if [ "$rc" -gt 1 ]; then
-  echo "ERROR: grep failed with status $rc while scanning $TARGET" >&2
+  echo "ERROR: grep failed with status $rc while scanning ${TARGETS[*]}" >&2
   exit "$rc"
 fi
 
 if [ -n "$hits" ]; then
-  echo "ERROR: implementation-process markers found in $TARGET" >&2
+  echo "ERROR: implementation-process markers found" >&2
   echo >&2
   echo "$hits" >&2
   echo >&2
@@ -50,4 +65,4 @@ if [ -n "$hits" ]; then
   exit 1
 fi
 
-echo "check-no-process-markers: OK ($TARGET)"
+echo "check-no-process-markers: OK (${#TARGETS[@]} target(s))"

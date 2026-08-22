@@ -1,11 +1,16 @@
-//! Price commitment for the VALID_PRICE circuit.
+//! Price commitment — `Poseidon3(DOMAIN_PRICE = 5, clearing_price, batch_slot)`.
 //!
-//! Formula (must match `circuits/valid_price/circuit.circom`):
+//! **Vestigial.** This binding belonged to the VALID_PRICE circuit, which was
+//! retired: clearing-price binding is now carried inside VALID_MATCH_BATCH, and
+//! `circuits/valid_price/` no longer exists. Nothing in the workspace calls
+//! `price_commitment` — see `programs/vault/src/instructions/settlement_shared.rs`
+//! for the note recording that `verify_valid_price` was subsumed by the batched
+//! proof, and `circuits/templates/match_batch.circom` for where the binding lives
+//! now.
 //!
-//!   price_commitment = Poseidon3(DOMAIN_PRICE=5, clearing_price, batch_slot)
-//!
-//! This binds a VALID_PRICE proof to a specific (price, batch) pair,
-//! preventing proof replay across batches or price substitution attacks.
+//! Retained only so a caller pinned to the old formula keeps compiling.
+//! `packages/sdk/src/zk/price-commitment.ts` mirrors it and is equally unused.
+//! Removing both is a code change, not a documentation one.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_to_be_bytes, Fr};
