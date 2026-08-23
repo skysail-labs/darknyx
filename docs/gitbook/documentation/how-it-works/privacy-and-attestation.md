@@ -74,7 +74,10 @@ Verification is a client-side step (the SDK ships a helper). In order, you confi
 
 - **Step 1** observes the self-signed certificate on the connection that will
   carry the request and verifies a fresh transport quote binding its SPKI. A
-  probe to a different socket is not a substitute.
+  probe to a different socket is not a substitute. Before launch, the remaining
+  replacement-socket race must be closed inside the connector so a pooled
+  connection cannot disappear after the preflight gate and be replaced before
+  dispatch.
 - **Step 2** performs DCAP verification, rejects malformed or ambiguous event
   logs, requires exactly one
   runtime-typed compose event, derives the trusted compose hash from the
@@ -90,7 +93,10 @@ The SDK verifies the transport evidence and returns the quote-bound identity;
 the client still supplies the independently approved compose hash and compares
 the full returned signer set with finalized on-chain configuration. The
 reference daemon performs these checks automatically and pauses new trading
-when its evidence becomes stale or mismatched.
+when its evidence becomes stale or mismatched. The current single-connection,
+single-flight adapter narrows replacement churn, but connector-level refusal and
+supervised boot-rotation recovery remain pre-release gates; the internal
+cryptography record tracks their closure evidence.
 
 {% hint style="warning" %}
 **TLS alone is not verification**

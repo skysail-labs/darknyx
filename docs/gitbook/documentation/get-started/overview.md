@@ -18,10 +18,12 @@ proofs, but never the order book or a settled trade's plaintext price and size.
 
 Darknyx is a dark pool: an order book where resting orders are not public. Side,
 size, and limit price never appear in a Solana transaction, a log, or an
-account. They travel over an attestation-bound TLS connection that terminates
-inside the hardware-isolated matching engine, whose exact compiled code and
-boot-scoped certificate are remotely verifiable. The dstack gateway passes that
-TLS stream through without learning the plaintext. See
+account. On the supported programmatic path they travel over an
+attestation-bound TLS connection that terminates inside the hardware-isolated
+matching engine, whose exact compiled code and boot-scoped certificate are
+remotely verifiable. The dstack gateway passes that TLS stream through without
+learning the plaintext. Browser access is deferred and does not carry this
+guarantee. See
 [Transport & Attestation](/api-reference/getting-started/transport-and-attestation)
 for the verification boundary and current pre-release qualification.
 

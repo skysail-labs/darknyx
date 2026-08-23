@@ -47,7 +47,7 @@ const receipt = await deposit({
   depositorTokenAccount,
   depositIndex: 0n,           // increment for each deposit from this seed
 });
-// receipt includes signature, treeId, leafIndex, commitment, and note opening
+// receipt includes signature, treeId, leafIndex, noteCommitment, and notePlaintext
 ```
 
 The configured prover suite generates VALID_DEPOSIT locally. The SDK submits the

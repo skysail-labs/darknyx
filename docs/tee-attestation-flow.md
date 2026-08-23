@@ -51,7 +51,7 @@ verifier, different cadence, and different consequence on failure:
 | 1 | **dstack-kms** | The CVM's TDX quote (cert chain + RTMR3 + compose-hash whitelist) | KMS refuses to derive app keys; CVM cannot start | Once per CVM boot |
 | 2 | **Our admin multisig** | A specific new CVM's TDX quote, before signing `set_tee_pubkey` | Multisig refuses to sign rotation; new image cannot settle | Once per image upgrade |
 | 3 | **Solana vault program** | Ed25519 signature on `MatchResultPayload` canonical hash matches one of `vault_config.tee_pubkeys` (`is_authorized_tee`) | Settle ix reverts | Every settle tx |
-| 4 | **Programmatic client (SDK/daemon)** | RA-TLS evidence + TDX quote bound to the live connection | Client refuses to send orders | At session start and after transport rotation |
+| 4 | **Programmatic client (SDK/daemon)** | RA-TLS evidence + TDX quote bound to the live connection | Client refuses to send orders | Required at session start and after transport rotation; supervised daemon enforcement after rotation remains a release gate |
 | 5 | **External observer** | All of the above, via the public `/transparency` endpoint | Public trust signal degrades; nothing breaks technically | Continuous |
 
 **Crucially: there is no on-chain TDX quote verification in v2.** The

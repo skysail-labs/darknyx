@@ -68,7 +68,9 @@ venue has cold-resynced the shard.
 
 ## GET /tree/inclusion
 
-An inclusion proof for a note commitment. Authenticated (bearer).
+An inclusion proof for a note commitment. Authenticated (bearer). Complete
+[Transport & Attestation](../getting-started/transport-and-attestation.md)
+before sending the bearer token.
 
 {% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/tree/inclusion" method="get" %}
 https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
@@ -115,9 +117,11 @@ signed order after any live lock expires.
 
 ## GET /tree/leaves
 
-A paginated read of raw leaves. Authenticated (bearer). Use it to rebuild a local
-mirror of the tree from scratch (the "scan once, then follow updates" pattern the
-SDK uses to maintain your note store).
+A paginated read of raw leaves. Authenticated (bearer). Complete
+[Transport & Attestation](../getting-started/transport-and-attestation.md)
+before sending the token. Use it to rebuild a local mirror of the tree from
+scratch (the "scan once, then follow updates" pattern the SDK uses to maintain
+your note store).
 
 {% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/tree/leaves" method="get" %}
 https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml

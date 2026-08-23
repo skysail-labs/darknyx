@@ -456,8 +456,9 @@ Take the transport work when ANY of these becomes true:
 
 Note the tracker's earlier recorded decision ("ship the supported
 `dstack-ingress` sidecar first") predates two facts: the domain prerequisite, and
-that `report_data` has no free space. Neither option is obviously cheaper; A is
-less infrastructure and more code, B the reverse.
+that `report_data` is caller-selected per quote request rather than globally
+allocated by the platform. Neither option is obviously cheaper; A is less
+infrastructure and more code, B the reverse.
 
 ### DNS migration playbook (prerequisite for option B only)
 

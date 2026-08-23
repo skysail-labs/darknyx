@@ -681,10 +681,22 @@ components:
       type: object
       required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
-        trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
-        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients. }
-        session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. Programmatic clients verify the same value in the transport-attestation manifest. }
-        trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
+        trading_key:
+          type: string
+          description: 32-byte Ed25519 pubkey, hex.
+        cancel_nonce:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)$'
+          description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients.
+        session_id:
+          type: string
+          description: |
+            32-byte hex boot session from /info; bound into the cancel signature
+            so a captured body cannot be replayed in a later boot. Programmatic
+            clients verify the same value in the transport-attestation manifest.
+        trading_key_signature:
+          type: string
+          description: 64-byte canonical cancel signature, hex.
 
     CancelOrderResponse:
       type: object
@@ -1051,7 +1063,9 @@ components:
         transitions carry `match_id` as a decimal string so JavaScript clients
         do not lose u64 precision.
       properties:
-        order_id: { type: string, description: 16-byte order id, hex. }
+        order_id:
+          type: string
+          description: 16-byte order id, hex.
         market_id: { type: string, description: Base58 MarketConfig PDA. }
         match_id:
           type: string
@@ -1722,8 +1736,9 @@ paths:
       summary: List all tradable instruments.
       description: |
         Returns every independently routed market served by this one attested
-        venue. The array may contain multiple pairs; all use the same verified
-        enclave origin, bearer session, and `/v1/stream` connection.
+        venue. The array may contain multiple pairs. REST and `/v1/stream` use
+        separate sockets while sharing the same verified enclave origin, boot
+        identity, and bearer session.
       responses:
         '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
@@ -2300,7 +2315,10 @@ paths:
                 required: [slot, unix_ms]
                 properties:
                   slot: { type: integer, format: uint64 }
-                  unix_ms: { type: integer, format: uint64, description: Server unix time, milliseconds. }
+                  unix_ms:
+                    type: integer
+                    format: uint64
+                    description: Server unix time, milliseconds.
 
   # ───── transparency ────────────────────────────────────────────────────────
 
@@ -2542,7 +2560,12 @@ x-websocket:
             properties:
               trading_key: { type: string }
               cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
-              session_id: { type: string, description: Current 32-byte /info.boot_session_id, hex. Not quote-bound; substitution causes intake rejection. }
+              session_id:
+                type: string
+                description: |
+                  Current 32-byte /info.boot_session_id, hex. Programmatic
+                  clients verify the same boot session in the quote-bound
+                  transport manifest; substitution causes intake rejection.
               trading_key_signature: { type: string }
 
     order.modify:

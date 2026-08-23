@@ -17,10 +17,11 @@ Darknyx separates those powers:
   proof-valid deposits, withdrawals, merges, and settlements.
 - **An attested confidential VM matches private orders.** Its code identity and
   complete settlement-signer set are bound into an Intel TDX quote that clients
-  can verify before disclosing intent. The reference SDK/daemon also binds the
-  boot-random TLS certificate on the actual connection to a separate
-  nonce-challenged quote, so the gateway passes ciphertext rather than
-  terminating the protected session.
+  can verify before disclosing intent. The programmatic transport model binds a
+  boot-random TLS certificate to a separate nonce-challenged quote, so the
+  gateway passes ciphertext rather than terminating the protected session.
+  Launch qualification still requires connector-level refusal of a substituted
+  replacement socket and supervised recovery after a genuine boot rotation.
 - **The client keeps custody secrets.** Spending and viewing keys remain with the
   trader; the venue receives only the material needed to validate and match an
   order.
@@ -44,6 +45,7 @@ has a narrower, inspectable job.
 | Asset identity, arithmetic, conservation, fees, and output derivation | Groth16 settlement proof verified on-chain | A confirmed settlement cannot create value, switch mints, redirect outputs, or change the configured fee. |
 | Order ownership and collateral validity | Client signatures + VALID_INPUT | A request is tied to a trading key and a real committed note. |
 | Private matching, limit-price compliance, oracle policy, FIFO, and execution attributes | Attested matcher code | These properties depend on verifying the expected confidential-VM image. |
+| Counterparty-selection fairness | Attested matcher + published per-market-maker execution-quality statistics | A compromised matcher could repeatedly prefer a colluding maker; launch requires selection share, price improvement, failure rate, and settlement latency to make persistent bias externally detectable. |
 | Note ownership and recovery | Client seed + finalized chain | The venue never receives the spending key needed to claim a note. |
 
 This division is deliberate. Zero knowledge makes settlement correctness

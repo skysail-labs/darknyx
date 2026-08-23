@@ -19,6 +19,9 @@ Two properties worth stating, because both have a failure mode:
   `$ref`. A purely `$ref`-based walk therefore deletes `BearerAuth` — which 19
   operations declare — and the published reference silently stops saying that
   the API needs a bearer token. They are collected separately below.
+* Public GitBook embeds are reference-only. Every surviving operation receives
+  `x-hideTryItPanel: true` so a browser control cannot send credentials or order
+  data outside the Node RA-TLS verification adapter.
 
 Run via `bash scripts/check-public-openapi.sh` in CI, which regenerates and
 diffs; a drifted checked-in artifact fails the build rather than going stale.
@@ -90,6 +93,15 @@ def main():
         if any(k in METHODS for k in keep):
             kept_paths[path] = keep
     spec["paths"] = kept_paths
+
+    # The published reference explains how to call the API through a verified
+    # programmatic transport. A GitBook browser control cannot perform that
+    # actual-socket RA-TLS verification, so it must never become an alternate
+    # credential/order path.
+    for item in kept_paths.values():
+        for key, operation in item.items():
+            if key in METHODS:
+                operation["x-hideTryItPanel"] = True
 
     # 2. Drop the tag itself so it cannot appear as an empty group in the nav.
     if isinstance(spec.get("tags"), list):

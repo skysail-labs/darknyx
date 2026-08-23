@@ -41,7 +41,7 @@ indefinite order.
 ### GTT: Good-til-Time
 
 A **limit** order with an `expiry_slot` chosen to match a wall-clock deadline. To
-place "good for the next ten minutes," read [`/time`](/api-reference/getting-started/base-urls) for the
+place "good for the next ten minutes," read [`/time`](/api-reference/system/time) for the
 current slot and project your deadline onto a slot (Solana targets roughly 400 ms
 per slot). The SDK does this conversion for you:
 

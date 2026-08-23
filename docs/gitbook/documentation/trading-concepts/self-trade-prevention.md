@@ -41,8 +41,9 @@ resting side, cancel the incoming side, cancel both) because there is a maker an
 a taker to choose between. A Darknyx batch has no maker/taker ordering: all crossing
 orders clear together at one price (see [Clearing Price](./clearing-price.md)). There
 is no "resting vs. incoming" side to pick, so the honest behavior is a single
-rule, **two orders from one note owner never match each other**, and the orders
-remain available to match against everyone else.
+rule: **two orders are skipped when either their note-bound owner commitments or
+their trading keys match**. Both remain available to match against everyone
+else.
 
 ## What it protects
 

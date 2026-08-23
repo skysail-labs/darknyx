@@ -822,21 +822,23 @@ components:
       properties:
         trading_key:
           type: string
-          description: 32-byte Ed25519 pubkey
-          hex.: null
+          description: 32-byte Ed25519 pubkey, hex.
         cancel_nonce:
           type: string
           pattern: ^(0|[1-9][0-9]*)$
           description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients.
         session_id:
           type: string
-          description: 32-byte hex boot session from /info; bound into the cancel signature so a captured
-            body cannot be replayed in a later boot. Programmatic clients verify the same value in the
-            transport-attestation manifest.
+          description: '32-byte hex boot session from /info; bound into the cancel signature
+
+            so a captured body cannot be replayed in a later boot. Programmatic
+
+            clients verify the same value in the transport-attestation manifest.
+
+            '
         trading_key_signature:
           type: string
-          description: 64-byte canonical cancel signature
-          hex.: null
+          description: 64-byte canonical cancel signature, hex.
     CancelOrderResponse:
       type: object
       required:
@@ -1341,8 +1343,7 @@ components:
       properties:
         order_id:
           type: string
-          description: 16-byte order id
-          hex.: null
+          description: 16-byte order id, hex.
         market_id:
           type: string
           description: Base58 MarketConfig PDA.
@@ -1447,6 +1448,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /auth/token/revoke:
     post:
       tags:
@@ -1474,6 +1476,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /attestation:
     get:
       tags:
@@ -1513,6 +1516,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AttestationQuote'
+      x-hideTryItPanel: true
   /transport-attestation:
     get:
       tags:
@@ -1586,6 +1590,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransportAttestation'
+      x-hideTryItPanel: true
   /info:
     get:
       tags:
@@ -1613,6 +1618,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AppInfo'
+      x-hideTryItPanel: true
   /evidences/quote.json:
     get:
       tags:
@@ -1632,6 +1638,7 @@ paths:
           description: Quote JSON bundle (raw).
           content:
             application/json: {}
+      x-hideTryItPanel: true
   /evidences/cert.pem:
     get:
       tags:
@@ -1647,6 +1654,7 @@ paths:
           description: PEM-encoded cert.
           content:
             application/x-pem-file: {}
+      x-hideTryItPanel: true
   /evidences/acme-account.json:
     get:
       tags:
@@ -1662,6 +1670,7 @@ paths:
           description: ACME account JSON.
           content:
             application/json: {}
+      x-hideTryItPanel: true
   /evidences/sha256sum.txt:
     get:
       tags:
@@ -1677,6 +1686,7 @@ paths:
           description: Plain-text hash.
           content:
             text/plain: {}
+      x-hideTryItPanel: true
   /instruments:
     get:
       tags:
@@ -1684,9 +1694,11 @@ paths:
       summary: List all tradable instruments.
       description: 'Returns every independently routed market served by this one attested
 
-        venue. The array may contain multiple pairs; all use the same verified
+        venue. The array may contain multiple pairs. REST and `/v1/stream` use
 
-        enclave origin, bearer session, and `/v1/stream` connection.
+        separate sockets while sharing the same verified enclave origin, boot
+
+        identity, and bearer session.
 
         '
       responses:
@@ -1700,6 +1712,7 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Instrument'
+      x-hideTryItPanel: true
   /instruments/{symbol}:
     get:
       tags:
@@ -1731,6 +1744,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /orders:
     post:
       tags:
@@ -1809,6 +1823,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /orders/{order_id}:
     get:
       tags:
@@ -1852,6 +1867,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
     delete:
       tags:
       - orders
@@ -1907,6 +1923,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
     put:
       tags:
       - orders
@@ -2009,6 +2026,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /account:
     get:
       tags:
@@ -2045,6 +2063,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /account/settings:
     get:
       tags:
@@ -2072,6 +2091,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
     put:
       tags:
       - account
@@ -2111,6 +2131,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /tree/root:
     get:
       tags:
@@ -2169,6 +2190,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /tree/inclusion:
     get:
       tags:
@@ -2246,6 +2268,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /tree/leaves:
     get:
       tags:
@@ -2324,6 +2347,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
   /health:
     get:
       tags:
@@ -2352,6 +2376,7 @@ paths:
                     format: uint64
                   version:
                     type: string
+      x-hideTryItPanel: true
   /system/status:
     get:
       tags:
@@ -2432,6 +2457,7 @@ paths:
                     format: uint64
                   version:
                     type: string
+      x-hideTryItPanel: true
   /time:
     get:
       tags:
@@ -2465,8 +2491,8 @@ paths:
                   unix_ms:
                     type: integer
                     format: uint64
-                    description: Server unix time
-                    milliseconds.: null
+                    description: Server unix time, milliseconds.
+      x-hideTryItPanel: true
   /transparency:
     get:
       tags:
@@ -2485,6 +2511,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransparencySnapshot'
+      x-hideTryItPanel: true
   /settlement/status/{batch_id}:
     get:
       tags:
@@ -2529,6 +2556,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
 x-websocket:
   url: /v1/stream
   description: "The sole WebSocket surface: one socket per session for\norder operations plus the `orders`,\
@@ -2719,8 +2747,13 @@ x-websocket:
                 pattern: ^(0|[1-9][0-9]*)$
               session_id:
                 type: string
-                description: Current 32-byte /info.boot_session_id
-                hex. Not quote-bound; substitution causes intake rejection.: null
+                description: 'Current 32-byte /info.boot_session_id, hex. Programmatic
+
+                  clients verify the same boot session in the quote-bound
+
+                  transport manifest; substitution causes intake rejection.
+
+                  '
               trading_key_signature:
                 type: string
     order.modify:

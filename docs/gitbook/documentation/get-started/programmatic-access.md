@@ -116,9 +116,17 @@ const tokenResponse = await transport.fetch(
     body: JSON.stringify({ api_key, api_secret, passphrase }),
   },
 );
+const { access_token } = (await tokenResponse.json()) as {
+  access_token: string;
+};
 
 const instruments = await transport.fetch(
   new URL("/instruments", process.env.DARKNYX_URL!),
+);
+
+const account = await transport.fetch(
+  new URL("/account", process.env.DARKNYX_URL!),
+  { headers: { authorization: `Bearer ${access_token}` } },
 );
 // Pass transport.fetch and transport.webSocketFactory to the SDK order and
 // stream clients so every private operation stays on the verified transport.

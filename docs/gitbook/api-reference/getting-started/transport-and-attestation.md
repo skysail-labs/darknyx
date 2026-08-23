@@ -134,7 +134,7 @@ hash of the complete ordered signer set.
 |---|---|
 | `quote` | Hex-encoded TDX quote (DCAP format), the hardware-signed measurement. |
 | `event_log` | The boot event log, replayed during verification to confirm the recorded compose hash and instance identity. |
-| `report_data` | 64 bytes bound into the quote: caller nonce in bytes 0–31, then `SHA-256(pk0 || … || pkK-1)` in bytes 32–63. |
+| `report_data` | 64 bytes bound into the quote: caller nonce in bytes 0–31, then `SHA-256(pk0 ∥ … ∥ pkK-1)` in bytes 32–63. |
 | `tee_pubkey` | Primary signer, for convenience. Fetch `/info.tee_pubkeys` to recompute the bound set hash. |
 
 ### The verification chain

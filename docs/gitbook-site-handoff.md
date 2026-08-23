@@ -86,6 +86,10 @@ tying the rendered reference to the schema.
 >    requires the spec to be registered in its UI as a named specification rather
 >    than fetched from the `src` URL, register it and report back what you had to
 >    change — do not silently rewrite every block.
+>    After synchronization, open the deployed GitBook URL itself and inspect at
+>    least one public read and one authenticated operation. Confirm the published
+>    blocks render as API operations rather than stale content, raw template text,
+>    or an error box; a successful sync command alone is not publication evidence.
 >
 > 4. **Turn the "Test it" panel OFF for these endpoints, or gate it.** This is
 >    important and non-obvious. The engine terminates TLS itself with a

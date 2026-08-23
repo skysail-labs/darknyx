@@ -35,7 +35,7 @@ python3 "$ROOT/scripts/build-public-openapi.py" >/dev/null
 if ! diff -q "$tmp/committed.yaml" "$ART" >/dev/null; then
   echo "ERROR: the public OpenAPI spec is out of date." >&2
   echo >&2
-  diff -u "$tmp/committed.yaml" "$ART" | head -40 >&2
+  diff -u "$tmp/committed.yaml" "$ART" | head -40 >&2 || true
   echo >&2
   echo "Regenerate and commit:  python3 scripts/build-public-openapi.py" >&2
   cp "$tmp/committed.yaml" "$ART"
@@ -61,6 +61,49 @@ schemes = (spec.get("components") or {}).get("securitySchemes") or {}
 if "BearerAuth" not in schemes:
     errs.append("BearerAuth securityScheme was pruned; authenticated endpoints "
                 "would render as though they need no token")
+
+methods = {"get", "post", "put", "delete", "patch", "options", "head"}
+expected_bearer = {
+    ("post", "/auth/token/revoke"),
+    ("post", "/orders"),
+    ("get", "/orders/{order_id}"),
+    ("delete", "/orders/{order_id}"),
+    ("put", "/orders/{order_id}"),
+    ("get", "/account"),
+    ("get", "/account/settings"),
+    ("put", "/account/settings"),
+    ("get", "/tree/inclusion"),
+    ("get", "/tree/leaves"),
+    ("get", "/settlement/status/{batch_id}"),
+}
+seen_bearer = set()
+for path, item in (spec.get("paths") or {}).items():
+    for method, op in item.items():
+        if method not in methods or not isinstance(op, dict):
+            continue
+        security = op.get("security")
+        has_bearer = any(
+            isinstance(requirement, dict) and "BearerAuth" in requirement
+            for requirement in (security or [])
+        )
+        key = (method, path)
+        if has_bearer:
+            seen_bearer.add(key)
+        if key not in expected_bearer and security not in (None, []):
+            errs.append(f"unexpected authentication requirement on {method.upper()} {path}")
+        if op.get("x-hideTryItPanel") is not True:
+            errs.append(f"GitBook Test it panel is enabled on {method.upper()} {path}")
+
+missing_bearer = sorted(expected_bearer - seen_bearer)
+unexpected_bearer = sorted(seen_bearer - expected_bearer)
+if missing_bearer:
+    errs.append("protected operations lost BearerAuth: " + ", ".join(
+        f"{method.upper()} {path}" for method, path in missing_bearer))
+if unexpected_bearer:
+    errs.append("public operations unexpectedly require BearerAuth: " + ", ".join(
+        f"{method.upper()} {path}" for method, path in unexpected_bearer))
+if spec.get("security") not in (None, []):
+    errs.append("global security is unsupported; public operations must remain unambiguous")
 
 if not (spec.get("paths") or {}):
     errs.append("the public spec has no paths at all")

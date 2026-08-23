@@ -85,10 +85,11 @@ on-chain `MarketConfig` when that value is required for independent monitoring.
 ## One endpoint, several books
 
 All instruments in the array share the same verified enclave origin,
-bearer-token session, and attestation identity. The signed `symbol` selects one isolated book; cancels,
-reads, and streams stay on the same connection. A match proof never mixes
-symbols, and an atomic modify cannot move an order between markets—cancel and
-place a fresh order when changing pairs.
+bearer-token session, boot identity, and attestation policy. REST and
+`/v1/stream` use separate TLS sockets, and each socket is checked against that
+same boot identity. The signed `symbol` selects one isolated book. A match proof
+never mixes symbols, and an atomic modify cannot move an order between
+markets—cancel and place a fresh order when changing pairs.
 
 See [Multi-Market Venue](/documentation/how-it-works/multi-market) for the isolation and
 shared-capacity model.

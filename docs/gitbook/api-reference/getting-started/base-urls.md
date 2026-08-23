@@ -8,11 +8,13 @@ description: "Where the Darknyx API lives, the common request and response conve
 {% hint style="info" %}
 **TL;DR**
 
-Every endpoint, REST and WebSocket, is served from the same RA-TLS origin. The
+Engine REST and WebSocket endpoints are served from the same RA-TLS origin. The
 Darknyx engine terminates TLS itself with a boot-random, attestation-bound key;
-the dstack `s`-suffix route passes the TLS stream through without terminating
-it. Use the HTTPS origin for REST and swap the scheme to `wss://` for the shared
-stream.
+the dstack `s`-suffix route passes that TLS stream through without terminating
+it. Use the HTTPS origin for engine REST and swap the scheme to `wss://` for the
+shared stream. Static `/evidences/*` files are served separately by dstack
+infrastructure and are supporting artifacts, not proof of the live engine
+socket.
 {% endhint %}
 
 ## The RA-TLS origin
@@ -20,7 +22,7 @@ stream.
 The public hostname routes raw TLS to port `8443` inside the Darknyx CVM. Its
 certificate is self-signed by design: clients authenticate its public key with
 `GET /transport-attestation`, not with a public certificate authority. A single
-verified origin serves everything:
+verified origin serves the engine API:
 
 ```text
 HTTPS     https://<app-id>-8443s.dstack-pha-<node>.phala.network

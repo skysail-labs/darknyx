@@ -121,6 +121,6 @@ key, then deterministically derive the corresponding output openings from the
 consumed note. Seed plus finalized chain is the durable recovery source; the
 live fills stream is the fast notification path, not the only copy.
 
-See [Settlement Status](/api-reference/settlement/settlement-status) for the operator-facing
-batch/job response and [Orders Channel](/api-reference/websocket/orders-channel) for the
+See [Settlement Status](/api-reference/settlement/settlement-status) for the authenticated
+per-batch/per-job response and [Orders Channel](/api-reference/websocket/orders-channel) for the
 trader lifecycle.
