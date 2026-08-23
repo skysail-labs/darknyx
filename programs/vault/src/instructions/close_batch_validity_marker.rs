@@ -25,12 +25,12 @@ use anchor_lang::prelude::*;
 pub struct CloseBatchValidityMarker {
     /// Caller AND refund target, collapsed into one slot.
     ///
-    /// v2 CHANGE, and it deliberately narrows behaviour. This used to be two
-    /// slots — an `authority` signer plus a separate `mut` `payer` refund
-    /// target bound by `has_one = payer` — so ANY signer could sweep an expired
-    /// marker while the rent still went to the recorded payer.
+    /// Deliberately ONE slot, not two. Splitting it into an `authority` signer
+    /// plus a separate `mut` `payer` refund target would let ANY signer sweep an
+    /// expired marker while the rent still went to the recorded payer.
     ///
-    /// v2 rejects that shape in practice. The sweeper closes with
+    /// Anchor v2 rejects the split shape in practice anyway. The sweeper closes
+    /// with
     /// `authority == payer == the primary shard key`
     /// (`darknyx-tee/src/settle/marker_sweep.rs`), so one address landed in two
     /// slots, one of them `mut`, and v2's duplicate-mutable-account check

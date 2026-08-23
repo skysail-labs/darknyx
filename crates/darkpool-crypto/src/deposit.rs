@@ -10,11 +10,11 @@
 //!
 //! # Why `note_secret` exists (arity 3 -> 4)
 //!
-//! This used to be `Poseidon3(27, owner_commitment, recovery_nonce)`. That was
-//! adequate while the inner hash only had to hide a note's opening. It is NOT
-//! adequate now that [`crate::note_use`] derives the public consumption handle
-//! from it, because the handle's unlinkability reduces to the secrecy of the
-//! inner — and under the old derivation the inner had exactly one secret input:
+//! The inner hash needs a per-note secret because [`crate::note_use`] derives
+//! the public consumption handle from it: the handle's unlinkability reduces
+//! entirely to the secrecy of the inner. Without `note_secret` — that is, from
+//! `Poseidon3(27, owner_commitment, recovery_nonce)` alone — the inner would
+//! have exactly one secret input:
 //!
 //! * `recovery_nonce` is a **public** deposit instruction argument, and
 //! * `owner_commitment` is **wallet-wide and reused** across every note a user

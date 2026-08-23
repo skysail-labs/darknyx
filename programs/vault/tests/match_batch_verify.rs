@@ -247,12 +247,12 @@ fn proof_bound_to_different_vault_config_rejected() {
 
 /// S-04 (audit 2026-07-25): a replayer cannot choose the marker's TTL.
 ///
-/// `expiry_slot` used to be a caller argument, bounded only to
-/// `(clock.slot, clock.slot + 300]`. Paired with a deliberately
-/// unauthenticated `payer` — "anyone can push a valid proof" is a real
-/// liveness property, letting a third party unstick a batch whose TEE key ran
-/// out of SOL — and an `init` marker that lets exactly ONE party set the TTL
-/// per root, that handed any observer a lever:
+/// A caller-supplied `expiry_slot`, even bounded to
+/// `(clock.slot, clock.slot + 300]`, would hand any observer a lever. Paired
+/// with a deliberately unauthenticated `payer` — "anyone can push a valid
+/// proof" is a real liveness property, letting a third party unstick a batch
+/// whose TEE key ran out of SOL — and an `init` marker that lets exactly ONE
+/// party set the TTL per root:
 ///
 ///   1. observe the TEE's verify transaction,
 ///   2. replay the SAME proof and root with `expiry_slot = clock.slot + 1`,

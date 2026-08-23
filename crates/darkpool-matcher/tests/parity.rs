@@ -318,10 +318,9 @@ proptest! {
         // `run_batch` therefore emits the zero sentinel and the settle
         // assembler fills both in.
         //
-        // This used to assert the commitments equalled a SHA-256
-        // `derive_inner(match_id, role)` construction, which the chain has not
-        // accepted since CS-03 — a parity test validating a retired
-        // construction against itself (S-06).
+        // Asserting these against a SHA-256 `derive_inner(match_id, role)`
+        // construction would validate a shape the chain does not accept — a
+        // parity test checking a retired construction against itself (S-06).
         //
         // The N-07 property this test also guarded — outputs bind the
         // note-proven `owner_commitment` — now lives where the derivation
@@ -408,11 +407,11 @@ fn capped_bounds_fill_count_at_n() {
 // against multiple counterparties — chaining would consume change notes
 // (note_e) the TEE can't nullify (no spending key).
 //
-// SW-28: this test used to assert that the DEFAULT path chained the 30-bid
-// across all three asks — 3 fills. That is the very thing the comment above
-// says must not happen, and it was worse than "consumes a note the TEE cannot
-// nullify": a partially-filled order has its `collateral_note` replaced by the
-// ZERO SENTINEL, so fills 2 and 3 carried `note_buyer = [0u8; 32]`, a
+// SW-28: the DEFAULT path must NOT chain the 30-bid across all three asks.
+// Chaining is the very thing the comment above says must not happen, and it is
+// worse than "consumes a note the TEE cannot nullify": a partially-filled order
+// has its `collateral_note` replaced by the ZERO SENTINEL, so fills 2 and 3
+// would carry `note_buyer = [0u8; 32]`, a
 // commitment no opening exists for and the tree can never contain. The test
 // counted matches and never looked at the notes, so it pinned the defect.
 //

@@ -78,12 +78,12 @@ pub async fn render_markdown(inputs: ReportInputs<'_>) -> String {
     let _ = writeln!(out, "## Latency (ms)\n");
     let _ = writeln!(out, "| Stream | count | P50 | P95 | P99 | P99.9 | max |");
     let _ = writeln!(out, "|---|---|---|---|---|---|---|");
-    // Segmented by outcome (SW-27). These used to be one histogram over every
-    // outcome, printed unqualified — and since an intake rejection fails before
-    // any matcher work, a rejection-heavy run showed BETTER percentiles than a
-    // healthy one. `submit (accepted)` is the number that means what the row
-    // label implies; the rejected row is kept because a rejection storm has its
-    // own shape worth seeing.
+    // Segmented by outcome (SW-27). One histogram over every outcome would be
+    // actively misleading: an intake rejection fails before any matcher work, so
+    // a rejection-heavy run reports BETTER percentiles than a healthy one.
+    // `submit (accepted)` is the number that means what the row label implies;
+    // the rejected row is kept because a rejection storm has its own shape worth
+    // seeing.
     write_hist_row(&mut out, "submit (accepted)", &submit_hist);
     write_hist_row(&mut out, "submit (rejected)", &submit_rej_hist);
     write_hist_row(&mut out, "cancel", &cancel_hist);
