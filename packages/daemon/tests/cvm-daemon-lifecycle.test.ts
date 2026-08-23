@@ -43,7 +43,10 @@ import WebSocket from "ws";
 
 import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
-import { buildDaemonTransport } from "../src/transport.js";
+import {
+  buildDaemonTransport,
+  DaemonTransportSupervisor,
+} from "../src/transport.js";
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -138,6 +141,14 @@ function mintToIx(
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const RESTART_READY_PATH = resolve(
+  REPO_ROOT,
+  ".devnet/cvm-daemon-restart-ready.json",
+);
+const RESTART_RESULT_PATH = resolve(
+  REPO_ROOT,
+  ".devnet/cvm-daemon-restart-result.json",
+);
 /**
  * Leak guard, ported from `cvm-daemon-smoke` when that suite was retired into
  * this one. Under `ra-tls`, NOTHING may reach the CVM on global `fetch`.
@@ -171,6 +182,7 @@ const transportLeaks: string[] = [];
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 
 const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+const RESTART_DRILL = process.env.RUN_CVM_DAEMON_RESTART_DRILL === "1";
 
 /**
  * One transport for the whole file, selected exactly as the daemon entrypoint
@@ -181,9 +193,9 @@ const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
  * silently UNRUNNABLE — it died on DEPTH_ZERO_SELF_SIGNED_CERT before reaching
  * a single assertion.
  */
-let sharedTransport: Awaited<ReturnType<typeof buildDaemonTransport>>;
+let transportSupervisor: DaemonTransportSupervisor;
 const tfetch: typeof fetch = ((i: never, init: never) =>
-  sharedTransport.fetch(i, init)) as typeof fetch;
+  transportSupervisor.fetch(i, init)) as typeof fetch;
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 const READY =
   process.env.RUN_CVM_DAEMON_LIFECYCLE === "1" &&
@@ -466,45 +478,132 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     return n;
   }
 
+  /**
+   * Billable D2 closure leg. The test writes a public marker, then an external
+   * operator redeploys the same reviewed compose while this process and its
+   * subscriptions stay alive. Requests keep probing through the OLD verified
+   * generation until its typed refusal trips the supervisor; no test-only
+   * recovery call is used.
+   */
+  async function awaitSupervisedBootRotation(): Promise<void> {
+    const before = buyer.getAttestation()?.bootSessionId;
+    expect(before, "restart drill requires strict application attestation").toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+    const startedMs = Date.now();
+    const rssBeforeMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    writeFileSync(
+      RESTART_READY_PATH,
+      `${JSON.stringify({ boot_session_id: before, ready_at_ms: startedMs })}\n`,
+      { mode: 0o600 },
+    );
+    console.log(
+      `  · CVM_RESTART_READY boot=${before} rss_mb=${rssBeforeMb}`,
+    );
+
+    const states = new Set<string>();
+    let requestFailures = 0;
+    let recoveryObserved = false;
+    const deadline = startedMs + 240_000;
+    while (Date.now() < deadline) {
+      if (!recoveryObserved) {
+        try {
+          await buyer.tee.serverTime();
+        } catch {
+          requestFailures += 1;
+        }
+      }
+      const trust = buyer.getTrustStatus();
+      states.add(trust.transportState);
+      recoveryObserved ||= trust.transportState !== "ready";
+      const after = buyer.getAttestation()?.bootSessionId;
+      if (
+        recoveryObserved &&
+        trust.transportState === "ready" &&
+        after !== undefined &&
+        after !== before
+      ) {
+        const finishedMs = Date.now();
+        const rssAfterMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+        const result = {
+          before_boot_session_id: before,
+          after_boot_session_id: after,
+          recovery_ms: finishedMs - startedMs,
+          request_failures: requestFailures,
+          states: [...states],
+          final_attempts: trust.transportRecoveryAttempts,
+          rss_before_mb: rssBeforeMb,
+          rss_after_mb: rssAfterMb,
+          rss_delta_mb: rssAfterMb - rssBeforeMb,
+        };
+        writeFileSync(
+          RESTART_RESULT_PATH,
+          `${JSON.stringify(result, null, 2)}\n`,
+          { mode: 0o600 },
+        );
+        console.log(`  · CVM_RESTART_RECOVERED ${JSON.stringify(result)}`);
+        expect(states.has("reverifying")).toBe(true);
+        expect(states.has("reconciling")).toBe(true);
+        return;
+      }
+      await sleep(recoveryObserved ? 100 : 500);
+    }
+    throw new Error(
+      `daemon did not recover from a real boot rotation; states=${[
+        ...states,
+      ].join(",")} failures=${requestFailures}`,
+    );
+  }
+
   beforeAll(async () => {
     // Built before any gateway call: `/auth/token` below exchanges an API
     // secret for a bearer token and must not travel on global fetch.
-    sharedTransport = await buildDaemonTransport(
-      {
-        gatewayUrl: GATEWAY,
-        transportMode: RATLS
-          ? ("ra-tls" as const)
-          : ("gateway-terminated" as const),
-        deploymentTier: RATLS ? "production" : "development",
-        allowLegacyTransport: !RATLS,
-        ...(RATLS
-          ? {
-              expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
-              attestation: {
-                composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
-              },
-            }
-          : {}),
-      } as DaemonConfig,
-      {
-        verifierDeps: {
-          verifyQuote: (q: string) =>
-            createDcapQuoteVerifier({})(
-              Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
-            ),
-          parseEventLog,
-          randomNonce: () => new Uint8Array(randomBytes(32)),
+    let supervisorRef: DaemonTransportSupervisor | undefined;
+    const buildTransport = () =>
+      buildDaemonTransport(
+        {
+          gatewayUrl: GATEWAY,
+          transportMode: RATLS
+            ? ("ra-tls" as const)
+            : ("gateway-terminated" as const),
+          deploymentTier: RATLS ? "production" : "development",
+          allowLegacyTransport: !RATLS,
+          ...(RATLS
+            ? {
+                expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+                attestation: {
+                  composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+                },
+              }
+            : {}),
+        } as DaemonConfig,
+        {
+          verifierDeps: {
+            verifyQuote: (q: string) =>
+              createDcapQuoteVerifier({})(
+                Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+              ),
+            parseEventLog,
+            randomNonce: () => new Uint8Array(randomBytes(32)),
+          },
+          ...(RATLS
+            ? {
+                createWebSocket: (u: string) =>
+                  new WebSocket(u, {
+                    rejectUnauthorized: false,
+                  }) as unknown as NodeWebSocketLike,
+              }
+            : {}),
+          onTransportViolation: (error) =>
+            supervisorRef?.reportViolation(error),
         },
-        ...(RATLS
-          ? {
-              createWebSocket: (u: string) =>
-                new WebSocket(u, {
-                  rejectUnauthorized: false,
-                }) as unknown as NodeWebSocketLike,
-            }
-          : {}),
-      },
+      );
+    const initialTransport = await buildTransport();
+    transportSupervisor = new DaemonTransportSupervisor(
+      initialTransport,
+      buildTransport,
     );
+    supervisorRef = transportSupervisor;
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
     conn = new Connection(RPC, "confirmed");
     admin = await loadKp(
@@ -560,9 +659,11 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       thresholds: {
         mergeThreshold: 2,
       },
-      // Functional lifecycle test — dev-partial attestation (not strict DCAP).
-      attestationStrict: false,
-      attestOnchainCheck: false,
+      // The restart drill exercises the production application/governance
+      // verification path; ordinary lifecycle runs keep their cheaper partial
+      // attestation mode.
+      attestationStrict: RESTART_DRILL,
+      attestOnchainCheck: RESTART_DRILL,
       programId: cfg.vaultProgramId,
     };
     const { client, merkleProvider } = createMergeClient({
@@ -584,11 +685,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       // over the selected transport. Omitting these left the daemon's own
       // attestation fetch on global fetch, which fails closed against the
       // enclave's self-signed certificate.
-      fetchImpl: sharedTransport.fetch,
-      ...(sharedTransport.webSocketFactory
+      fetchImpl: transportSupervisor.fetch,
+      transportSupervisor,
+      streamTokenProvider: authToken,
+      quoteVerifier: createDcapQuoteVerifier({}),
+      ...(RATLS
         ? {
             sendableWebSocketFactory:
-              sharedTransport.webSocketFactory as ConstructorParameters<
+              transportSupervisor.webSocketFactory as ConstructorParameters<
                 typeof Daemon
               >[0]["sendableWebSocketFactory"],
           }
@@ -624,10 +728,10 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
         // placing orders over a peer nothing verified. This was the cause of
         // the live "WebSocket transport error" on this suite: the injected
         // placer bypassed the transport the rest of the daemon was using.
-        ...(sharedTransport.webSocketFactory
+        ...(RATLS
           ? {
               webSocketFactory:
-                sharedTransport.webSocketFactory as ConstructorParameters<
+                transportSupervisor.webSocketFactory as ConstructorParameters<
                   typeof WsOrderPlacer
                 >[0]["webSocketFactory"],
             }
@@ -642,6 +746,8 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     buyer.subscribe((e) => events.push(e));
     await buyer.start();
     expect(buyer.getAttestation(), "attested").toBeTruthy();
+
+    if (RESTART_DRILL) await awaitSupervisedBootRotation();
 
     // read-surface sanity (utilizes /transparency, /instruments, /account).
     expect(await buyer.tee.transparency()).toBeTruthy();
