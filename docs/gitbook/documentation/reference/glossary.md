@@ -1,0 +1,157 @@
+---
+description: "Terms and acronyms used across the Darknyx documentation."
+---
+
+
+# Glossary
+
+{% hint style="info" %}
+**TL;DR**
+
+A quick reference for the terms that recur across these docs. Most link back to
+the page that explains them in depth.
+{% endhint %}
+
+### Attestation
+
+A hardware-signed measurement of the running enclave that a client verifies to
+confirm it is talking to the genuine, expected engine. See
+[Privacy & Attestation](../how-it-works/privacy-and-attestation.md).
+
+### Batch auction
+
+The matching model: each tick, crossing orders clear together at a single uniform
+price rather than continuously, pairwise. See
+[Clearing Price](../trading-concepts/clearing-price.md).
+
+### Bearer token
+
+The account-layer credential from `POST /auth/token`, sent as `Authorization:
+Bearer <token>`. Gates access to the venue. See
+[Authentication](/api-reference/getting-started/authentication).
+
+### Change note
+
+The note minted for the unfilled remainder of a partially-filled order, so the
+order keeps resting. Recovered via a fill memo. See
+[Fills Channel](/api-reference/websocket/fills-channel).
+
+### Circuit breaker
+
+The maximum deviation (in basis points) of the clearing price from the oracle
+reference, enforced by the attested matcher. It is part of the market policy, not
+a public input to the settlement circuit. See
+[Clearing Price](../trading-concepts/clearing-price.md).
+
+### Clearing price
+
+The single, oracle-anchored price at which every match in a batch settles. See
+[Clearing Price](../trading-concepts/clearing-price.md).
+
+### Compose hash
+
+The hash of the confidential-VM deployment composition. A client derives it from
+the DCAP-verified quote event log, then compares it with an independently obtained
+release value; it does not trust the self-reported `/info` field. See
+[Transport & Attestation](/api-reference/getting-started/transport-and-attestation).
+
+### Confidential VM (CVM) / enclave
+
+The hardware-isolated Intel TDX virtual machine the matching engine runs inside.
+Its memory is encrypted and its keys are bound to its measured image. See
+[Confidential VM Architecture](../how-it-works/tee-architecture.md).
+
+### Inner hash
+
+A note's amount-independent value that anchors both its commitment and its
+nullifier. Match outputs derive their inner hash from the consumed input inner,
+so clients can verify and recover continuations without pre-supplied pools. See
+[Shielded Pool](../how-it-works/shielded-pool.md).
+
+### Merkle tree
+
+The on-chain accumulator of note commitments. Its root summarizes every note;
+inclusion proofs against it back orders and withdrawals. Sharded for settlement
+throughput. See [Merkle Proofs](/api-reference/tree).
+
+### MarketConfig
+
+The per-pair on-chain configuration that binds a market's base/quote mints,
+decimals, price scale, tick, minimum size, circuit-breaker band, and enabled
+state. Mint identity and price scale are settlement-proof-bound; tick, minimum,
+and breaker policy are enforced by the attested matcher. See
+[Get Instruments](/api-reference/instruments).
+
+### Note
+
+A UTXO-style unit of value committed on-chain as a Poseidon hash that seals the
+owner, amount, and token. Your balance is the set of notes you own. See
+[Account Model](../account/account-model.md).
+
+### Note commitment
+
+The hash that represents a note on-chain. Opaque from the outside; only the owner
+can recognize and value it.
+
+### Nullifier
+
+A unique proof output derived from the spending key and a note's private inner
+hash. The shared on-chain double-spend guard is the unlinkable note-use tag used
+by withdrawal, settlement, and merge. See
+[Shielded Pool](../how-it-works/shielded-pool.md).
+
+### Note-use tag
+
+The deterministic, circuit-derived public handle used when a note is locked or
+consumed: `Hash(note commitment, private inner hash)`. It addresses the shared
+lock/consume PDAs without revealing which Merkle leaf is being used.
+
+### Order id
+
+A client-chosen 16-byte identifier for an order, supplied at placement and used on
+cancel, modify, and get. Settlement output safety does not depend on its uniqueness.
+
+### Settlement
+
+The on-chain process that makes a matched trade final: lock, verify the batch
+proof, and execute each atomic match. Marker close happens asynchronously after
+expiry and is not part of trade finality. See
+[Settlement](../how-it-works/settlement.md).
+
+### Spending key
+
+The secret that determines note ownership, derives nullifiers, and authorizes
+withdrawals. **Never** seen by the enclave. Distinct from the trading key. See
+[Account Model](../account/account-model.md).
+
+### Trading key
+
+The Ed25519 keypair that signs orders. The cryptographic identity an order is
+attributed to and settled under. One account may drive many trading keys. See
+[Authentication](/api-reference/getting-started/authentication).
+
+### Transparency
+
+The public proof-of-reserves: per-mint outstanding liabilities versus vault
+balances, plus the engine's attested identity. See
+[Transparency](/api-reference/settlement/transparency).
+
+### VALID_INPUT proof
+
+The zero-knowledge proof that an order's collateral note exists in the tree and is
+spendable for its token mint. Generated by the client; checked at order intake
+on settlement-enabled venues and verified again on-chain at lock time. It
+authorizes the note, not a particular order id. See
+[Place Order](/api-reference/orders/place-order).
+
+### VALID_DEPOSIT proof
+
+The client-generated proof that a public deposit commitment contains the stated
+mint and positive amount and a valid hidden owner. The vault verifies it before
+moving custody. See [Deposit](../account/deposit.md).
+
+### Vault
+
+The on-chain Solana program that holds custody, owns the note tree and nullifier
+set, and verifies settlement proofs. The only layer that can move tokens. See
+[Trade Flow](../how-it-works/trade-flow.md).

@@ -1,0 +1,2844 @@
+# GENERATED — DO NOT EDIT.
+# Source: docs/tee-api-openapi.yaml
+# Regenerate: python3 scripts/build-public-openapi.py
+#
+# Operator/admin endpoints are stripped here. Edit the source spec.
+openapi: 3.1.0
+info:
+  title: Darknyx TEE API
+  version: 4.1.0
+  description: 'Public + authenticated REST and WebSocket API for the Darknyx dark pool
+
+    TEE matching layer. One attested endpoint may expose several independently
+
+    routed spot markets. Pairs with the v2 on-chain custody program
+
+    (vault, program ID `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`).
+
+    '
+  contact:
+    name: Darknyx engineering
+  license:
+    name: PolyForm Perimeter License 1.0.1
+    url: https://polyformproject.org/licenses/perimeter/1.0.1
+servers:
+- url: https://api.darknyx.example.com
+  description: Mainnet placeholder; use the origin published with a deployment.
+- url: https://api.devnet.darknyx.example.com
+  description: Devnet placeholder; use the origin published with a deployment.
+tags:
+- name: auth
+  description: OAuth2 client-credentials and bearer-token lifecycle.
+- name: attestation
+  description: 'Darknyx engine and transport attestation plus the deployment gateway''s
+
+    separate evidence bundle. Programmatic clients verify the certificate on
+
+    their actual connection with `/transport-attestation` before any
+
+    credential or sensitive write. `/evidences/*` describes surrounding
+
+    ingress infrastructure and is not a substitute for the engine check.
+
+    '
+- name: info
+  description: 'Application/instance metadata, boot-session id, and settlement signers.
+
+    Verify measured identity through `/attestation`, not self-reported fields.
+
+    '
+- name: instruments
+  description: Public market metadata.
+- name: orders
+  description: Place / cancel / modify / inspect orders.
+- name: system
+  description: Public engine liveness + server time (GTT slot conversion).
+- name: account
+  description: Per-account open orders and preferences. Balances remain client-derived.
+- name: tree
+  description: Convenience Merkle-tree mirror; clients can verify the same state on Solana.
+- name: transparency
+  description: Public solvency snapshot + engine identity + aggregate stats.
+- name: settlement
+  description: Batch settlement status (TEE → L1 tx_signature lookup).
+components:
+  responses:
+    PublicRateLimited:
+      description: 'The venue-wide public-route allowance is exhausted (SW-02). Every
+
+        unauthenticated route shares one weighted bucket: client traffic reaches
+
+        the enclave through the dstack gateway, so all requests present the same
+
+        source address and a per-caller limit here would bound the venue rather
+
+        than any individual caller.
+
+
+        Weights follow real cost — `/attestation` (a TDX quote per request,
+
+        uncacheable because the caller''s nonce is the point) is the heaviest,
+
+        `/transparency` is moderate, and in-memory reads are ~100x lighter.
+
+        Honest polling sits far inside the budget.
+
+
+        `POST /auth/token` is deliberately EXEMPT from this bucket and cannot
+
+        return this response: metering it venue-wide would let junk credentials
+
+        exhaust a shared allowance and lock every real account out of
+
+        authenticating. Its own `429`, documented on that operation, comes from
+
+        the per-account login bucket instead.
+
+
+        `Retry-After` carries the back-off in seconds.
+
+        '
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Short-lived (≤ 1h) bearer token from POST /auth/token.
+
+
+        Expiry is EXACT — there is no grace period past `expires_in`, on REST
+
+        or on the streaming transport. Refresh on a margin.
+
+
+        A structurally valid, unexpired token is still refused when it has been
+
+        revoked (401), when the operator has invalidated the tokens the account
+
+        was holding (401), or when the account is suspended (403). Suspension
+
+        also blocks issuing a new one, so re-authenticating does not clear it.
+
+        '
+  schemas:
+    Error:
+      type: object
+      description: 'The error envelope. Every non-2xx response renders as this shape, with
+
+        the mapped HTTP status. Success responses are NOT enveloped (their typed
+
+        body is returned directly). Every response — success and error — carries
+
+        an `x-request-id` header for correlation with server logs.
+
+        '
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: integer
+          description: 'Stable numeric error code. Ranges: 1000–1099 request validation,
+
+            1100–1199 auth, 1200–1299 conflict, 1300–1399 not found, 1400–1499
+
+            rate limit, 5000+ server. See the Error Codes reference.
+
+
+            One exception to the ranges: `1402` is returned with HTTP 503, not
+
+            429. It signals that credential verification is momentarily at
+
+            capacity and was refused rather than queued. Branch on the numeric
+
+            code rather than inferring the status from its range.
+
+            '
+          example: 1102
+        message:
+          type: string
+          example: trading_key_signature does not verify against the canonical body
+    AuthTokenRequest:
+      type: object
+      required:
+      - api_key
+      - api_secret
+      - passphrase
+      properties:
+        api_key:
+          type: string
+          description: Public credential identifier provisioned at account setup.
+        api_secret:
+          type: string
+          format: password
+          description: HMAC secret, paired with api_key.
+        passphrase:
+          type: string
+          format: password
+          description: Account-level passphrase (third factor; required).
+    AuthTokenResponse:
+      type: object
+      required:
+      - access_token
+      - token_type
+      - expires_in
+      - account_id
+      properties:
+        access_token:
+          type: string
+          description: 'Bearer token. Pass as `Authorization: Bearer <token>`.'
+        token_type:
+          type: string
+          enum:
+          - Bearer
+        expires_in:
+          type: integer
+          description: Seconds from issue time. Expiry is exact; there is no validation leeway.
+        account_id:
+          type: string
+          description: Stable per-account identifier.
+    TransportAttestationManifest:
+      type: object
+      description: "The values bound into the transport quote. These are CLAIMS until the\nclient rebuilds\
+        \ the canonical bytes and confirms the digest matches\nreport_data[32..64]. Canonical encoding\
+        \ (164 bytes, all fixed-width):\n  [  0..  2] protocol_version   u16 big-endian\n  [  2..  3]\
+        \ transport_mode     u8 (ra-tls=1, gateway-terminated=2)\n  [  3..  4] reserved           u8 =\
+        \ 0\n  [  4.. 36] sha256(app_id)\n  [ 36.. 68] sha256(instance_id)\n  [ 68..100] boot_session_id\n\
+        \  [100..132] tls_spki_sha256\n  [132..164] signer_set_sha256\nReference mirror: packages/sdk/src/tee/transport-manifest.ts\n"
+      required:
+      - protocol_version
+      - transport_mode
+      - app_id_sha256
+      - instance_id_sha256
+      - boot_session_id
+      - tls_spki_sha256
+      - signer_set_sha256
+      properties:
+        protocol_version:
+          type: integer
+          description: Wire version. Bumped together with the domain tag.
+        transport_mode:
+          type: string
+          enum:
+          - ra-tls
+          - gateway-terminated
+        app_id_sha256:
+          type: string
+          description: Hex SHA-256 of the dstack app_id bytes.
+        instance_id_sha256:
+          type: string
+          description: Hex SHA-256 of the dstack instance_id bytes.
+        boot_session_id:
+          type: string
+          description: 'Hex, 32 bytes. Changes on every process restart, which is what makes
+
+            evidence from a previous boot rejectable.
+
+            '
+        tls_spki_sha256:
+          type: string
+          description: 'Hex SHA-256 over the DER SubjectPublicKeyInfo of the served
+
+            certificate. The client MUST compare this against the certificate on
+
+            the socket carrying its request — not a separate probe connection.
+
+            '
+        signer_set_sha256:
+          type: string
+          description: 'Hex SHA-256 over the concatenated raw pubkeys of the full ordered
+
+            K-shard signer set. Carried inside the manifest deliberately: a
+
+            client must not verify a transport quote and an /attestation quote
+
+            independently and infer they came from the same enclave.
+
+            '
+    TransportAttestation:
+      type: object
+      description: 'Transport attestation bundle (T-03P). Binds the served TLS certificate,
+
+        the current boot session, and the full signer set into one quote.
+
+        '
+      required:
+      - manifest
+      - quote
+      - event_log
+      - report_data
+      - domain
+      properties:
+        manifest:
+          $ref: '#/components/schemas/TransportAttestationManifest'
+        quote:
+          type: string
+          description: Hex-encoded TDX quote (DCAP format) over report_data.
+        event_log:
+          type: string
+          description: 'The dstack event log as a JSON STRING. Replay against the
+
+            DCAP-verified quote''s RTMR3 to recover the measured compose hash.
+
+            '
+        report_data:
+          type: string
+          description: 'Hex of the 64-byte report_data in the quote:
+
+            nonce(32) || SHA-256(domain || canonical_manifest_bytes).
+
+            '
+        domain:
+          type: string
+          description: 'Domain separation tag the digest was computed under, e.g.
+
+            "darknyx/transport-attestation/v1". A client that does not implement
+
+            this exact version MUST fail rather than attempt verification.
+
+            '
+    AttestationQuote:
+      type: object
+      description: 'Intel TDX attestation quote, quote-bound event log, echoed report data,
+
+        and the primary settlement signer. Fetch `/info.tee_pubkeys` for the
+
+        complete ordered signer set committed by report_data.
+
+        '
+      required:
+      - quote
+      - event_log
+      - report_data
+      - tee_pubkey
+      properties:
+        quote:
+          type: string
+          description: Hex-encoded TDX quote (DCAP format).
+        event_log:
+          type: string
+          description: 'The dstack event log as a JSON STRING (an array of measured
+
+            events — NOT hex-encoded). A client replays it against the
+
+            DCAP-verified quote''s RTMR3 to bind the recorded compose-hash
+
+            + instance-id + key-provider events
+
+            using the SDK attestation verifier.
+
+            '
+        report_data:
+          type: string
+          description: "64-byte report_data field embedded in the quote, hex.\nLayout when callers pass\
+            \ `?reportData=<nonce>`:\n  report_data[0..32] = caller-supplied nonce\n  report_data[32..64]\
+            \ = SHA-256(pk_0 || ... || pk_{K-1})\n"
+        tee_pubkey:
+          type: string
+          description: 'Base58 shard-0 Ed25519 settlement signer. This field alone is not
+
+            the signer-set binding; verify the full `/info.tee_pubkeys` array
+
+            against report_data and finalized on-chain VaultConfig.
+
+            '
+    AppInfo:
+      type: object
+      description: 'Application + instance metadata, returned by GET /info.
+
+        Mirrors what dstack-sdk `client.info()` returns plus a
+
+        couple of Darknyx-specific fields. Used in tandem with
+
+        /attestation by the SDK''s verifyTeeAttestation() helper.
+
+        '
+      required:
+      - app_id
+      - instance_id
+      - app_name
+      - device_id
+      - compose_hash
+      - boot_session_id
+      - tcb_info
+      - tee_pubkey
+      - tee_pubkeys
+      - version
+      properties:
+        app_id:
+          type: string
+          description: Hex app-id — deterministic from deployer + compose.
+        instance_id:
+          type: string
+          description: Hex instance-id of this specific CVM.
+        app_name:
+          type: string
+        compose_hash:
+          type: string
+          description: 'SHA-256 of canonicalised app-compose.json. CONVENIENCE ONLY —
+
+            the client''s attestation check pins its EXPECTED_COMPOSE_HASH
+
+            against the compose-hash read from the DCAP-VERIFIED quote''s
+
+            RTMR3 event log, NOT against this self-reported field (a
+
+            malicious or unverified endpoint can put anything here).
+
+            '
+        boot_session_id:
+          type: string
+          pattern: ^[0-9a-fA-F]{64}$
+          description: 'Fresh 32-byte process-boot session id, hex. Every canonical place
+
+            and cancel intent binds this value, so requests prepared before a
+
+            CVM restart cannot be replayed into the new process. The value read
+
+            from `/info` must equal the boot session bound by the
+
+            `/transport-attestation` manifest. It is not part of the separate
+
+            legacy `/attestation` report_data layout.
+
+            '
+        tcb_info:
+          type: object
+          required:
+          - mrtd
+          properties:
+            mrtd:
+              type: string
+              description: Initial Trust Domain measurement.
+        device_id:
+          type: string
+          description: TDX platform identifier of this host (PPID-derived).
+        tee_pubkey:
+          type: string
+          description: 'Base58 Ed25519 pubkey (same as in AttestationQuote). This is
+
+            the PRIMARY (shard-0) signer. Under tree-sharding the TEE
+
+            derives K = num_trees signer keys (paths
+
+            darknyx/ed25519-signer/v2/{0..K-1}); all K are registered in the
+
+            on-chain `vault_config.tee_pubkeys` set via one
+
+            `set_tee_pubkey` rotation, and each is a shard settle
+
+            fee-payer. Prefer the complete set below.
+
+            '
+        tee_pubkeys:
+          type: array
+          items:
+            type: string
+          description: 'The FULL K-shard signer set (base58, shard order) — every key
+
+            the vault accepts settle payloads from. A client reconciles this
+
+            against finalized on-chain `vault_config.tee_pubkeys`. The quote''s
+
+            report_data binds SHA-256 of their raw concatenation in shard order;
+
+            `tee_pubkey` is `tee_pubkeys[0]`.
+
+            '
+        version:
+          type: string
+          description: Semver tag of the darknyx-tee build (e.g. v0.4.2).
+    Instrument:
+      type: object
+      description: 'One isolated market served by this attested venue. Every returned
+
+        instrument shares the same verified-origin/session identity but has its own
+
+        governed mint pair, book, oracle, and proof batches.
+
+        '
+      required:
+      - symbol
+      - base_mint
+      - quote_mint
+      - tick_size
+      - min_order_size
+      - trading_enabled
+      - oracle
+      properties:
+        symbol:
+          type: string
+          description: Canonical symbol signed into an order and used for book routing.
+          example: SOL-USDC
+        base_mint:
+          type: string
+          description: Base SPL mint pubkey (base58).
+        quote_mint:
+          type: string
+          description: Quote SPL mint pubkey (base58).
+        tick_size:
+          type: string
+          description: Raw integer price increment in protocol price units.
+        min_order_size:
+          type: string
+          description: Raw integer minimum amount in the base mint's smallest units.
+        trading_enabled:
+          type: boolean
+          description: 'Current fail-closed readiness for new placement, modification, and
+
+            matching on this market. A false value does not block cancellation,
+
+            reads, or settlement reconciliation. Clients must still handle a
+
+            racing 503 from an order write.
+
+            '
+        oracle:
+          type: object
+          required:
+          - type
+          - pubkey
+          - source
+          - publish_time_ms
+          - age_ms
+          - max_age_ms
+          properties:
+            type:
+              type: string
+              enum:
+              - pyth_pull_v2
+              - pyth_push_v2
+              description: Pyth adapter-family discriminator paired with source (router quorum uses pull_v2;
+                finalized Solana accounts use push_v2).
+            pubkey:
+              type: string
+              description: Pyth feed identifier (32-byte hex).
+            source:
+              type: string
+              enum:
+              - pyth-router-quorum-v1
+              - pyth-solana-push-v1
+              description: Versioned oracle source selected exclusively at CVM boot.
+            account:
+              type: string
+              description: Derived upgraded Pyth push-account PDA; present only for pyth-solana-push-v1.
+            publish_time_ms:
+              type:
+              - integer
+              - 'null'
+              format: uint64
+              description: Signed Pyth publish time of the currently cached price, or null before the
+                first accepted update.
+            age_ms:
+              type:
+              - integer
+              - 'null'
+              format: uint64
+              description: Current age of the signed publish time, or null before the first accepted update.
+            max_age_ms:
+              type:
+              - integer
+              - 'null'
+              format: uint64
+              description: Source-specific fail-closed signed-age budget (5 s router; 7 min development
+                finalized push).
+    PlaceOrderRequest:
+      type: object
+      description: 'The canonical-order wire schema (`darknyx-order-v5` signature domain).
+
+        All 32/64/16-byte fields are hex-encoded strings; all numeric fields are
+
+        JSON integers (u64).
+
+        The trading-key signature covers the canonical encoding of the
+
+        economic fields, `viewing_pubkey`, `session_id`, and `arrival_nonce`;
+
+        the opening fields (`owner_commitment`, `note_inner_hash`) are pinned
+
+        indirectly because the matcher re-derives
+
+        `note_commitment` from them and rejects a mismatch.
+
+        '
+      required:
+      - symbol
+      - side
+      - order_type
+      - amount
+      - price_limit
+      - expiry_slot
+      - order_id
+      - note_commitment
+      - arrival_nonce
+      - trading_key
+      - trading_key_signature
+      - owner_commitment
+      - note_inner_hash
+      - merkle_root
+      - valid_input_proof
+      - viewing_pubkey
+      - session_id
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum:
+          - bid
+          - ask
+          description: '`bid` = buy base; `ask` = sell base.'
+        order_type:
+          type: string
+          enum:
+          - limit
+          - ioc
+          - fok
+        amount:
+          type: integer
+          format: uint64
+          description: Order size in base units.
+        price_limit:
+          type: integer
+          format: uint64
+          description: 'Worst acceptable price, in quote units per base. Required for
+
+            a bid (must be > 0); an ask may use `0` to accept any clearing
+
+            price. Every non-zero value must be an integer multiple of the
+
+            instrument''s `tick_size`.
+
+            '
+        min_fill_size:
+          type: integer
+          format: uint64
+          description: 'Optional (default 0). Reject fills smaller than this; set equal
+
+            to `amount` for resting all-or-none.
+
+            '
+        expiry_slot:
+          type: integer
+          format: uint64
+          description: 'Future Solana slot past which this order auto-expires. It must
+
+            leave the matcher settlement buffer and is bounded by the protocol
+
+            maximum (currently 4,500 slots) to prevent an unbounded
+
+            collateral-lock window. Zero is not a GTC sentinel.
+
+            '
+        order_id:
+          type: string
+          description: 16-byte client-chosen id, hex. Must be unique + non-zero.
+        note_commitment:
+          type: string
+          description: '32-byte hex — Poseidon6 commitment to the collateral note this
+
+            order is backed by. The opening and VALID_INPUT proof are checked
+
+            at intake on a settlement-enabled venue. The commitment can reserve
+
+            at most one live or settlement-pending order in this venue; the
+
+            on-chain lock remains the final authority at settlement.
+
+            '
+        arrival_nonce:
+          type: integer
+          format: uint64
+          description: 'Nonce bound into the signed canonical body. After exact-body
+
+            idempotency handling, it must be strictly greater than every prior
+
+            accepted nonce for the same trading key.
+
+            '
+        trading_key:
+          type: string
+          description: 32-byte hex — the Ed25519 public key that owns this order.
+        trading_key_signature:
+          type: string
+          description: '64-byte hex — Ed25519 signature over `sha256(canonical body)`
+
+            from the trading key. Lets the TEE attribute the order to a
+
+            specific key without a per-order on-chain tx.
+
+            '
+        owner_commitment:
+          type: string
+          description: '32-byte hex — the collateral note''s owner commitment
+
+            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
+
+            input-note opening the in-TEE VALID_MATCH_BATCH prover needs
+
+            (the circuit re-derives `note_commitment` from the opening).
+
+            This is the only NOTE-BOUND owner identity an order carries, and
+
+            the one settlement derives output notes back to. Verified against
+
+            the signed `note_commitment` at intake. Held in enclave memory
+
+            only.
+
+
+            A separate, client-asserted `user_commitment` was also required
+
+            until audit 2026-07-25 (T-07 / PF-10); it was read by nothing and
+
+            has been removed from the request and the signed canonical body.
+
+            '
+        note_inner_hash:
+          type: string
+          description: '32-byte hex — the collateral note''s amount-independent
+
+            `inner_hash`, which anchors both its commitment and nullifier.
+
+            '
+        merkle_root:
+          type: string
+          description: '32-byte hex — the merkle root the `valid_input_proof` was
+
+            generated against. A settlement-enabled venue checks its recent-root
+
+            mirror before accepting the order; `lock_note` checks the
+
+            authoritative on-chain window again at settlement.
+
+            '
+        valid_input_proof:
+          type: string
+          description: '256-byte hex (`pi_a ‖ pi_b ‖ pi_c`) — the per-note VALID_INPUT
+
+            Groth16 proof that gates `lock_note`. The TEE cannot generate
+
+            it (needs the spending key + merkle witness), so the client
+
+            supplies it. A settlement-enabled venue verifies it at intake
+
+            against `(merkle_root, note_use_tag, collateral mint)`, deriving
+
+            the tag from the supplied commitment + private inner hash;
+
+            on-chain `lock_note` verifies it again. Enqueue-only simulator /
+
+            load-test deployments do not settle and may deliberately accept
+
+            stub proofs.
+
+            '
+        collateral_amount:
+          type: integer
+          format: uint64
+          description: 'Optional over-collateralization: the actual value the
+
+            collateral note carries when it exceeds the order''s nominal
+
+            cost. Lets a large note back a small order; the surplus returns
+
+            as a change note. Omit for exact collateral.
+
+            '
+        tree_id:
+          type: integer
+          format: uint8
+          default: 0
+          description: 'Merkle-tree shard containing the collateral note. Intake rejects an
+
+            out-of-range shard and checks the proof root against this shard''s
+
+            recent-root window before booking.
+
+            '
+        viewing_pubkey:
+          type: string
+          description: 'Required 32-byte contributory X25519 viewing-encryption public key,
+
+            hex (`deriveViewingEncKeypair().publicKey`). The TEE
+
+            encrypts each fill''s `(trade, change)` output amounts to it and
+
+            writes the ciphertext on-chain, so exact and partial output notes
+
+            remain recoverable after a CVM redeploy. It is signed; low-order
+
+            encodings that yield an all-zero shared secret are rejected.
+
+            '
+        session_id:
+          type: string
+          pattern: ^[0-9a-fA-F]{64}$
+          description: 'Required 32-byte boot session id from `GET /info`, hex, bound into
+
+            the signature. A stale session is rejected even when every other
+
+            field and signature is valid. Programmatic clients confirm that the
+
+            value matches the boot session bound by `/transport-attestation`;
+
+            a substituted value causes rejection rather than stale-session
+
+            acceptance.
+
+            '
+    PlaceOrderResponse:
+      type: object
+      required:
+      - order_id
+      - status
+      - arrival_slot
+      properties:
+        order_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - accepted
+        arrival_slot:
+          type: integer
+          format: uint64
+    CancelOrderRequest:
+      type: object
+      required:
+      - trading_key
+      - cancel_nonce
+      - session_id
+      - trading_key_signature
+      properties:
+        trading_key:
+          type: string
+          description: 32-byte Ed25519 pubkey, hex.
+        cancel_nonce:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients.
+        session_id:
+          type: string
+          description: '32-byte hex boot session from /info; bound into the cancel signature
+
+            so a captured body cannot be replayed in a later boot. Programmatic
+
+            clients verify the same value in the transport-attestation manifest.
+
+            '
+        trading_key_signature:
+          type: string
+          description: 64-byte canonical cancel signature, hex.
+    CancelOrderResponse:
+      type: object
+      required:
+      - order_id
+      - status
+      properties:
+        order_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - cancelled
+    ModifyOrderRequest:
+      type: object
+      required:
+      - cancel_signature
+      - cancel_nonce
+      - replacement
+      properties:
+        cancel_signature:
+          type: string
+          description: 64-byte signature over the old order's canonical cancel body.
+        cancel_nonce:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical decimal u64 string.
+        replacement:
+          $ref: '#/components/schemas/PlaceOrderRequest'
+    ModifyOrderResponse:
+      type: object
+      required:
+      - old_order_id
+      - order_id
+      - status
+      - arrival_slot
+      properties:
+        old_order_id:
+          type: string
+        order_id:
+          type: string
+          description: Replacement id; may equal old_order_id for reprice-in-place.
+        status:
+          type: string
+          enum:
+          - modified
+        arrival_slot:
+          type: integer
+          format: uint64
+    Order:
+      type: object
+      description: The `GET /orders/{order_id}` status body.
+      required:
+      - order_id
+      - symbol
+      - side
+      - order_type
+      - status
+      - amount
+      - filled_quantity
+      - price_limit
+      - expiry_slot
+      - arrival_slot
+      properties:
+        order_id:
+          type: string
+          description: 16-byte order id, hex (the one supplied at placement).
+        symbol:
+          type: string
+          description: Canonical instrument symbol selecting the isolated market book.
+        side:
+          type: string
+          enum:
+          - bid
+          - ask
+        order_type:
+          type: string
+          enum:
+          - limit
+          - ioc
+          - fok
+        status:
+          type: string
+          enum:
+          - empty
+          - pending
+          - pending_settlement
+          - expired
+          - cancelled
+          description: '`pending` (resting), `pending_settlement` (reserved while the TEE
+
+            reconciles Tx D), `expired`, `cancelled`, or `empty` (slot
+
+            reclaimed). Definitive failures leave the order lookup surface and
+
+            emit terminal `settlement_failed` on the authenticated orders
+
+            channel with a reason and lock expiry slot.
+
+            '
+        amount:
+          type: integer
+          format: uint64
+          description: Original order size, base units.
+        filled_quantity:
+          type: integer
+          format: uint64
+          description: Cumulative filled quantity.
+        price_limit:
+          type: integer
+          format: uint64
+        expiry_slot:
+          type: integer
+          format: uint64
+        arrival_slot:
+          type: integer
+          format: uint64
+          description: Slot stamped on arrival; frozen for the order's life.
+    Account:
+      type: object
+      description: '`GET /account` response. Returns ONLY the caller''s open orders — the
+
+        slice of account state the TEE legitimately holds (it tracks the
+
+        order_id→account map at intake). Balances and notes are intentionally
+
+        absent: linking an account to its notes needs the spending key, which
+
+        the TEE never sees. Clients derive balances + spendable notes themselves
+
+        from `/tree/*` + their own keys.
+
+        '
+      required:
+      - account_id
+      - open_orders
+      properties:
+        account_id:
+          type: string
+        open_orders:
+          type: array
+          description: The caller's orders still resting across all market books.
+          items:
+            $ref: '#/components/schemas/Order'
+    AccountSettings:
+      type: object
+      description: 'Per-account preferences (`GET`/`PUT /account/settings`), persisted with
+
+        the account. Omitted fields default on `PUT`.
+
+        '
+      properties:
+        cancel_on_disconnect_default:
+          type: boolean
+          description: 'Account-wide default for `/v1/stream` cancel-on-disconnect. A
+
+            login frame''s explicit `cancel_on_disconnect` value overrides it.
+
+            '
+          default: false
+    TreeRoot:
+      type: object
+      required:
+      - tree_id
+      - merkle_root
+      - leaf_count
+      - on_chain_slot
+      properties:
+        tree_id:
+          type: integer
+          default: 0
+          description: 'Which Merkle shard this root is for (echoes the request''s
+
+            `?tree_id`, default 0). Present under tree-sharding.
+
+            '
+        merkle_root:
+          type: string
+          description: 'Current Merkle root of shard `tree_id`, hex-encoded. It should
+
+            equal finalized on-chain `MerkleTree[tree_id].current_root`.
+
+            Historical roots accepted through the on-chain 64-entry history
+
+            are not returned by this endpoint.
+
+            '
+        leaf_count:
+          type: integer
+          description: Leaf count of this shard.
+        on_chain_slot:
+          type: integer
+          description: 'Solana slot at which the TEE last synced this shard''s mirror
+
+            from on-chain `MerkleTree[tree_id]`.
+
+            '
+    InclusionProof:
+      type: object
+      required:
+      - note_commitment
+      - leaf_index
+      - merkle_root
+      - siblings
+      properties:
+        note_commitment:
+          type: string
+        leaf_index:
+          type: integer
+        merkle_root:
+          type: string
+        siblings:
+          type: array
+          minItems: 20
+          maxItems: 20
+          items:
+            type: string
+            description: 32-byte hex.
+    TransparencySnapshot:
+      type: object
+      required:
+      - reserves
+      - tee
+      - stats
+      description: 'Public, unauthenticated convenience snapshot. Independently read the
+
+        corresponding Solana accounts and verify `/attestation` before treating
+
+        the reserve or engine-identity fields as trusted evidence.
+
+        '
+      properties:
+        reserves:
+          type: object
+          required:
+          - shards
+          - shard0_merkle_root
+          - total_leaf_count
+          - per_mint
+          properties:
+            shards:
+              type: array
+              description: 'Per-shard root + leaf count. There is no single global root —
+
+                each shard has its own — so this is the only lossless form.
+
+
+                This replaces a bare `merkle_root` (shard 0''s) that sat beside a
+
+                `leaf_count` (the all-shard SUM). Both were documented, but as
+
+                adjacent fields they read as a matched pair, and folding the
+
+                count against that root yields a root the tree never had
+
+                (SW-06).
+
+                '
+              items:
+                type: object
+                required:
+                - tree_id
+                - merkle_root
+                - leaf_count
+                properties:
+                  tree_id:
+                    type: integer
+                  merkle_root:
+                    type: string
+                  leaf_count:
+                    type: integer
+            shard0_merkle_root:
+              type: string
+              description: 'Shard 0''s root, kept for pre-sharding consumers. Prefer
+
+                `shards`.
+
+                '
+            total_leaf_count:
+              type: integer
+              description: 'Total leaves SUMMED across all `num_trees` shards — NOT the leaf
+
+                count under `shard0_merkle_root`.
+
+                '
+            per_mint:
+              type: array
+              items:
+                type: object
+                required:
+                - mint
+                - outstanding
+                - vault_balance
+                - stale
+                properties:
+                  mint:
+                    type: string
+                  outstanding:
+                    type: string
+                    description: 'Sum of unspent note amounts for this mint, in the mint''s
+
+                      smallest integer units.
+
+                      '
+                  vault_balance:
+                    type: string
+                    description: 'SPL balance in the vault token account, in the mint''s
+
+                      smallest integer units. Solvency requires this to be at
+
+                      least `outstanding`.
+
+                      '
+                  stale:
+                    type: boolean
+                    description: 'true if either on-chain read was DEGRADED (RPC
+
+                      error or malformed account); outstanding /
+
+                      vault_balance are then "unknown", not a real 0 —
+
+                      ignore the numbers for a solvency check.
+
+                      '
+        tee:
+          type: object
+          description: 'Engine attestation IDENTITY — enough to tie this response to
+
+            a measured image. The full challenge-response quote is at
+
+            GET /attestation.
+
+            '
+          required:
+          - app_id
+          - compose_hash
+          - mrtd
+          - signer_pubkey
+          properties:
+            app_id:
+              type: string
+            compose_hash:
+              type: string
+            mrtd:
+              type: string
+            signer_pubkey:
+              type: string
+              description: Shard-0 Ed25519 signer (base58); verify the full set via `/info` and `/attestation`.
+        stats:
+          type: object
+          description: Aggregate settlement-scheduler counters.
+          required:
+          - batches
+          - jobs
+          properties:
+            batches:
+              type: integer
+              description: Settle batches currently retained by the scheduler. Terminal history is capped;
+                active batches are never evicted. Not a lifetime counter.
+            jobs:
+              type: integer
+              description: Per-match settle jobs belonging to retained batches; not a lifetime counter.
+    SettlementStatus:
+      type: object
+      required:
+      - batch_id
+      - jobs
+      properties:
+        batch_id:
+          type: integer
+          format: uint64
+        jobs:
+          type: array
+          description: 'Per-match status in match-index order. Confirmed siblings can reach
+
+            `done` while an ambiguous sibling remains `settling` and redrives.
+
+            '
+          items:
+            type: object
+            required:
+            - batch_id
+            - match_idx
+            - stage
+            - outcome
+            - created_at_ms
+            - last_transition_at_ms
+            properties:
+              batch_id:
+                type: integer
+                format: uint64
+              match_idx:
+                type: integer
+                format: uint8
+              stage:
+                type: string
+                enum:
+                - queued
+                - locking_notes
+                - proving
+                - verifying
+                - settling
+                - closing
+                - done
+                - failed
+              outcome:
+                type: object
+                required:
+                - kind
+                description: '`ambiguous` is non-terminal and remains reserved while the TEE
+
+                  reconciles both consumed-note PDAs and redrives within the
+
+                  marker/lock window. `rejected` is terminal.
+
+                  '
+                properties:
+                  kind:
+                    type: string
+                    enum:
+                    - pending
+                    - confirmed
+                    - rejected
+                    - ambiguous
+                  signature:
+                    type: string
+                  slot:
+                    type: integer
+                    format: uint64
+                  reconciled_from_consumed_pdas:
+                    type: boolean
+                  reason:
+                    type: string
+                    enum:
+                    - settlement_rejected
+                    - reconciliation_pending
+                    description: 'A closed-set label, not free-form text. Present only on
+
+                      `rejected` / `ambiguous`. The detailed diagnostic stays
+
+                      inside the enclave: this endpoint is readable by any
+
+                      authenticated account, and internal error text is built by
+
+                      interpolating errors that reach in from the RPC client
+
+                      (SW-01).
+
+                      '
+              failed_reason:
+                type: string
+                enum:
+                - rpc_unavailable
+                - prover_failed
+                - leaf_resolution_failed
+                - alt_not_active
+                - settlement_rejected
+                - internal_error
+                description: 'Present only when `stage` is `failed`. A closed-set label
+
+                  identifying the CLASS of failure, never the internal message.
+
+                  Which pipeline step failed is implied by the signature fields
+
+                  populated so far. Labels are append-only — a new failure class
+
+                  adds a value, existing ones are never renamed.
+
+                  '
+              created_at_ms:
+                type: integer
+                format: uint64
+              last_transition_at_ms:
+                type: integer
+                format: uint64
+              lock_buyer_sig:
+                type: string
+              lock_seller_sig:
+                type: string
+              verify_sig:
+                type: string
+              settle_sig:
+                type: string
+              close_sig:
+                type: string
+                description: Normally absent because marker close is asynchronous.
+    OrderLifecycleUpdate:
+      type: object
+      required:
+      - order_id
+      - market_id
+      - server_time_ms
+      - kind
+      description: 'One account-scoped event on the `/v1/stream` `orders` channel.
+
+        `market_id` is the base58 `MarketConfig` PDA. Settlement-related
+
+        transitions carry `match_id` as a decimal string so JavaScript clients
+
+        do not lose u64 precision.
+
+        '
+      properties:
+        order_id:
+          type: string
+          description: 16-byte order id, hex.
+        market_id:
+          type: string
+          description: Base58 MarketConfig PDA.
+        match_id:
+          type: string
+          pattern: ^[0-9]+$
+          description: Present for pending, confirmed-fill, and settlement-failure transitions.
+        server_time_ms:
+          type: integer
+          format: uint64
+        kind:
+          type: string
+          enum:
+          - pending_settlement
+          - partially_filled
+          - fully_filled
+          - settlement_failed
+          - cancelled
+          - expired
+        filled_quantity:
+          type: integer
+          format: uint64
+        new_amount:
+          type: integer
+          format: uint64
+        new_note_amount:
+          type: integer
+          format: uint64
+        reason:
+          type: string
+        lock_expiry_slot:
+          type: integer
+          format: uint64
+paths:
+  /auth/token:
+    post:
+      tags:
+      - auth
+      summary: Exchange long-lived credentials for a short-lived bearer token.
+      description: 'OAuth2 client_credentials grant. Issue rate is rate-limited per
+
+        api_key: an account that exhausts its own allowance is throttled
+
+        without affecting any other account, and an unrecognised api_key is
+
+        rejected before any credential hashing, so it consumes no allowance at
+
+        all.
+
+
+        Credential verification is deliberately expensive, so the service
+
+        bounds how much of it runs at once and REFUSES excess requests (503)
+
+        rather than queueing them. A 429 message includes an approximate retry
+
+        delay; use a short jittered retry for 503.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthTokenRequest'
+      responses:
+        '200':
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          description: Bad credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account exists but is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: 'This account''s authentication allowance is exhausted. The message
+
+            includes an approximate retry delay.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 'Credential verification is at capacity. Shed rather than queued, so
+
+            this clears quickly; use a short jittered retry.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /auth/token/revoke:
+    post:
+      tags:
+      - auth
+      summary: Revoke an issued bearer token.
+      description: 'Revokes the calling bearer token. Subsequent requests presenting the
+
+        same token are rejected with 401, including after an engine restart.
+
+        '
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Revoked.
+        '401':
+          description: Token already invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /attestation:
+    get:
+      tags:
+      - attestation
+      summary: Fresh TEE attestation quote (challenge-response).
+      description: "Unauthenticated. Clients MUST verify this quote before sending private\norder intent.\n\
+        \nThe caller supplies a fresh nonce via reportData; the TEE\ngenerates a quote with reportData\
+        \ populated as:\n    report_data[0..32]  = caller's nonce\n    report_data[32..64] = SHA-256(pk_0\
+        \ || ... || pk_{K-1})\n\nVerification steps:\n  1. Verify the Intel TCB certificate chain and\
+        \ quote locally.\n  2. Reject structurally impossible event entries; require exactly one\n   \
+        \  runtime-typed compose-hash event; replay the log to confirm RTMR3.\n  3. Confirm the measured\
+        \ compose hash is an independently approved release.\n  4. Confirm the measured signer derivation\
+        \ context.\n  5. Confirm reportData starts with the supplied nonce\n     and ends with the hash\
+        \ of the complete ordered signer set.\n  6. Compare every signer with finalized on-chain VaultConfig.\n\
+        \nThe SDK's verifyTeeAttestation() helper performs steps 1-5 and returns\nthe quote-bound signer\
+        \ set. The caller performs step 6; the reference\ndaemon performs both halves and refreshes the\
+        \ on-chain comparison.\n"
+      parameters:
+      - name: reportData
+        in: query
+        required: false
+        schema:
+          type: string
+        description: '32-byte nonce in hex. If omitted, the TEE generates a
+
+          quote with all-zero reportData[0..32]. Always supply a
+
+          fresh nonce for live verification (replay protection).
+
+          '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Current quote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttestationQuote'
+      x-hideTryItPanel: true
+  /transport-attestation:
+    get:
+      tags:
+      - attestation
+      summary: Quote binding the served TLS certificate to this enclave.
+      description: "Unauthenticated, and necessarily so: a client must verify the transport\nBEFORE it\
+        \ sends any credential or order intent.\n\n`/attestation` proves an enclave with a given signer\
+        \ set is alive. It\ndoes NOT prove the TLS connection carrying your orders terminates\nthere —\
+        \ a party able to terminate TLS can relay a genuine\n`/attestation` response while routing traffic\
+        \ elsewhere. This endpoint\ncloses that by binding the served certificate's public key into the\n\
+        attested value:\n\n    report_data[0..32]  = caller's nonce (EXACTLY 32 bytes)\n    report_data[32..64]\
+        \ = SHA-256(DOMAIN || canonical_manifest_bytes)\n\n`/attestation` is unchanged and remains valid;\
+        \ the two coexist because\ndstack `get_quote` accepts caller-selected report_data on every call.\n\
+        \nVerification steps:\n  1. Verify the Intel TCB chain and quote locally, and replay the event\n\
+        \     log to confirm RTMR3 and recover the measured compose hash. The\n     compose hash is deliberately\
+        \ NOT a manifest field — in the event\n     log it is verifiable, in the manifest it would be\
+        \ self-reported.\n  2. Rebuild canonical_manifest_bytes from the returned manifest and\n     confirm\
+        \ report_data[32..64] matches. The manifest fields are\n     claims until you recompute them.\n\
+        \  3. Confirm report_data[0..32] is your nonce.\n  4. **Compare manifest.tls_spki_sha256 against\
+        \ the certificate on the\n     socket you are actually using.** A separate probe connection does\n\
+        \     not establish anything — DNS, load balancing, or a relay can make\n     the probe and the\
+        \ request reach different peers.\n  5. Confirm manifest.signer_set_sha256 matches finalized on-chain\n\
+        \     VaultConfig, and manifest.boot_session_id matches `/info`.\n\nStep 4 is the entire point\
+        \ of the endpoint. A client that verifies the\nquote but not the socket certificate has gained\
+        \ nothing over\n`/attestation`.\n\nEvery manifest field is taken from server state. The nonce\
+        \ is the only\ncaller input, and it only ever lands in the left half of report_data.\n"
+      parameters:
+      - name: nonce
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9a-fA-F]{64}$
+        description: 'Fresh 32-byte nonce in hex (64 characters). Required, and rejected
+
+          with 400 if absent, non-hex, or any length other than 32 bytes.
+
+          Unlike `/attestation`, a short nonce is NOT zero-padded: silently
+
+          padding would let a caller believe it has replay protection it does
+
+          not have.
+
+          '
+      responses:
+        '400':
+          description: Nonce missing, non-hex, or not exactly 32 bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          description: 'RA-TLS transport is not enabled on this instance (legacy
+
+            gateway-terminated deployment), or the dstack socket is
+
+            unreachable. The endpoint reports unavailability rather than
+
+            returning a manifest bound to no served certificate.
+
+            '
+        '200':
+          description: Transport attestation bundle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransportAttestation'
+      x-hideTryItPanel: true
+  /info:
+    get:
+      tags:
+      - info
+      summary: Application + instance metadata.
+      description: 'Returns application and instance metadata, the current boot-session
+
+        identifier, and the complete ordered settlement-signer set. The
+
+        compose hash here is a convenience value; security-sensitive clients
+
+        verify the measured event log returned by attestation. The boot session
+
+        is replay-scoping data validated by intake and must equal the value
+
+        bound by the `/transport-attestation` manifest.
+
+        '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Application info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppInfo'
+      x-hideTryItPanel: true
+  /evidences/quote.json:
+    get:
+      tags:
+      - attestation
+      summary: (Served by dstack-ingress, not darknyx-tee) TDX quote bundle.
+      description: 'Evidence for the surrounding gateway deployment, not the Darknyx
+
+        engine quote from `/attestation` or the boot-certificate binding from
+
+        `/transport-attestation`. It is not the programmatic session''s trust
+
+        root because that route passes the engine''s TLS through.
+
+        '
+      responses:
+        '200':
+          description: Quote JSON bundle (raw).
+          content:
+            application/json: {}
+      x-hideTryItPanel: true
+  /evidences/cert.pem:
+    get:
+      tags:
+      - attestation
+      summary: (Served by dstack-ingress) Current TLS certificate.
+      description: 'A gateway evidence certificate. It is not the boot-random certificate
+
+        served by `darknyx-tee` on the programmatic RA-TLS route.
+
+        '
+      responses:
+        '200':
+          description: PEM-encoded cert.
+          content:
+            application/x-pem-file: {}
+      x-hideTryItPanel: true
+  /evidences/acme-account.json:
+    get:
+      tags:
+      - attestation
+      summary: (Served by dstack-ingress) Let's Encrypt account URI.
+      description: 'Gateway ACME-account metadata. Its presence is not a substitute for
+
+        verifying the engine''s boot-random certificate and transport quote.
+
+        '
+      responses:
+        '200':
+          description: ACME account JSON.
+          content:
+            application/json: {}
+      x-hideTryItPanel: true
+  /evidences/sha256sum.txt:
+    get:
+      tags:
+      - attestation
+      summary: (Served by dstack-ingress) Hash of cert.pem + acme-account.json.
+      description: 'Integrity metadata for the gateway evidence bundle. It does not bind
+
+        the Darknyx engine''s boot certificate to the client''s session.
+
+        '
+      responses:
+        '200':
+          description: Plain-text hash.
+          content:
+            text/plain: {}
+      x-hideTryItPanel: true
+  /instruments:
+    get:
+      tags:
+      - instruments
+      summary: List all tradable instruments.
+      description: 'Returns every independently routed market served by this one attested
+
+        venue. The array may contain multiple pairs. REST and `/v1/stream` use
+
+        separate sockets while sharing the same verified enclave origin, boot
+
+        identity, and bearer session.
+
+        '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: All markets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Instrument'
+      x-hideTryItPanel: true
+  /instruments/{symbol}:
+    get:
+      tags:
+      - instruments
+      summary: Single instrument detail.
+      description: 'Returns one configured market. Use its canonical symbol unchanged in
+
+        signed order requests.
+
+        '
+      parameters:
+      - name: symbol
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Instrument detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Instrument'
+        '404':
+          description: Unknown symbol.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /orders:
+    post:
+      tags:
+      - orders
+      summary: Place a new order.
+      description: 'Routes the signed symbol to one market book, checks the note opening,
+
+        recent proof root, and VALID_INPUT proof before booking on a
+
+        settlement-enabled venue, then reserves the collateral commitment
+
+        inside this venue.
+
+        '
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceOrderRequest'
+      responses:
+        '202':
+          description: Order accepted into the matching queue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaceOrderResponse'
+        '400':
+          description: 'Validation error, including malformed fields, off-tick price,
+
+            opening mismatch, stale proof root (1010), invalid VALID_INPUT
+
+            proof (1011), or an expired/settlement-unsafe expiry (1012).
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Account suspended or trading-key signature invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 'Conflict — the referenced note_commitment is already
+
+            reserved by another live or settlement-pending order, the order id
+
+            is in use, or a replay/session nonce is stale.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Per-account order-operation limit exceeded. Includes Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: New trading is paused because a required subsystem or finalized governance view
+            is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /orders/{order_id}:
+    get:
+      tags:
+      - orders
+      summary: Current status of a live order.
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Order detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: 'Unknown order or an order owned by another account. Both cases use
+
+            the same response so this endpoint is not an order-existence oracle.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+    delete:
+      tags:
+      - orders
+      summary: Cancel an open order.
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelOrderRequest'
+      responses:
+        '200':
+          description: Cancellation processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelOrderResponse'
+        '400':
+          description: Malformed id, key, session, or signature encoding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Account suspended, signature invalid, or trading key does not own the order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Order doesn't exist or is already terminal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The cancel nonce did not advance or the boot session is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+    put:
+      tags:
+      - orders
+      summary: 'Modify an open order — atomic cancel + replace.
+
+        '
+      description: '"The same owner replaces their resting order with a new one." The body
+
+        carries a signed cancel of the OLD order (over its id) plus a full new
+
+        order (`replacement`, a normal signed order). The trading key that signs
+
+        the cancel MUST be the one that signs the replacement. The swap is
+
+        applied under one matcher lock with BOTH preconditions checked first
+
+        (old order exists + owned; replacement order_id not already booked unless
+
+        it is the same id, a reprice in place), so there is no window where the
+
+        caller has neither order. The replacement carries its own note +
+
+        VALID_INPUT proof (it may reuse the old note while the root is still in
+
+        the recent-root window) — no new signed message type; it composes the
+
+        existing cancel + order canonical bodies. The replacement must use the
+
+        original order''s symbol: moving between isolated market books requires
+
+        cancel + a fresh placement. Its session_id also scopes the embedded
+
+        cancel signature to the current boot.
+
+        '
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The OLD order's id (hex) to replace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModifyOrderRequest'
+      responses:
+        '200':
+          description: Modified — old order cancelled, replacement resting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModifyOrderResponse'
+        '400':
+          description: 'Malformed request, cross-market replacement, or replacement
+
+            place-order validation failure.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 'Account suspended, or the booked order is not owned by this
+
+            trading_key.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: The old order doesn't exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The replacement order_id is already booked, or a nonce/session is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: New trading became paused while the replacement was verified; the original order
+            is unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /account:
+    get:
+      tags:
+      - account
+      summary: The caller's open orders.
+      description: 'Returns the orders this account placed that are still in the book.
+
+        Balances + notes are intentionally NOT returned — the TEE has no
+
+        spending key, so clients derive those themselves from `/tree/*` + their
+
+        own keys.
+
+        '
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Open-orders snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /account/settings:
+    get:
+      tags:
+      - account
+      summary: Read the caller's account settings.
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSettings'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+    put:
+      tags:
+      - account
+      summary: Replace the caller's account settings.
+      description: 'Replaces the settings wholesale (omitted fields default), then persists.
+
+        Used e.g. to set the cancel-on-disconnect default for all future
+
+        `/v1/stream` sessions.
+
+        '
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountSettings'
+      responses:
+        '200':
+          description: The updated settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSettings'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /tree/root:
+    get:
+      tags:
+      - tree
+      summary: 'Current Merkle root + leaf count.
+
+        '
+      description: 'Convenience read served by the TEE''s in-memory Merkle mirror.
+
+        Eventually-consistent with the on-chain
+
+        MerkleTree[tree_id].current_root and may lag briefly after a confirmed
+
+        append.
+
+
+        Under tree-sharding the on-chain tree is split into `num_trees`
+
+        per-shard `MerkleTree` accounts; pass `?tree_id` to select a
+
+        shard (default 0). The response echoes the `tree_id` it served.
+
+
+        For correctness-sensitive reads, fetch the selected MerkleTree account
+
+        from Solana and independently verify the returned root.
+
+
+        If this shard''s mirror is known to diverge from Solana, the endpoint
+
+        fails closed with 503/code 5002. Do not build a proof from that mirror;
+
+        read the tree from Solana until the venue cold-resyncs it.
+
+        '
+      parameters:
+      - name: tree_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Which Merkle shard to read (0..num_trees-1). Default 0.
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Tree root snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeRoot'
+        '503':
+          description: Mirror diverged from Solana (code 5002); use an on-chain tree read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /tree/inclusion:
+    get:
+      tags:
+      - tree
+      summary: 'Inclusion proof for a specific note commitment.
+
+        '
+      description: 'Replacement for `MerkleShadow.witness()`. Clients build
+
+        VALID_SPEND / VALID_INPUT proofs against the returned
+
+        siblings.
+
+
+        The TEE-served inclusion proof is verifiable: re-hash the
+
+        leaf + siblings up to the returned merkle_root, compare
+
+        against the on-chain MerkleTree[tree_id].current_root, accept
+
+        the proof only if both match. The TEE cannot lie about an
+
+        inclusion proof without the client detecting it on Solana — so
+
+        this is a fast convenience read, not a trust assertion. A mirror known
+
+        to diverge fails closed with 503/code 5002.
+
+        '
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: commitment
+        in: query
+        required: true
+        schema:
+          type: string
+        description: 32-byte hex note commitment.
+      - name: tree_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Which Merkle shard the commitment lives in. Default 0.
+      responses:
+        '200':
+          description: Inclusion proof.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InclusionProof'
+        '404':
+          description: Commitment not in the tree.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Mirror diverged from Solana (code 5002); use an on-chain tree read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /tree/leaves:
+    get:
+      tags:
+      - tree
+      summary: 'Page through leaves. Used by clients catching up cold or
+
+        re-syncing after a long disconnect.
+
+        '
+      description: 'Returns at most 10,000 leaves per request. A mirror known to diverge
+
+        from Solana fails closed with 503/code 5002.
+
+        '
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: integer
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: integer
+      - name: tree_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Which Merkle shard to page (0..num_trees-1). Default 0.
+      responses:
+        '200':
+          description: Leaves in [from, to) on the selected shard.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - leaves
+                - merkle_root
+                properties:
+                  leaves:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - leaf_index
+                      - value
+                      properties:
+                        leaf_index:
+                          type: integer
+                        value:
+                          type: string
+                  merkle_root:
+                    type: string
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Mirror diverged from Solana (code 5002); use an on-chain tree read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+  /health:
+    get:
+      tags:
+      - system
+      summary: Process liveness and uptime.
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: The API process is serving requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - uptime_ms
+                - version
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - ok
+                  uptime_ms:
+                    type: integer
+                    format: uint64
+                  version:
+                    type: string
+      x-hideTryItPanel: true
+  /system/status:
+    get:
+      tags:
+      - system
+      summary: 'Liveness / degraded-mode snapshot. Public, unauthenticated.
+
+        '
+      description: 'Reports whether the matching tick and the on-chain settle
+
+        pipeline are wired, whether an oracle cache is attached, and the
+
+        TEE''s current Solana slot. `degraded` is `true` whenever the
+
+        settle pipeline is down, every matcher is unavailable, or any market is
+
+        fail-closed. `matcher_running` remains true when at least one market can
+
+        trade. On a multi-market venue, finalized-governance drift pauses every
+
+        book, while an oracle failure pauses only markets bound to that feed.
+
+        Read each instrument''s `trading_enabled` field for market-local
+
+        readiness. Cancels, reads, and pending-settlement reconciliation
+
+        continue.
+
+        '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Engine status snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - degraded
+                - matcher_running
+                - settle_enabled
+                - oracle_configured
+                - oracle_mode
+                - oracle_max_age_ms
+                - current_slot
+                - version
+                properties:
+                  degraded:
+                    type: boolean
+                    description: true when any market is paused or matching/governance/settlement readiness
+                      is down.
+                  matcher_running:
+                    type: boolean
+                    description: true when at least one configured market can accept and match new orders.
+                  settle_enabled:
+                    type: boolean
+                    description: The on-chain settle pipeline is wired.
+                  oracle_configured:
+                    type: boolean
+                    description: An oracle cache (clearing-price reference) is attached.
+                  oracle_mode:
+                    type:
+                    - string
+                    - 'null'
+                    enum:
+                    - pyth-router-quorum-v1
+                    - pyth-solana-push-v1
+                    - null
+                    description: Versioned oracle source selected exclusively at boot.
+                  oracle_max_age_ms:
+                    type:
+                    - integer
+                    - 'null'
+                    format: uint64
+                    description: Source-specific signed-price age budget.
+                  current_slot:
+                    type: integer
+                    format: uint64
+                  version:
+                    type: string
+      x-hideTryItPanel: true
+  /time:
+    get:
+      tags:
+      - system
+      summary: 'Server time — current Solana slot + unix ms. Public.
+
+        '
+      description: 'The TEE''s current slot and wall-clock time. Clients use this to
+
+        convert a wall-clock GTT (good-till-time) expiry into an
+
+        `expiry_slot` without running their own RPC.
+
+        '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Server time snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - slot
+                - unix_ms
+                properties:
+                  slot:
+                    type: integer
+                    format: uint64
+                  unix_ms:
+                    type: integer
+                    format: uint64
+                    description: Server unix time, milliseconds.
+      x-hideTryItPanel: true
+  /transparency:
+    get:
+      tags:
+      - transparency
+      summary: 'Public solvency snapshot + engine identity + aggregate stats.
+
+        Unauthenticated.
+
+        '
+      responses:
+        '429':
+          $ref: '#/components/responses/PublicRateLimited'
+        '200':
+          description: Transparency snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransparencySnapshot'
+      x-hideTryItPanel: true
+  /settlement/status/{batch_id}:
+    get:
+      tags:
+      - settlement
+      summary: 'Per-match settlement outcomes and on-chain signatures for one
+
+        engine batch ID.
+
+        '
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: uint64
+      responses:
+        '200':
+          description: Settlement status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementStatus'
+        '404':
+          description: Unknown batch ID, including a terminal batch that aged out of bounded retention.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a token invalidated by the
+            operator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-hideTryItPanel: true
+x-websocket:
+  url: /v1/stream
+  description: "The sole WebSocket surface: one socket per session for\norder operations plus the `orders`,\
+    \ `fills`, and `tree` channels.\nAuthenticate IN-BAND with `op: login` carrying a bearer token from\n\
+    POST /auth/token, then subscribe to channels. Bearer tokens never appear\nin the URL. The order.place/cancel/modify\
+    \ ops dispatch to the same intake\ncore as the REST path. One session can trade every market returned\
+    \ by\n`/instruments`; each signed symbol routes to one isolated book.\n\nServed channels are `orders`,\
+    \ `fills` (per-account), and `tree` (global\nleaf-appends). Account snapshots and settlement status\
+    \ remain REST reads.\n\nThe UPGRADE request is on the public router, so it shares the venue-wide\n\
+    public allowance and can be refused with `429` + `Retry-After` before the\nsocket is established (see\
+    \ `components.responses.PublicRateLimited`). Once\nupgraded, the session is bounded by the per-account\
+    \ limits and the\nconnection caps instead.\n\nOn the programmatic route, TLS terminates inside this\
+    \ service with a\nboot-random, memory-only key; the deployment gateway passes the encrypted\nstream\
+    \ through. Before login, verify the certificate on the WebSocket\nupgrade connection against `/transport-attestation`,\
+    \ including the measured\ncompose hash, boot session and finalized signer-set pin. A quote fetched\
+    \ on\nan unrelated probe connection does not authenticate this socket.\n\nHeartbeat: client sends\
+    \ `op: ping` every ≤30s; server\nresponds with `op: pong`. Server drops sessions silent for >60s.\n\
+    \nCONNECTION BOUNDS: the socket upgrades before you authenticate, so three\nlimits apply.\n\n  * **Unauthenticated\
+    \ window.** A socket that has not completed `login`\n    within 10 seconds of connecting is closed\
+    \ with code 1008. This window is\n    ABSOLUTE — pings and other frames do not extend it. Send `op:\
+    \ login`\n    first, then heartbeat.\n  * **Venue capacity.** When the service is at its concurrent-socket\
+    \ limit\n    the upgrade is refused with HTTP **503** and a `Retry-After` header,\n    before the\
+    \ WebSocket handshake completes. Retry with backoff.\n  * **Per-account concurrency.** A `login` that\
+    \ would exceed the account's\n    concurrent-stream limit is refused with error code **4290**; the\
+    \ socket\n    stays open but unauthenticated (and so is subject to the window above).\n    Close an\
+    \ existing stream and retry. Re-issuing `login` on an\n    already-authenticated socket to refresh\
+    \ a token does NOT consume an\n    additional slot. A refresh cannot change account identity; that\
+    \ attempt\n    returns stream error **4030** and requires a new connection.\n"
+  client_ops:
+    login:
+      description: 'Authenticate the socket using a bearer token. Required
+
+        before any other op (except ping). Server emits
+
+        `auth_expired` ~60s before token expiry as a reminder.
+
+        '
+      message:
+        type: object
+        required:
+        - op
+        - token
+        properties:
+          op:
+            type: string
+            enum:
+            - login
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          token:
+            type: string
+            description: Bearer token from POST /auth/token.
+          cancel_on_disconnect:
+            type: boolean
+            description: 'If true, the TEE auto-cancels still-resting orders placed through
+
+              this socket when it disconnects.
+
+              Recommended for market makers.
+
+              '
+    logout:
+      description: End the session cleanly. Server closes the socket.
+      message:
+        type: object
+        required:
+        - op
+        properties:
+          op:
+            type: string
+            enum:
+            - logout
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+    ping:
+      description: Heartbeat (client → server).
+      message:
+        type: object
+        required:
+        - op
+        properties:
+          op:
+            type: string
+            enum:
+            - ping
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+    subscribe:
+      description: Subscribe to one or more channels.
+      message:
+        type: object
+        required:
+        - op
+        - channels
+        properties:
+          op:
+            type: string
+            enum:
+            - subscribe
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          channels:
+            type: array
+            items:
+              type: string
+              enum:
+              - orders
+              - fills
+              - tree
+    unsubscribe:
+      description: Unsubscribe from channels.
+      message:
+        type: object
+        required:
+        - op
+        - channels
+        properties:
+          op:
+            type: string
+            enum:
+            - unsubscribe
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          channels:
+            type: array
+            items:
+              type: string
+    order.place:
+      description: 'Place an order over WS (same shape as POST /orders, just
+
+        encapsulated in the multiplexed socket). Server responds
+
+        with the accepted order id and arrival slot; subsequent state changes arrive
+
+        on the `orders` channel.
+
+        '
+      message:
+        type: object
+        required:
+        - op
+        - params
+        properties:
+          op:
+            type: string
+            enum:
+            - order.place
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          params:
+            $ref: '#/components/schemas/PlaceOrderRequest'
+    order.cancel:
+      description: Cancel an open order with a nonce- and boot-session-bound signature.
+      message:
+        type: object
+        required:
+        - op
+        - order_id
+        - params
+        properties:
+          op:
+            type: string
+            enum:
+            - order.cancel
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          order_id:
+            type: string
+          params:
+            type: object
+            required:
+            - trading_key
+            - cancel_nonce
+            - session_id
+            - trading_key_signature
+            properties:
+              trading_key:
+                type: string
+              cancel_nonce:
+                type: string
+                pattern: ^(0|[1-9][0-9]*)$
+              session_id:
+                type: string
+                description: 'Current 32-byte /info.boot_session_id, hex. Programmatic
+
+                  clients verify the same boot session in the quote-bound
+
+                  transport manifest; substitution causes intake rejection.
+
+                  '
+              trading_key_signature:
+                type: string
+    order.modify:
+      description: 'Atomic cancel + replace (same as PUT /orders/{order_id}): cancel the
+
+        OLD order and rest a fully-signed replacement under one matcher lock.
+
+        The replacement must remain in the original market.
+
+        '
+      message:
+        type: object
+        required:
+        - op
+        - order_id
+        - params
+        properties:
+          op:
+            type: string
+            enum:
+            - order.modify
+          request_id:
+            type: string
+            description: Optional client correlation id echoed in the response.
+          order_id:
+            type: string
+            description: The OLD order id (hex) to replace.
+          params:
+            type: object
+            required:
+            - cancel_signature
+            - cancel_nonce
+            - replacement
+            properties:
+              cancel_signature:
+                type: string
+              cancel_nonce:
+                type: string
+                pattern: ^(0|[1-9][0-9]*)$
+              replacement:
+                $ref: '#/components/schemas/PlaceOrderRequest'
+  server_channels:
+    orders:
+      description: 'Incremental updates for the user''s own orders. A matched order first emits
+
+        `pending_settlement` without changing quantities. Its own confirmed Tx D
+
+        then emits `partially_filled` or `fully_filled`; a definitive failure
+
+        emits terminal `settlement_failed` with `reason` and
+
+        `lock_expiry_slot`. Every event carries the `MarketConfig` PDA and server
+
+        emission time; settlement events also carry a decimal-string match id.
+
+        Failed orders are never auto-rebooked.
+
+        '
+      message:
+        $ref: '#/components/schemas/OrderLifecycleUpdate'
+    fills:
+      description: 'Per-fill change-output events. Each event carries `seq`, `order_id`,
+
+        `consumed_note_commitment`, `output_role`, `change_amount`,
+
+        `change_note_commitment`, `mint`, and `inner_hash`. Clients must resolve
+
+        the consumed opening locally, derive
+
+        `Poseidon3(24, input_inner, output_role)`, and recompute the output
+
+        commitment before accepting it. The input commitment is disclosed only
+
+        to this authenticated per-account recovery stream; the public v11
+
+        settlement consumes an unlinkable note-use tag and does not publish the
+
+        input commitment. A sequence gap triggers chain recovery.
+
+        '
+    tree:
+      description: 'Leaf-append events (for clients that want to keep an
+
+        incremental view of the tree, e.g. dapps showing live
+
+        portfolio state).
+
+        '

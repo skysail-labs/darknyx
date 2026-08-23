@@ -111,7 +111,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 | Trusted-setup ceremony soundness | **Open** — all six Groth16 circuit families use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **Substantially hidden** — settlement publishes commitments and opaque recovery ciphertext, not plaintext trade amounts or clearing prices. Timing, participant activity at deposit/withdraw boundaries, and transaction/account metadata remain observable. |
 | Network-level traffic analysis | **Not mitigated.** TLS hides payload contents; bearer auth gates access and does nothing for this threat. Neither conceals request timing, size, frequency, or the peer relationship — all of which remain observable to anyone on the path. See the transport row below for where TLS actually terminates. |
-| Order intent in transit (T-03) | **Trusted to a SECOND enclave we do not govern.** The `darknyx-tee` binary terminates no TLS: it serves plaintext HTTP on `0.0.0.0:8080` and the dstack gateway terminates TLS in front of it. The gateway is itself an Intel TDX CVM that mutually attests with ours and carries traffic over WireGuard, so the *host operator* cannot read order flow — the frequently-stated "the operator sees plaintext" version of this gap is wrong. What is true, and is the actual exposure: (a) clients verify **our** MRTD and compose hash but nothing pins the **gateway's** measurement, so Phala can change that code with no Darknyx governance event; and (b) nothing binds the TLS session a client verifies a quote *over* to the quote's identity, so a party holding a valid certificate for the gateway domain can front a different backend. Deferred to a mainnet gate with a recorded trigger — see `docs/audit-2026-07-25-tee-infra-daemon-remediation-tracker.md` (T-03) and the mainnet gates in `docs/security-remediation-tracker.md`. |
+| Order intent in transit (T-03) | **Programmatic path: in-enclave RA-TLS, with post-cutover hardening still open.** `darknyx-tee` generates a boot-random, memory-only TLS key and serves TLS 1.3 on `:8443`; dstack's `-8443s` route passes that TLS stream through without terminating it. A separate nonce-bound transport quote commits to the served certificate SPKI, boot session, measured deployment and full ordered signer set. The CPU production compose does not publish plaintext `:8080`. The daemon/SDK verify the certificate on the connection they use and gate the WebSocket upgrade before sending frames. audit_9 TR-02 remains open: a verified pooled socket can die between the preflight check and undici dispatch, so the replacement socket must be SPKI-refused inside the connector before application bytes can leave; TR-05 tracks supervised recovery after a genuine boot rotation. **Deferred surfaces:** the ordinary `trader-host` still sees browser order and stream plaintext, and GPU transport parity awaits confidential-GPU access. Neither is launch-qualified. See `docs/transport-integrity-remediation-plan.md` and `audits/residual-backlog.md`. Network timing and volume remain observable on every path. |
 
 ### Accepted design decision — price fairness is TEE-trusted
 
@@ -1314,13 +1314,16 @@ nonce lets a replacement device reconstruct the hidden inner from seed + chain.
 
 ### Step 4 — Order submission (`POST /orders` → the CVM)
 
-Alice submits her order over TLS to the CVM's HTTP surface — it never
-touches any L1 transaction. **TLS terminates at the dstack gateway, not in
-the `darknyx-tee` process**, which serves plaintext HTTP behind it; the
-gateway is a separate attested TDX CVM reached over WireGuard. Earlier
-revisions of this document said "directly to the enclave", which the
-deployment has never done. The residual exposure and its mainnet gate are the
-transport row in the non-goals table above (T-03). The request body carries the order
+Alice submits her order over the programmatic RA-TLS channel to the CVM's HTTP
+surface — it never touches any L1 transaction. `darknyx-tee` terminates TLS
+itself with a boot-random key; dstack's `-8443s` route passes the TLS stream
+through without learning the plaintext. Before sending credentials or intent,
+the SDK/daemon checks a nonce-bound TDX quote over the certificate SPKI, boot
+session, measured deployment, and complete signer set. The CPU compose exposes
+only this route. The remaining replacement-socket and restart-supervision work
+is tracked in `docs/transport-integrity-remediation-plan.md`; the deferred browser path
+has a separate ordinary-host boundary and must not inherit this claim. The
+request body carries the order
 intent (`side`, `price_limit`, `amount`, `note_commitment`,
 `expiry_slot`, `arrival_nonce`), a required contributory
 X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-note opening

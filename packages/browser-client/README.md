@@ -1,6 +1,12 @@
 # `@darknyx/browser-client`
 
-Production browser implementation of Darknyx's narrow custody lifecycle.
+> **Deferred product surface (2026-08-23).** This implementation is retained
+> for testing and future product evaluation, but browser trading is not an
+> active or launch-qualified Darknyx access path. Do not deploy it for external
+> users or real value. T-03B, R-01, the trader-host plaintext boundary, and the
+> remaining browser custody/recovery findings must close before that changes.
+
+Browser implementation of Darknyx's narrow custody lifecycle.
 
 The UI can provision, unlock, lock, back up, and restore the note credential.
 The 64-byte seed remains in a dedicated bundled Worker; IndexedDB receives only

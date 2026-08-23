@@ -449,15 +449,16 @@ Take the transport work when ANY of these becomes true:
 |---|---|---|
 | Transport | Self-signed cert, key from dstack `get_key()`, reached through the gateway's `s`-suffix TLS passthrough (`<app-id>-<port>s.dstack-…`) | Let's Encrypt cert on a custom domain, TLS terminated by the sidecar inside the CVM |
 | External prerequisites | **None** | A domain whose DNS is hosted at Cloudflare, Linode, or Namecheap, plus a DNS API token and `CERTBOT_EMAIL` as new encrypted secrets |
-| Attestation contract | ~~**Breaking.**~~ **CORRECTED 2026-08-15 — not breaking.** This row said `report_data` is "fully allocated", so binding a certificate would force an SDK+daemon lockstep migration. That is wrong, and it suppressed Option A for a month. `get_quote(report_data)` is a **per-call** API accepting up to 64 caller-selected bytes (`dstack/sdk/rust/src/dstack_client.rs:145`, `guest-agent/src/rpc_service.rs:326-328`); the `nonce ‖ SHA-256(signer set)` layout is *our endpoint's* choice, not a platform allocation. RA-TLS can mint a **separate versioned transport quote** and leave `/attestation` byte-for-byte unchanged. Two further corrections: the RA-TLS key must be **boot-random and memory-only**, never deterministic `dstack.get_key()` (which is stable per app identity, and `app_id` survives compose changes); and the gateway's own certificate evidence is **not** a substitute, because dstack persists the gateway TLS key in its distributed KV store and reloads it across boots without re-attesting. See [`../../docs/transport-integrity-plan.md`](../../docs/transport-integrity-plan.md) §4, §6.3. | Unchanged; the sidecar publishes its own quote at `/evidences/` |
+| Attestation contract | ~~**Breaking.**~~ **CORRECTED 2026-08-15 — not breaking.** This row said `report_data` is "fully allocated", so binding a certificate would force an SDK+daemon lockstep migration. That is wrong, and it suppressed Option A for a month. `get_quote(report_data)` is a **per-call** API accepting up to 64 caller-selected bytes (`dstack/sdk/rust/src/dstack_client.rs:145`, `guest-agent/src/rpc_service.rs:326-328`); the `nonce ‖ SHA-256(signer set)` layout is *our endpoint's* choice, not a platform allocation. RA-TLS can mint a **separate versioned transport quote** and leave `/attestation` byte-for-byte unchanged. Two further corrections: the RA-TLS key must be **boot-random and memory-only**, never deterministic `dstack.get_key()` (which is stable per app identity, and `app_id` survives compose changes); and the gateway's own certificate evidence is **not** a substitute, because dstack persists the gateway TLS key in its distributed KV store and reloads it across boots without re-attesting. See [`../../docs/transport-integrity-remediation-plan.md`](../../docs/transport-integrity-remediation-plan.md) §2. | Unchanged; the sidecar publishes its own quote at `/evidences/` |
 | Trust boundary | The Darknyx binary's own measurement | The CVM, via a third-party image we do not build but must add to `compose_hash` |
 | Browser clients | Rejected (self-signed) | Supported |
 | Iteration hazard | None | Let's Encrypt allows **5 certificates per identifier set per week** — enough to lock out a redeploy loop mid-window |
 
 Note the tracker's earlier recorded decision ("ship the supported
 `dstack-ingress` sidecar first") predates two facts: the domain prerequisite, and
-that `report_data` has no free space. Neither option is obviously cheaper; A is
-less infrastructure and more code, B the reverse.
+that `report_data` is caller-selected per quote request rather than globally
+allocated by the platform. Neither option is obviously cheaper; A is less
+infrastructure and more code, B the reverse.
 
 ### DNS migration playbook (prerequisite for option B only)
 

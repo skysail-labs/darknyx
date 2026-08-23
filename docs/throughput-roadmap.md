@@ -330,7 +330,8 @@ keeping the property. Bounded work, not a redesign.
 
 **Do NOT reach for reverting to the gateway-terminated transport to solve this.**
 That trades the plaintext hop back (reopening T-03P) for throughput that this
-item buys without it. See `transport-integrity-plan.md` §5.5.
+item buys without it. See `transport-integrity-remediation-plan.md` §2.4 and
+§3.2.
 
 ## Related, separate track (not settle-throughput, but the other proving gate)
 

@@ -64,11 +64,11 @@ tags:
     description: Admin-gated account provisioning, suspension, and token invalidation.
   - name: attestation
     description: |
-      Darknyx-engine attestation plus the dstack gateway's separate evidence
-      bundle. Verify the engine quote before any sensitive write. The
-      /evidences/* endpoints are served by dstack-ingress, not darknyx-tee, and
-      do not by themselves pin the gateway measurement or bind the verified
-      engine identity to the TLS session.
+      Darknyx engine and transport attestation plus the deployment gateway's
+      separate evidence bundle. Programmatic clients verify the certificate on
+      their actual connection with `/transport-attestation` before any
+      credential or sensitive write. `/evidences/*` describes surrounding
+      ingress infrastructure and is not a substitute for the engine check.
   - name: info
     description: |
       Application/instance metadata, boot-session id, and settlement signers.
@@ -372,17 +372,17 @@ components:
             the client's attestation check pins its EXPECTED_COMPOSE_HASH
             against the compose-hash read from the DCAP-VERIFIED quote's
             RTMR3 event log, NOT against this self-reported field (a
-            malicious gateway can put anything here).
+            malicious or unverified endpoint can put anything here).
         boot_session_id:
           type: string
           pattern: '^[0-9a-fA-F]{64}$'
           description: |
             Fresh 32-byte process-boot session id, hex. Every canonical place
             and cancel intent binds this value, so requests prepared before a
-            CVM restart cannot be replayed into the new process. This field is
-            read from unauthenticated `/info` and is NOT quote-bound. A gateway
-            substituting it causes intake rejection (denial of service); it
-            cannot make the TEE accept a stale session.
+            CVM restart cannot be replayed into the new process. The value read
+            from `/info` must equal the boot session bound by the
+            `/transport-attestation` manifest. It is not part of the separate
+            legacy `/attestation` report_data layout.
         tcb_info:
           type: object
           required: [mrtd]
@@ -419,10 +419,11 @@ components:
     RaTlsEvidence:
       type: object
       description: |
-        Gateway-served evidence files describing the ingress certificate and
-        confidential deployment. This is separate from the Darknyx engine's
-        `/attestation` response. The current Darknyx client flow does not pin
-        the gateway measurement or bind the engine quote to this TLS session.
+        Gateway-served evidence files describing the surrounding ingress
+        deployment. This is separate from the Darknyx engine's `/attestation`
+        and `/transport-attestation` responses. On the programmatic RA-TLS
+        route the gateway passes the engine's TLS stream through, so this bundle
+        is not the session's transport identity.
       properties:
         quote_json:
           type: string
@@ -445,7 +446,7 @@ components:
       type: object
       description: |
         One isolated market served by this attested venue. Every returned
-        instrument shares the same gateway/session identity but has its own
+        instrument shares the same verified-origin/session identity but has its own
         governed mint pair, book, oracle, and proof batches.
       required: [symbol, base_mint, quote_mint, tick_size, min_order_size, trading_enabled, oracle]
       properties:
@@ -663,8 +664,9 @@ components:
           description: |
             Required 32-byte boot session id from `GET /info`, hex, bound into
             the signature. A stale session is rejected even when every other
-            field and signature is valid. The value is not quote-bound; a
-            substituted value causes rejection rather than stale-session
+            field and signature is valid. Programmatic clients confirm that the
+            value matches the boot session bound by `/transport-attestation`;
+            a substituted value causes rejection rather than stale-session
             acceptance.
 
     PlaceOrderResponse:
@@ -679,10 +681,22 @@ components:
       type: object
       required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
-        trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
-        cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$', description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients. }
-        session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. It is not quote-bound; substitution causes rejection. }
-        trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
+        trading_key:
+          type: string
+          description: 32-byte Ed25519 pubkey, hex.
+        cancel_nonce:
+          type: string
+          pattern: '^(0|[1-9][0-9]*)$'
+          description: Canonical decimal u64 string; strings preserve the full range in JavaScript clients.
+        session_id:
+          type: string
+          description: |
+            32-byte hex boot session from /info; bound into the cancel signature
+            so a captured body cannot be replayed in a later boot. Programmatic
+            clients verify the same value in the transport-attestation manifest.
+        trading_key_signature:
+          type: string
+          description: 64-byte canonical cancel signature, hex.
 
     CancelOrderResponse:
       type: object
@@ -1049,7 +1063,9 @@ components:
         transitions carry `match_id` as a decimal string so JavaScript clients
         do not lose u64 precision.
       properties:
-        order_id: { type: string, description: 16-byte order id, hex. }
+        order_id:
+          type: string
+          description: 16-byte order id, hex.
         market_id: { type: string, description: Base58 MarketConfig PDA. }
         match_id:
           type: string
@@ -1566,7 +1582,7 @@ paths:
   /transport-attestation:
     get:
       tags: [attestation]
-      summary: Quote binding the served TLS certificate to this enclave (T-03P).
+      summary: Quote binding the served TLS certificate to this enclave.
       description: |
         Unauthenticated, and necessarily so: a client must verify the transport
         BEFORE it sends any credential or order intent.
@@ -1647,9 +1663,9 @@ paths:
         Returns application and instance metadata, the current boot-session
         identifier, and the complete ordered settlement-signer set. The
         compose hash here is a convenience value; security-sensitive clients
-        verify the measured event log returned by `/attestation`. The boot
-        session is replay-scoping data validated by intake, but is not itself
-        quote-bound.
+        verify the measured event log returned by attestation. The boot session
+        is replay-scoping data validated by intake and must equal the value
+        bound by the `/transport-attestation` manifest.
       responses:
         '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
@@ -1663,9 +1679,10 @@ paths:
       tags: [attestation]
       summary: (Served by dstack-ingress, not darknyx-tee) TDX quote bundle.
       description: |
-        Evidence for the gateway's confidential deployment, not the Darknyx
-        engine quote from `/attestation`. Fetching it does not by itself pin the
-        gateway measurement or bind the engine quote to this TLS session.
+        Evidence for the surrounding gateway deployment, not the Darknyx
+        engine quote from `/attestation` or the boot-certificate binding from
+        `/transport-attestation`. It is not the programmatic session's trust
+        root because that route passes the engine's TLS through.
       responses:
         '200':
           description: Quote JSON bundle (raw).
@@ -1677,9 +1694,8 @@ paths:
       tags: [attestation]
       summary: (Served by dstack-ingress) Current TLS certificate.
       description: |
-        The gateway certificate. It is not a certificate terminated by the
-        darknyx-tee process and is not bound to the engine's `/attestation`
-        quote by the current client flow.
+        A gateway evidence certificate. It is not the boot-random certificate
+        served by `darknyx-tee` on the programmatic RA-TLS route.
       responses:
         '200':
           description: PEM-encoded cert.
@@ -1692,8 +1708,7 @@ paths:
       summary: (Served by dstack-ingress) Let's Encrypt account URI.
       description: |
         Gateway ACME-account metadata. Its presence is not a substitute for
-        governing and pinning the gateway measurement and DNS/certificate
-        policy.
+        verifying the engine's boot-random certificate and transport quote.
       responses:
         '200':
           description: ACME account JSON.
@@ -1706,7 +1721,7 @@ paths:
       summary: (Served by dstack-ingress) Hash of cert.pem + acme-account.json.
       description: |
         Integrity metadata for the gateway evidence bundle. It does not bind
-        the Darknyx engine quote to the client's TLS session.
+        the Darknyx engine's boot certificate to the client's session.
       responses:
         '200':
           description: Plain-text hash.
@@ -1721,8 +1736,9 @@ paths:
       summary: List all tradable instruments.
       description: |
         Returns every independently routed market served by this one attested
-        venue. The array may contain multiple pairs; all use the same gateway,
-        bearer session, and `/v1/stream` connection.
+        venue. The array may contain multiple pairs. REST and `/v1/stream` use
+        separate sockets while sharing the same verified enclave origin, boot
+        identity, and bearer session.
       responses:
         '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
@@ -2299,7 +2315,10 @@ paths:
                 required: [slot, unix_ms]
                 properties:
                   slot: { type: integer, format: uint64 }
-                  unix_ms: { type: integer, format: uint64, description: Server unix time, milliseconds. }
+                  unix_ms:
+                    type: integer
+                    format: uint64
+                    description: Server unix time, milliseconds.
 
   # ───── transparency ────────────────────────────────────────────────────────
 
@@ -2419,16 +2438,12 @@ x-websocket:
     upgraded, the session is bounded by the per-account limits and the
     connection caps instead.
 
-    TLS terminates at the dstack gateway — itself an attested confidential VM —
-    which reaches this service over a mutually attested tunnel. Verify
-    `/attestation` before sending private order intent.
-
-    Two limits on what that verification proves today: it covers THIS service's
-    image measurement and not the gateway's, and it does not authenticate the
-    TLS session it was fetched over — nothing binds the quote to the connection's
-    certificate. Binding them requires terminating TLS inside this service with
-    an attestation-bound certificate, which is tracked and gated ahead of
-    external users (T-03), and has not shipped.
+    On the programmatic route, TLS terminates inside this service with a
+    boot-random, memory-only key; the deployment gateway passes the encrypted
+    stream through. Before login, verify the certificate on the WebSocket
+    upgrade connection against `/transport-attestation`, including the measured
+    compose hash, boot session and finalized signer-set pin. A quote fetched on
+    an unrelated probe connection does not authenticate this socket.
 
     Heartbeat: client sends `op: ping` every ≤30s; server
     responds with `op: pong`. Server drops sessions silent for >60s.
@@ -2545,7 +2560,12 @@ x-websocket:
             properties:
               trading_key: { type: string }
               cancel_nonce: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
-              session_id: { type: string, description: Current 32-byte /info.boot_session_id, hex. Not quote-bound; substitution causes intake rejection. }
+              session_id:
+                type: string
+                description: |
+                  Current 32-byte /info.boot_session_id, hex. Programmatic
+                  clients verify the same boot session in the quote-bound
+                  transport manifest; substitution causes intake rejection.
               trading_key_signature: { type: string }
 
     order.modify:

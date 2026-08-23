@@ -14,7 +14,7 @@
 //! `main_service.rs`). Its certificate quote therefore proves where the key was
 //! *generated*, not which process is *serving* it — a different or downgraded
 //! build holding that key serves TLS while replaying historical evidence. See
-//! `docs/transport-integrity-plan.md` §4.
+//! `docs/transport-integrity-remediation-plan.md` §2.3 and §3.1.
 //!
 //! Two things follow, and both are enforced here:
 //!

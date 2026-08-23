@@ -1,5 +1,10 @@
 # Darknyx client core
 
+> **Product status:** the browser trader that consumes this package is
+> deferred and not launch-qualified. This package remains the preserved
+> platform-neutral implementation boundary; its presence is not a claim that
+> browser access is currently supported for external users or real value.
+
 This package is the platform-neutral boundary for the trader product. It does
 not contain browser custody, proving, Solana wallet code, or UI components.
 
