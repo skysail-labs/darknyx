@@ -13,7 +13,8 @@
 //!   6. snarkjs Groth16 proof generation.
 //!   7. `groth16-solana` verification producing `Ok(())`.
 //!
-//! If this test passes, the VALID_SPEND ZK pipeline is sound end to end.
+//! A pass means this fixture round-trips and the tampering cases below are
+//! rejected — not that VALID_SPEND holds for all inputs.
 
 use std::fs;
 use std::path::PathBuf;

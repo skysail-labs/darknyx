@@ -80,7 +80,12 @@ for rc in "$rc_ci" "$rc_cs"; do
     exit "$rc"
   fi
 done
-hits=$(printf '%s\n%s' "$ci_hits" "$cs_hits" | grep -v '^$' | sort -u || true)
+# `awk 'NF'` drops blank lines and exits 0 whether or not it matched, so no
+# `|| true` is needed here. An earlier revision used `grep -v '^$' | ... || true`,
+# which swallowed genuine pipeline failures as well as the expected no-match
+# case — leaving $hits empty and the gate reporting OK. That is the same
+# fail-open shape the readable-target check above exists to prevent.
+hits=$(printf '%s\n%s' "$ci_hits" "$cs_hits" | awk 'NF' | sort -u)
 
 if [ -n "$hits" ]; then
   echo "ERROR: implementation-process markers found" >&2
