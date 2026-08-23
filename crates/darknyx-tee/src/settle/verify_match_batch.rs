@@ -14,11 +14,11 @@
 //!   2. `proof: Groth16Proof`    — 256 bytes (pi_a 64 + pi_b 128 +
 //!      pi_c 64), produced by the prover
 //!
-//! The marker TTL is NOT an argument (S-04). It used to be, bounded only to
-//! `(current_slot, current_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, which
-//! let anyone replaying this proof pick a 1-slot TTL, win the `init`, and kill
-//! every settle in the batch while the locks were already down. The program
-//! derives it now.
+//! **The marker TTL is not an argument — the program derives it.** A
+//! caller-supplied TTL, even one bounded to
+//! `(current_slot, current_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, lets
+//! anyone replaying this proof pick a 1-slot TTL, win the `init`, and kill every
+//! settle in the batch while the locks are already down (audit S-04).
 //!
 //! Accounts (positional, mirror `VerifyMatchBatch<'info>`):
 //!   `[0]` payer            — signer + writable (the TEE keypair;

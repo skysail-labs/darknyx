@@ -79,9 +79,8 @@ const RATE_LIMIT_PER_WINDOW: u32 = 20;
 /// allowance at the start of the next, admitting up to 2x the ceiling across a
 /// boundary. A token bucket would smooth that. This is acceptable here because
 /// the ceiling exists to bound TDX quote work, not to enforce a precise rate,
-/// and 2x a deliberately generous bound is still bounded — but the comment
-/// used to say "token bucket", which described burst behaviour the code does
-/// not have.
+/// and 2x a deliberately generous bound is still bounded. Note that this is a
+/// fixed window, NOT a token bucket — it has no burst allowance.
 #[derive(Debug)]
 pub struct TransportAttestationRateLimiter {
     inner: Mutex<RateWindow>,
@@ -186,10 +185,10 @@ pub async fn handler(
 ) -> Result<Json<TransportAttestationResponse>, super::error::ApiError> {
     // 1. Validate the caller's input BEFORE charging the limiter.
     //
-    //    The limiter used to be charged first, on the reasoning that a flood
-    //    should cost a mutex rather than a TDX round-trip. That is right about
-    //    quote cost and wrong about availability: parsing 64 hex characters is
-    //    cheaper still, so charging before it let a flood of `?nonce=zz`
+    //    Charging the limiter first is tempting — a flood should cost a mutex
+    //    rather than a TDX round-trip. That is right about quote cost and wrong
+    //    about availability: parsing 64 hex characters is cheaper still, so
+    //    charging before it lets a flood of `?nonce=zz`
     //    consume the entire global allowance and deny honest clients the ONE
     //    pre-auth call they must make before they can do anything else. A
     //    malformed request now costs the attacker a 400 and costs the budget

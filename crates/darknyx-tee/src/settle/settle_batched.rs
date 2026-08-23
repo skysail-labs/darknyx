@@ -189,8 +189,7 @@ pub fn batch_alt_addresses<'a>(
         push(note_lock_pda(&p.note_f_use_tag).0);
         // consumed-note entries for both inputs — Tx D inits these, and
         // ALT-referencing them (vs inline) is what gives the change-note /
-        // sharded settle tx its headroom under the 1232-byte cap. (The
-        // nullifier entries that used to live here were dropped.)
+        // sharded settle tx its headroom under the 1232-byte cap.
         push(consumed_note_pda(&p.note_a_use_tag).0);
         push(consumed_note_pda(&p.note_b_use_tag).0);
     }

@@ -20,18 +20,15 @@
 //! expand the canonical order encoding (and therefore without a
 //! cross-language signing-contract change — CLAUDE.md §7).
 //!
-//! The order schema used to carry a `nullifier` here too. It was
-//! removed (audit 2026-07-25, S-09): payload v9 dropped nullifiers
-//! from settlement and nothing ever read the intake copy, so the
-//! enclave was holding `Poseidon3(DOMAIN_NULL, spending_key,
-//! inner_hash)` for every collateral note and buying nothing with it.
-//! That value is exactly what the note's eventual `withdraw`
-//! publishes on-chain, so retaining it let anyone who could read
-//! enclave memory — a disclosure bug, a core dump captured by the
-//! host, a debug-endpoint regression — join intake nullifiers against
-//! published ones and deanonymise which orders became which
-//! withdrawals. That defeats unlinkability without any custody
-//! compromise, which is why holding it was worse than useless.
+//! **The order schema deliberately carries no `nullifier`, and must not.**
+//! Settlement does not consume one, so an intake copy would buy nothing — while
+//! `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` is exactly the value the
+//! note's eventual `withdraw` publishes on-chain. Holding it for every
+//! collateral note means anyone who can read enclave memory — a disclosure bug,
+//! a host-captured core dump, a debug-endpoint regression — can join intake
+//! nullifiers against published ones and deanonymise which orders became which
+//! withdrawals. That defeats unlinkability with no custody compromise at all
+//! (audit S-09).
 //!
 //! Spending keys, viewing keys, and blinding-derivation seeds never
 //! appear here — only the per-note opening fields the circuit

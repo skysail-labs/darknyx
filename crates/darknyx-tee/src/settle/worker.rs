@@ -1475,7 +1475,7 @@ async fn run_batch_settle_inner(
     // ── 5. Enqueue expiry-gated marker sweep (Tx E) — ASYNC ──
     // The marker is 1:N rent-reclaim bookkeeping; nothing downstream depends on
     // it (the next batch has a different Merkle root → a different marker PDA).
-    // Sending + confirming it INLINE used to block the serial pipeline's next
+    // Sending + confirming it INLINE would block the serial pipeline's next
     // batch on a full confirmation for a tx that touches no user funds. Hand the
     // root to the background sweeper (`marker_sweep::spawn_marker_sweeper`),
     // which reads the marker expiry and waits until E before closing. A closed

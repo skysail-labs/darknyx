@@ -2,9 +2,9 @@
 //! critical path.
 //!
 //! The marker is 1:N rent-reclaim bookkeeping (one per batch, seeded by the
-//! batch root). The settle worker used to send + confirm the close INLINE at the
-//! batch tail (`worker.rs`), which — under the serial pipeline
-//! (`SETTLE_CONCURRENCY=1`) — blocked the next batch on a full confirmation
+//! batch root). Closing it INLINE at the batch tail (`worker.rs`) would —
+//! under the serial pipeline (`SETTLE_CONCURRENCY=1`) — block the next batch
+//! on a full confirmation
 //! (~1 slot on mainnet, ~10 s on devnet via drop+rebroadcast) for a tx that
 //! touches no user funds and that nothing downstream depends on: the next batch
 //! always has a different Merkle root → a different marker PDA (the tree is
