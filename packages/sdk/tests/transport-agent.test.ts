@@ -1,5 +1,5 @@
 /**
- * Node actual-socket transport adapter (T-03P, Phase 2b).
+ * Node actual-socket transport adapter (T-03P).
  *
  * Two kinds of test here:
  *

@@ -305,8 +305,9 @@ cargo build --examples -p darkpool-crypto           # parity tests shell out to 
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check-no-debug-endpoints.sh            # /__debug must stay off by default (SW-33)
 bash scripts/check-no-process-markers.sh            # headers must say what is TRUE now, not
-                                                    #   which PR made it true. Covers darknyx-tee
-                                                    #   + darkpool-crypto; see §10.5.
+                                                    #   which PR made it true. Covers the four
+                                                    #   Rust crates + ALL of packages/ (.ts/.tsx/
+                                                    #   .mjs/.cjs/.js); see §10.5.
 bash scripts/check-no-doctests.sh                   # nextest skips doctests; this
                                                     #   fails if one ever appears
 cargo nextest run --workspace                       # unit + litesvm integration.
@@ -1050,9 +1051,11 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
 
 ## 10.5 Comment conventions
 
-Applies to `crates/darknyx-tee` today (enforced there by
-`scripts/check-no-process-markers.sh`); extend it to other crates as they are
-cleaned up. Much of this repo is pinned by contracts it does not own — on-chain
+Applies to `crates/darknyx-tee`, `crates/darkpool-crypto`,
+`crates/darkpool-matcher`, `programs/vault`, and every package under
+`packages/` — all enforced by `scripts/check-no-process-markers.sh`. Extend it
+to new surfaces as they are cleaned up; a target absent from that script's
+`DEFAULT_TARGETS` is unguarded, not clean. Much of this repo is pinned by contracts it does not own — on-chain
 account layouts, circuit public inputs, wire formats mirrored in the SDK — and a
 header comment is usually the only place those constraints sit next to the code
 that depends on them.

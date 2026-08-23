@@ -1,12 +1,11 @@
 /**
- * Phase-5 devnet E2E helper — thin shell-out wrapper around
+ * Devnet E2E test helper — thin shell-out wrapper around
  * `node_modules/.bin/snarkjs groth16 fullprove`.
  *
- *   TODO(Phase-6): replace this with a real `WebProverSuite` implementation
- *   in `packages/sdk/src/zk/` that either (a) imports the `snarkjs` npm
- *   library in-process or (b) targets the browser via WebAssembly. This
- *   helper lives under `tests/helpers/` specifically so the SDK itself
- *   stays dependency-free on a CLI binary.
+ * It lives under `tests/helpers/`, not in `src/`, so the SDK itself never
+ * takes a dependency on a CLI binary. The shipped in-process prover is
+ * `BrowserProverSuite` (`packages/browser-client/src/prover/`), which the
+ * browser uses; this helper serves the Node test path only.
  *
  * What this does, mirroring `programs/vault/tests/common/mod.rs::snarkjs_fullprove`:
  *

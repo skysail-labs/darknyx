@@ -1,6 +1,6 @@
 /**
  * REST order client — thin wrappers over the authenticated order endpoints that
- * parse the Phase-1 error envelope into a typed {@link DarknyxApiError}.
+ * parse the error envelope into a typed {@link DarknyxApiError}.
  *
  * Bodies are built by the SDK: a place body by `buildOrder`, a cancel body by
  * {@link buildCancel}, a modify body by composing a cancel + a place. The client

@@ -1,5 +1,5 @@
 /**
- * Phase-5 — smoke test for the shell-out snarkjs prover helper.
+ * Smoke test for the shell-out snarkjs prover helper.
  *
  * Requires:
  *   - `npm install` has been run (so `node_modules/.bin/snarkjs` exists).
@@ -59,7 +59,7 @@ function fixedSeed(): Uint8Array {
   return seed;
 }
 
-maybeDescribe("Phase 5 — snarkjs-prover helper: VALID_WALLET_CREATE", () => {
+maybeDescribe("snarkjs-prover helper: VALID_WALLET_CREATE", () => {
   it(
     "[fullprove_emits_pi_a_pi_b_pi_c_and_public_inputs] end-to-end",
     { timeout: 60_000 },

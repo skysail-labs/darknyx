@@ -8,7 +8,7 @@
  * `note_e/f_commitment` — exactly what a by-order_id index needs. So we decode
  * the ix data.
  *
- * Amount-privacy (P3b): the settle ix no longer carries any plaintext amounts
+ * Amount-privacy: the settle ix no longer carries any plaintext amounts
  * (trade size / change / fees / clearing price). The off-TEE indexer is
  * UNTRUSTED, so this is by design — it sees only commitments + order ids and
  * acts as a by-order_id COMMITMENT LOCATOR. Each client reconstructs its own
@@ -50,7 +50,7 @@ const u64 = (v: DataView, off: number) => v.getBigUint64(off, true);
 
 /** Field-level decode of a `MatchResultPayload` (PAYLOAD_LEN bytes).
  *
- *  Amount-privacy (P3b): commitments + order ids only — no plaintext amounts.
+ *  Amount-privacy: commitments + order ids only — no plaintext amounts.
  *  Recovery v3: plus the opaque 128-byte `fill_recovery` bundle
  *  (`ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3"`),
  *  which the indexer stores but cannot decrypt. */
@@ -134,7 +134,7 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
 
 /** One settled fill, keyed by the order that produced it.
  *
- *  Amount-privacy (P3b): the indexer is a commitment LOCATOR — it carries the
+ *  Amount-privacy: the indexer is a commitment LOCATOR — it carries the
  *  change-note commitment (and whether the side filled exactly) but NOT the
  *  amount. The client reads the amount from its per-account FillMemo. */
 export interface SettleFill {

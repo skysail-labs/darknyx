@@ -82,7 +82,7 @@ describe("MatchResultPayload decode", () => {
     expect(p.noteCcommitment).toBe(hexN(0x0c, 32));
     expect(p.noteEcommitment).toBe(hexN(0xee, 32));
     expect(p.noteFcommitment).toBe(hexN(0xff, 32));
-    // Amount-privacy (P3b): no amounts on the wire anymore — only batch_slot
+    // Amount-privacy: no amounts on the wire anymore — only batch_slot
     // remains of the trailing u64s.
     expect(p.batchSlot).toBe(99n);
   });

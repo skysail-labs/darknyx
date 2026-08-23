@@ -1,5 +1,5 @@
 /**
- * Verified WebSocket transport (T-03P, Phase 2c).
+ * Verified WebSocket transport (T-03P).
  *
  * # The problem
  *

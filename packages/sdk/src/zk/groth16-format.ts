@@ -4,7 +4,7 @@
  *
  * No `node:*` imports — this module is safe to load in browsers, Workers, and
  * Edge runtimes. The Node-only `tests/helpers/snarkjs-prover.ts` (which shells
- * out to the `snarkjs` CLI) and the browser `WebProverSuite` (which calls
+ * out to the `snarkjs` CLI) and the browser `BrowserProverSuite` (which calls
  * `snarkjs.groth16.fullProve` in a Web Worker) both delegate the byte-level
  * formatting here.
  *

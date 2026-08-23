@@ -1,5 +1,5 @@
 /**
- * trader-host CVM transport threading (T-03P, Phase 2).
+ * trader-host CVM transport threading (T-03P).
  *
  * The property under test is a routing one, and it has two halves that are
  * easy to get half-right:

@@ -22,7 +22,12 @@ DEFAULT_TARGETS=(
   "$ROOT/crates/darkpool-crypto"
   "$ROOT/crates/darkpool-matcher"
   "$ROOT/programs/vault"
+  "$ROOT/packages"
 )
+# `packages` is listed as ONE target rather than as its seven workspace members,
+# deliberately: a new package is then covered the day it is created. Enumerating
+# members instead would have left `client-prover-bench` unguarded, since it is
+# pure .mjs and matches no .ts glob.
 # darknyx-tee-loadgen is deliberately ABSENT. Its run.rs numbers the sequential
 # stages of a load-test run ("Phase 1: plan + deposit", "Phase 2: prove all
 # VALID_INPUT concurrently"), which the `phase[- ]N` pattern cannot tell apart
@@ -44,6 +49,18 @@ for t in "${TARGETS[@]}"; do
   fi
 done
 
+# Source extensions only, and never generated output. The .devnet exclusion is
+# load-bearing: `packages/browser-client/.devnet/` holds minified esbuild
+# bundles whose mangled identifiers match both patterns dozens of times, so
+# without it the guard fails on any tree where the browser release has been
+# built. dist/ and node_modules/ are the same hazard.
+SCAN_OPTS=(
+  --include='*.rs' --include='*.ts' --include='*.tsx'
+  --include='*.mjs' --include='*.cjs' --include='*.js'
+  --exclude-dir=node_modules --exclude-dir=dist
+  --exclude-dir=.devnet --exclude-dir=build --exclude-dir=coverage
+)
+
 # Matched forms: 4g.3 / PR 4e.2 / bare "PR 4g" / Phase 2 / slice 5.
 #
 # The bare "PR <n><letter>" form matters: an earlier revision required a ".N"
@@ -55,13 +72,24 @@ done
 # buckets") plus a spec citation ("Spec §20.6 step 73"), and darknyx-tee had a
 # numeric increment ("0..=100 step 10"). At ~8% precision the rule stops being
 # a guard and starts pressuring correct prose into being reworded around it.
+# TypeScript reproduced this independently at 0 of 5 — every hit there cites a
+# numbered step of the attestation verification procedure.
+#
+# Bare "phase" (no digit) must NEVER be matched either. The daemon models order
+# lifecycle as `OrderPhase` / `TERMINAL_PHASES`, giving ~140 uses of the word as
+# load-bearing domain vocabulary. The digit is the entire reason this pattern
+# reaches 100% precision on TypeScript; dropping it inverts the ratio.
 # Two patterns, because they need different case sensitivity.
 #
 # CI_PATTERN is case-insensitive: "PR 4g.3", "PR-4d", "4e.2", "Phase 2",
-# "Phase-1b", "slice 5". Spellings were added as earlier sweeps missed them —
-# the hyphenated "Phase-5" and "PR-4d" forms both slipped past a pattern built
-# only from the space-separated examples already seen.
-CI_PATTERN='(\bPR[- ]?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase[- ][0-9]+[a-z]?\b)'
+# "Phase-1b", "slice 5", "5-phase". Spellings were added as earlier sweeps
+# missed them — the hyphenated "Phase-5" and "PR-4d" forms both slipped past a
+# pattern built only from the space-separated examples already seen, and the
+# REVERSED "5-phase" form then slipped past that one. One TypeScript file
+# carried both spellings on two lines and only the second was caught. Enumerate
+# the shapes a marker can take; do not extrapolate from the ones in front of
+# you.
+CI_PATTERN='(\bPR[- ]?[0-9]+[a-z]?(\.[0-9]+[a-z]*)?\b|\b[0-9]+[a-z]\.[0-9]+[a-z]*\b|\bslice [0-9]+|\bphase[- ][0-9]+[a-z]?\b|\b[0-9]+-phase\b)'
 
 # CS_PATTERN is case-SENSITIVE: the "P0".."P7" work-item series, as in
 # "Amount-privacy (P3b)". It must not be folded into the case-insensitive pass —
@@ -74,9 +102,9 @@ CS_PATTERN='\bP[0-9][a-z]?\b'
 # other non-zero status is a real failure (unreadable target, bad pattern) and
 # must NOT be reported as a pass.
 set +e
-ci_hits=$(grep -rniE "$CI_PATTERN" --include='*.rs' "${TARGETS[@]}")
+ci_hits=$(grep -rniE "$CI_PATTERN" "${SCAN_OPTS[@]}" "${TARGETS[@]}")
 rc_ci=$?
-cs_hits=$(grep -rnE "$CS_PATTERN" --include='*.rs' "${TARGETS[@]}")
+cs_hits=$(grep -rnE "$CS_PATTERN" "${SCAN_OPTS[@]}" "${TARGETS[@]}")
 rc_cs=$?
 set -e
 for rc in "$rc_ci" "$rc_cs"; do

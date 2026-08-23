@@ -1,5 +1,5 @@
 /**
- * Node actual-socket transport adapter (T-03P, Phase 2b).
+ * Node actual-socket transport adapter (T-03P).
  *
  * # The problem this solves, and the wrong way to solve it
  *

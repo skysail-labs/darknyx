@@ -15,7 +15,7 @@ export interface FillRow extends SettleFill {
   slot: number;
 }
 
-// Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
+// Amount-privacy: the on-chain settle ix no longer carries amounts, so
 // the indexer stores commitments + a partial-fill flag only (no change_amount /
 // clearing_price columns). Recovery v3 stores the consumed input's note-use TAG
 // (v11 — the settle ix no longer carries the consumed commitment), the exact

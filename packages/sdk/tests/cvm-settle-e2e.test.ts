@@ -1,5 +1,5 @@
 /**
- * Phase 3b/3c — first REAL CVM-driven settle e2e.
+ * The CVM-driven settle e2e: a real enclave matches AND settles on devnet.
  *
  * Unlike `devnet-trade-flow` (where the SDK plays the TEE and drives
  * lock/verify/settle itself), here the **CVM** does the matching AND
@@ -145,7 +145,7 @@ const CHAIN_RECOVERY = process.env.DARKNYX_CVM_CHAIN_RECOVERY === "1";
 const REMATCH = FILLS && process.env.DARKNYX_CVM_REMATCH === "1";
 
 maybeDescribe(
-  "Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM settle)",
+  "CVM-driven settle e2e (deposit → CVM match → CVM settle)",
   () => {
     let cfg: E2EConfig;
     let conn: Connection;
@@ -821,7 +821,7 @@ maybeDescribe(
           console.log(
             `  · indexer fills[${buyerId.slice(0, 8)}]: ${JSON.stringify(idxFills)}`,
           );
-          // Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR — it
+          // Amount-privacy: the indexer is a COMMITMENT LOCATOR — it
           // surfaces THAT the buyer got a change note + its commitment, but NOT
           // the amount. The spendable amount + opening come from the FillMemo.
           const change = idxFills.find(

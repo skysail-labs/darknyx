@@ -1,5 +1,5 @@
 /**
- * The cuckoo-proxy attack, end to end against real TLS sockets (T-03P, Phase 3).
+ * The cuckoo-proxy attack, end to end against real TLS sockets (T-03P).
  *
  * Everything else in this suite tests a piece. This tests the attack.
  *

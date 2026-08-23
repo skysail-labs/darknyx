@@ -101,7 +101,7 @@ const SETTLE_TIMEOUT_MS = Number(
   process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "90000",
 );
 
-maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
+maybeDescribe("CVM self-trade prevention", () => {
   let cfg: E2EConfig;
   let conn: Connection;
   let admin: Keypair;
