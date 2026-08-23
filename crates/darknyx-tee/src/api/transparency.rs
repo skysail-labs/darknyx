@@ -103,11 +103,10 @@ pub struct Reserves {
     /// Per-shard roots + counts. There is no single global root — each shard
     /// has its own — so this is the only lossless form.
     ///
-    /// SW-06: this used to be a bare `merkle_root` (shard 0's) sitting beside a
-    /// `leaf_count` (the all-shard SUM). The code comment said so, but as two
-    /// adjacent public fields they read as a matched pair, and a consumer that
-    /// folded the count against that root would get a root the tree never had.
-    /// The names now say which is which.
+    /// Per-shard roots are named as such deliberately. A bare `merkle_root`
+    /// (shard 0's) sitting beside a `leaf_count` (the all-shard SUM) reads as a
+    /// matched pair no matter what a comment says, and a consumer folding that
+    /// count against that root gets a root the tree never had (audit SW-06).
     pub shards: Vec<ShardRoot>,
     /// Shard 0's root, kept for pre-sharding consumers. Prefer `shards`.
     pub shard0_merkle_root: String,

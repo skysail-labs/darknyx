@@ -482,8 +482,9 @@ mod tests {
 
     // ── SW-01: `GET /settlement/status/{batch_id}` is readable by ANY
     //    authenticated account, so the response must carry only closed-set
-    //    labels. It used to serialize the internal failure text, and one
-    //    internal error interpolated the RPC endpoint — credential included.
+    //    labels. Serializing the internal failure text here leaks whatever an
+    //    error happened to format into itself — one such error interpolated the
+    //    RPC endpoint, credential included.
 
     /// Every label a client can observe. Adding a variant without adding it
     /// here fails to compile, so the wire contract cannot drift silently.

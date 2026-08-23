@@ -102,10 +102,10 @@ pub struct PlaceOrderRequest {
     //
     // Intake DOES verify it (audit 2026-07-25, S-02) — against the same
     // verifying key the on-chain `lock_note` uses, plus a recency check
-    // of `merkle_root` against the shard mirror's window. It used to be
-    // stored unverified, which let any credentialed client book an order
-    // backed by a fabricated note and freeze a real counterparty's
-    // collateral when the resulting batch died. On-chain verification
+    // of `merkle_root` against the shard mirror's window. Storing it
+    // unverified would let any credentialed client book an order backed by a
+    // fabricated note and freeze a real counterparty's collateral when the
+    // resulting batch died. On-chain verification
     // remains authoritative; this is an early reject, not a replacement.
     /// 32-byte merkle root the VALID_INPUT proof was generated
     /// against, hex. Must still be in the vault's root history at

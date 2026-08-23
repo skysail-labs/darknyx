@@ -7,7 +7,7 @@
 //!   - `darkpool_matcher::PreparedMatchTick::next_page(...)` — the pure
 //!     algorithm, same crate the on-chain ix calls.
 //!
-//!     NOT `run_batch`, which these lines used to name (SW-28). The two differ
+//!     NOT `run_batch` (audit SW-28). The two differ
 //!     in `single_fill_per_order`: `next_page` passes `true`, so a
 //!     partially-filled order is relocked and NOT re-matched within the batch,
 //!     while `run_batch` chains. A reader auditing the matcher from the enclave

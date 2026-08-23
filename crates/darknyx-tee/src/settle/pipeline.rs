@@ -340,10 +340,9 @@ mod tests {
         // a full recovery bundle, four tree shards in the static ALT, and both
         // production ALTs.
         //
-        // BUDGET HISTORY. Payload v9 removed 64 vestigial nullifier bytes and
-        // this sat at 1109 with a 1120 guard. Payload v11 spends 64 of that back
-        // on `note_e_use_tag` / `note_f_use_tag` — the relock PDAs need the tag
-        // while the leaf append needs the commitment, and neither derives from
+        // SIZE BUDGET. The payload spends 64 bytes on `note_e_use_tag` /
+        // `note_f_use_tag` — the relock PDAs need the tag while the leaf append
+        // needs the commitment, and neither derives from
         // the other without the private inner. So: 1173 of the 1232 Solana cap,
         // 59 bytes of real headroom.
         //

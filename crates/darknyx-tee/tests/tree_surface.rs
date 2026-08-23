@@ -175,8 +175,8 @@ async fn leaves_inverted_range_400() {
 // chain never had. Every answer derived from it is confidently wrong: an
 // inclusion path folds to a root `lock_note` rejects, and a client cannot
 // tell that from a good one until it has already spent a proof and a
-// transaction. Divergence used to be one latched WARN with the endpoints
-// still serving; these pin that it now stops.
+// transaction. A latched WARN with the endpoints still serving is not enough;
+// these pin that divergence stops the reads.
 
 /// Seed `n` leaves, then flag the shard the way `merkle::sync::reconcile`
 /// does when it finds the mirror disagreeing with the chain.
