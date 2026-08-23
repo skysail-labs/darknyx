@@ -114,14 +114,12 @@ export async function createVerifiedTransport(
     await verifyTransportOnSocket(verifyOpts);
   const bootSessionId = manifest.bootSessionId;
 
-  // Reconnects are pinned to the boot session established HERE.
-  //
-  // `createVerifiedFetch` re-verifies whenever it gets a replacement socket.
-  // Without this pin that re-verification only checks compose hash and signer
-  // set — both of which survive a restart — so a RESTARTED enclave would pass
-  // and start receiving this session's private request bytes. The transport is
-  // supposed to bind one boot, and `verify-transport` already implements the
-  // check; it was simply never given the expected value.
+  // This transport generation is pinned to the boot session established HERE.
+  // Normal connection churn is constrained by the armed connector: an exact
+  // SPKI match belongs to the same boot-random key, while a restarted enclave
+  // has a new key and is refused before dispatch. If the loss is visible before
+  // preflight, the HTTP path also re-runs the full quote verification. The boot
+  // pin remains mandatory there and for WebSocket reconnects.
   //
   // Deliberately a separate object from `verifyOpts`: the FIRST verification
   // cannot pin a boot session it has not learned yet, so only the reconnect

@@ -74,10 +74,9 @@ Verification is a client-side step (the SDK ships a helper). In order, you confi
 
 - **Step 1** observes the self-signed certificate on the connection that will
   carry the request and verifies a fresh transport quote binding its SPKI. A
-  probe to a different socket is not a substitute. Before launch, the remaining
-  replacement-socket race must be closed inside the connector so a pooled
-  connection cannot disappear after the preflight gate and be replaced before
-  dispatch.
+  probe to a different socket is not a substitute. After bootstrap, the
+  connector accepts a replacement only when it presents the same quote-bound,
+  boot-random SPKI; a mismatch is destroyed before request bytes can leave.
 - **Step 2** performs DCAP verification, rejects malformed or ambiguous event
   logs, requires exactly one
   runtime-typed compose event, derives the trusted compose hash from the

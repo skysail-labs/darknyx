@@ -20,8 +20,9 @@ Darknyx separates those powers:
   can verify before disclosing intent. The programmatic transport model binds a
   boot-random TLS certificate to a separate nonce-challenged quote, so the
   gateway passes ciphertext rather than terminating the protected session.
-  Launch qualification still requires connector-level refusal of a substituted
-  replacement socket and supervised recovery after a genuine boot rotation.
+  Replacement sockets are refused inside the connector before request bytes
+  can leave. Launch qualification still requires supervised recovery after a
+  genuine boot rotation.
 - **The client keeps custody secrets.** Spending and viewing keys remain with the
   trader; the venue receives only the material needed to validate and match an
   order.

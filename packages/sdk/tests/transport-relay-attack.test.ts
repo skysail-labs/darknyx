@@ -29,6 +29,7 @@ import { fetch as undiciFetch } from "undici";
 
 import {
   TransportAgent,
+  createVerifiedFetch,
   verifyTransportOnSocket,
 } from "../src/tee/transport-agent.node.js";
 import { TransportVerificationError } from "../src/tee/verify-transport.js";
@@ -90,7 +91,12 @@ async function serve(
   /** Close the connection immediately after responding, as a peer with a very
    *  short keep-alive does. This is what broke `cvm-self-trade` in CI. */
   closeAfterResponse = false,
-): Promise<{ url: string; close: () => void }> {
+): Promise<{
+  url: string;
+  port: number;
+  server: Server;
+  close: () => void;
+}> {
   const appId = new Uint8Array(32).fill(0x01);
   const instanceId = new Uint8Array(32).fill(0x02);
 
@@ -141,6 +147,8 @@ async function serve(
   const port = (server.address() as { port: number }).port;
   return {
     url: `https://127.0.0.1:${port}`,
+    port,
+    server,
     close: () => server.close(),
   };
 }
@@ -191,6 +199,56 @@ function capturingFetch(sink: { hex?: string }): typeof fetch {
       headers: { "content-type": "application/json" },
     });
   }) as typeof fetch;
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+interface RequestSink {
+  requests: number;
+  bodyBytes: number;
+}
+
+/** Start an HTTPS application peer on an already-vacated origin port. */
+async function serveApplicationPeer(
+  serving: { key: string; cert: string },
+  port: number,
+  sink: RequestSink,
+): Promise<Server> {
+  const server = createServer(
+    { key: serving.key, cert: serving.cert },
+    (req, res) => {
+      sink.requests += 1;
+      req.on("data", (chunk: Buffer) => {
+        sink.bodyBytes += chunk.length;
+      });
+      req.on("end", () => {
+        res.setHeader("content-type", "application/json");
+        res.end('{"ok":true}');
+      });
+    },
+  );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  return server;
+}
+
+function inputUrl(input: RequestInfo | URL): URL {
+  return new URL(
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url,
+  );
 }
 
 describe("cuckoo proxy — a genuine quote behind a different certificate", () => {
@@ -301,6 +359,119 @@ describe("cuckoo proxy — a genuine quote behind a different certificate", () =
     } finally {
       s.close();
     }
+  });
+});
+
+describe("replacement sockets are authenticated before dispatch", () => {
+  let honest: ReturnType<typeof makeCert>;
+  let relay: ReturnType<typeof makeCert>;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "darknyx-adoption-"));
+    honest = makeCert("adoption-honest");
+    relay = makeCert("adoption-relay");
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function runReplacement(replacement: typeof honest) {
+    const boot = new Uint8Array(32).fill(0x61);
+    const origin = await serve(honest, honest.spki, boot);
+    const agent = new TransportAgent();
+    const reportData: { hex?: string } = {};
+    const received: RequestSink = { requests: 0, bodyBytes: 0 };
+    let replacementServer: Server | undefined;
+
+    const switchingFetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if (inputUrl(input).pathname === "/transport-attestation") {
+        return capturingFetch(reportData)(input, init);
+      }
+
+      // This hook runs after createVerifiedFetch's preflight gate and before
+      // undici dispatch. It deterministically creates the exact TR-02 race:
+      // kill the verified socket, replace the peer on the same origin, then
+      // let production undici attempt to send the private body.
+      if (!replacementServer) {
+        const verified = agent.currentSocket();
+        expect(verified, "the bootstrap socket was not live").toBeDefined();
+        agent.destroySocket(verified!);
+        await closeServer(origin.server);
+        replacementServer = await serveApplicationPeer(
+          replacement,
+          origin.port,
+          received,
+        );
+      }
+      return undiciFetch(input as never, init as never);
+    }) as typeof fetch;
+
+    const options = {
+      baseUrl: origin.url,
+      agent,
+      deps: deps(reportData),
+      expectedComposeHash: COMPOSE,
+      expectedSignerSetSha256: SIGNERS,
+      fetchImpl: switchingFetch,
+    };
+
+    try {
+      const verified = await verifyTransportOnSocket(options);
+      expect(toHex(verified.spkiSha256)).toBe(toHex(honest.spki));
+
+      const privateBody = "private-order-marker-7f58d6";
+      const fetch = createVerifiedFetch({
+        ...options,
+        expectedBootSessionId: boot,
+      });
+      const outcome = await fetch(`${origin.url}/orders`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: privateBody,
+      }).then(
+        async (response) => {
+          await response.text();
+          return response;
+        },
+        (error: unknown) => error,
+      );
+
+      const replacementVerified = agent.isVerified(agent.currentSocket());
+      return { agent, outcome, received, privateBody, replacementVerified };
+    } finally {
+      if (replacementServer) await closeServer(replacementServer);
+      else if (origin.server.listening) await closeServer(origin.server);
+      await agent.close();
+    }
+  }
+
+  it("refuses a wrong-SPKI replacement before any request or body bytes", async () => {
+    const { agent, outcome, received } = await runReplacement(relay);
+    expect(outcome).toBeInstanceOf(TransportVerificationError);
+    expect((outcome as TransportVerificationError).kind).toBe("spki_mismatch");
+    expect(received.requests, "a request crossed the substituted socket").toBe(
+      0,
+    );
+    expect(received.bodyBytes, "private body bytes reached the relay").toBe(0);
+    expect(
+      agent.currentSocket(),
+      "the rejected socket entered the pool",
+    ).toBeUndefined();
+  });
+
+  it("allows a same-boot certificate replacement", async () => {
+    const { outcome, received, privateBody, replacementVerified } =
+      await runReplacement(honest);
+    // undici's Response is not necessarily the same realm as global Response.
+    expect(outcome).not.toBeInstanceOf(TransportVerificationError);
+    expect((outcome as { status?: number }).status).toBe(200);
+    expect(received.requests).toBe(1);
+    expect(received.bodyBytes).toBe(Buffer.byteLength(privateBody));
+    expect(replacementVerified).toBe(true);
   });
 });
 
