@@ -94,6 +94,13 @@ jobs:
       # See CLAUDE.md §10.5.
       - name: No implementation-process markers (Rust crates + packages/)
         run: bash scripts/check-no-process-markers.sh
+      # The published API reference renders docs/gitbook/api-reference/openapi/
+      # darknyx-public.yaml, generated from the internal wire contract with the
+      # operator surface stripped. Regenerating and diffing here is what stops a
+      # new admin endpoint reaching the public docs, and what stops the artifact
+      # silently going stale as the source spec moves.
+      - name: Public OpenAPI spec is current and admin-free
+        run: bash scripts/check-public-openapi.sh
       # .mjs scripts are not typechecked, so a forgotten `await` after an API
       # turns async is invisible to `node --check` -- valid syntax, broken
       # promise. Three such bugs shipped during the web3.js v3 port.
