@@ -15,7 +15,7 @@
 //! below pins the hash byte-for-byte against the on-chain
 //! `canonical_payload_hash_fixed_vector` unit test.
 //!
-//! ## Amount-privacy (P3b)
+//! ## Amount-privacy
 //!
 //! The seven plaintext amount fields (`base_amount`, `quote_amount`,
 //! `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`) were
@@ -46,7 +46,7 @@ use sha2::{Digest, Sha256};
 
 /// Domain tag for the canonical hash. **Do not change** — on-chain
 /// verification rejects any hash computed with a different tag. Bumped
-/// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts;
+/// `v6`→`v7` when amount-privacy dropped the seven plaintext amounts;
 /// `v7`→`v8` when output recovery appended the 128-byte `fill_recovery` field;
 /// `v8`→`v9` when the two unused nullifiers left the settle payload; and
 /// `v9`→`v10` for the clean Darknyx namespace cutover; and `v10`→`v11` when the
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(&bytes[0..16], &[0x11; 16]); // match_id
         assert_eq!(&bytes[16..48], &[0xA1; 32]); // note_a
         assert_eq!(&bytes[48..80], &[0xB1; 32]); // note_b
-                                                 // Amount-privacy (P3b): the amount block is gone, so the two fee-note
+                                                 // Amount-privacy: the amount block is gone, so the two fee-note
                                                  // commitments now sit right after order_id_b at offset
                                                  // 16 + 6*32 + 2*16 = 240 (both [0;32] in the fixture).
         assert_eq!(&bytes[240..272], &[0u8; 32]); // note_fee_base_commitment

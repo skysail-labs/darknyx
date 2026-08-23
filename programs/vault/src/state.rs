@@ -1,3 +1,23 @@
+//! Account layouts, PDA seeds, and the protocol's sizing constants.
+//!
+//! **Every `SEED` literal here is hand-mirrored into
+//! `packages/sdk/src/idl/seeds.ts`, and nothing in CI compares the two.** Adding
+//! a PDA on this side without adding the seed and a `xxxPda()` helper to the SDK
+//! compiles cleanly and fails only at runtime, as `AccountNotFound` or
+//! `ConstraintSeeds (2006)` against an address that looks plausible. The
+//! integration tests are the only thing that catches it (`CLAUDE.md` §8.3).
+//!
+//! Which value a seed takes is equally easy to get wrong. `NoteLock` and
+//! `ConsumedNoteEntry` are keyed by the **note-use tag**; Merkle leaves and
+//! `DepositedNoteEntry` are keyed by the **commitment**. Both are `[u8; 32]`, so
+//! swapping them also compiles and also fails only on-chain — see
+//! `CRYPTOGRAPHY.md` §2.1.
+//!
+//! Per-leaf PDAs are the replay-protection backbone: `WalletEntry`,
+//! `DepositedNoteEntry`, `ConsumedNoteEntry`, and `NoteLock` all rely on `init`
+//! failing when the account already exists. Relaxing one to `init_if_needed`
+//! removes the guard rather than making it more convenient (`CLAUDE.md` §8.1).
+
 use anchor_lang::prelude::*;
 
 /// Fixed Merkle tree depth. 2^20 = 1,048,576 notes. Matches circom circuit.
@@ -248,7 +268,7 @@ impl ConsumedNoteEntry {
 
 /// PDA locking a note to a specific order. Automatically expires at `expiry_slot`.
 ///
-/// Amount-privacy (P3b): the `amount` field (the locked note's full value) was
+/// Amount-privacy: the `amount` field (the locked note's full value) was
 /// REMOVED. It was only ever read by the old on-chain conservation check in
 /// `tee_forced_settle*`, which is now proven in-circuit by VALID_MATCH_BATCH
 /// over private, range-checked amounts. The note commitment binds the amount;
@@ -370,12 +390,10 @@ impl OutstandingMint {
     pub const SPACE: usize = 8 + 32 + 8 + 1;
 }
 
-// v3.1 `ValidCreateMarker` + `ValidPriceMarker` + their TTL consts lived
-// here. Removed in Phase 1c-hard once `verify_match_batch` subsumed both
-// per-match proofs into one batched Groth16 + a single
-// `BatchValidityMarker` keyed by the batch's Merkle root.
+// Batch validity is tracked by ONE `BatchValidityMarker` per batch, keyed by
+// the batch's Merkle root — not by per-match markers.
 
-/// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
+/// BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +
 /// VALID_PRICE for ALL N matches in a batch. The proof's first of two public
 /// inputs is a Merkle root over the per-slot leaves; the marker's PDA

@@ -19,20 +19,18 @@ use crate::errors::VaultError;
 use crate::state::*;
 use anchor_lang::prelude::*;
 
-/// Phase-5 MatchResultPayload — carries the commitments + relock plumbing
-/// the on-chain settle handler needs.
+/// The settlement payload: commitments, order ids, and relock plumbing.
 ///
-/// **Amount-privacy (P3b).** The plaintext amounts (`base_amount`,
-/// `quote_amount`, `buyer/seller_change_amt`, `buyer/seller_fee_amt`,
-/// `clearing_price`) USED to live here so the chain could re-check the
-/// conservation law + fee. They have been REMOVED: VALID_MATCH_BATCH now proves
-/// conservation + the exact governed fee in-circuit over PRIVATE amounts
-/// (range-checked), and the note commitments bind the amounts transitively.
-/// Putting them in the settle ix (which lands on-chain in plaintext) was a
-/// public leak — competitors could read every trade size + execution price.
-/// The payload now carries ONLY commitments, order ids, relock fields, and the
-/// batch slot. Each client reconstructs its own amounts from
-/// the per-account FillMemo.
+/// **It carries no plaintext amounts, and must not.** The settle instruction
+/// lands on-chain in the clear, so any amount here — trade size, change, fee,
+/// or clearing price — would be publicly readable by anyone watching the
+/// program, exposing every trade size and execution price. VALID_MATCH_BATCH
+/// proves conservation and the exact governed fee in-circuit over private,
+/// range-checked amounts instead, and the note commitments bind those amounts
+/// transitively. Each client reconstructs its own amounts from its per-account
+/// FillMemo.
+///
+/// Adding an amount-shaped field to this struct reintroduces that leak.
 ///
 /// `note_e_commitment` / `note_f_commitment` carry the Poseidon-hashed
 /// change note commitments for buyer and seller respectively. They are
@@ -107,23 +105,14 @@ pub struct MatchResultPayload {
     /// path, not the sole one. (Ops follow-up: alert on recovery-decrypt
     /// failure. No on-chain fix — it's inside the accepted TEE-honesty boundary.)
     pub fill_recovery: [u8; 128],
-    // Amount-privacy (P3b): `clearing_price` was removed alongside the other
-    // plaintext amounts — the price is proven in-circuit
-    // (`quote === floor(base*price/price_scale)`) and bound inside the note commitments, so it no
-    // longer needs to ride in the (public) settle ix. The domain tag bumped
-    // settlement-domain v6 → v7 for this layout change, then v7 → v8 when
-    // encrypted output recovery
-    // appended the `fill_recovery` field above. Settlement payload v9 then
-    // removed the two vestigial nullifiers. The Darknyx namespace cutover
-    // retained that layout and bumped the signed domain to v10. v11 makes
-    // tag-keyed `ConsumedNoteEntry` PDAs the sole settle/withdraw replay guard,
-    // replaces the two consumed commitments with note-use
-    // TAGS and appends `note_e_use_tag` / `note_f_use_tag` for the relock PDAs
-    // (488 -> 552 bytes).
+    // The clearing price is deliberately absent: it is proven in-circuit
+    // (`quote === floor(base * price / price_scale)`) and bound inside the note
+    // commitments, so it never needs to ride in the public settle ix.
     //
-    // v3.1 note: `price_proof` and `price_commitment` had previously been
-    // factored out into a preceding `verify_valid_price` ix; that path was
-    // since subsumed by the batched VALID_MATCH_BATCH proof.
+    // This struct is 552 bytes and is signed under the `darknyx-match-v11`
+    // domain. ANY change to the field set or their order must bump that domain
+    // tag — the tag is what stops a signature made over one layout from
+    // verifying against another.
 }
 
 /// Manually create a NoteLock PDA so the settlement tx can atomically
@@ -225,7 +214,7 @@ pub struct TradeSettled {
     /// indexer routes the (note_*_leaf) indices into this shard.
     pub tree_id: u8,
     pub match_id: [u8; 16],
-    // Amount-privacy (P3b): the trade amounts / change / fees / clearing price
+    // Amount-privacy: the trade amounts / change / fees / clearing price
     // were dropped from this event — they were a public leak (events are
     // on-chain). The event now carries only the leaf INDICES + relock flags +
     // root; a client reconstructs its own amounts from the per-account FillMemo.
@@ -255,15 +244,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
     hashv(&[
-        // v7: amount-privacy (P3b) dropped the seven plaintext amount fields
-        // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
-        // from the payload — they're proven in-circuit + bound by the note
-        // commitments. v8: encrypted output recovery appended the
-        // 128-byte `fill_recovery` ciphertext bundle. v9 removed the two
-        // vestigial nullifiers. v10 is the clean Darknyx namespace cutover.
-        // v11 swaps the consumed commitments for note-use TAGS and appends the
-        // two relock tags. Bumping the tag invalidates every signature over an
-        // older domain.
+        // The domain tag. Bumping it invalidates every signature made over an
+        // older payload layout, which is what stops a signature for one field
+        // set being replayed against another. Change the field list below and
+        // this string must change with it.
         b"darknyx-match-v11",
         p.match_id.as_ref(),
         p.note_a_use_tag.as_ref(),

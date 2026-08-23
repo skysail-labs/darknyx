@@ -323,7 +323,7 @@ pub fn compute_budget_ix(cu: u32) -> Instruction {
 }
 
 // ============================================================================
-// Phase-5 settlement helpers (tee_forced_settle)
+// Settlement helpers (tee_forced_settle)
 // ============================================================================
 
 /// Byte-for-byte mirror of the on-chain `MatchResultPayload` Borsh shape.
@@ -352,7 +352,7 @@ pub struct MatchResultPayload {
     pub note_e_use_tag: [u8; 32],
     pub note_f_use_tag: [u8; 32],
     pub batch_slot: u64,
-    // Amount-privacy (P3b): the seven plaintext amount fields (base/quote/
+    // Amount-privacy: the seven plaintext amount fields (base/quote/
     // buyer_change/seller_change/buyer_fee/seller_fee/clearing_price) were
     // dropped — they're proven in-circuit + bound by the note commitments.
     // Change-amount recovery (Proposal B, v8): the 128-byte encrypted
@@ -386,7 +386,7 @@ impl MatchResultPayload {
         note_d: [u8; 32],
         order_id_a: [u8; 16],
         order_id_b: [u8; 16],
-        // Amount-privacy (P3b): amounts no longer ride the payload. Kept as
+        // Amount-privacy: amounts no longer ride the payload. Kept as
         // params so the call sites (which still read as "this trade is 100 base
         // for 5000 quote") stay untouched; they don't affect on-chain behavior.
         _base_amount: u64,
@@ -501,7 +501,7 @@ pub fn build_ed25519_verify_ix(
     }
 }
 
-/// Directly seed a NoteLock PDA (bypasses the `lock_note` ix — the Phase-5
+/// Directly seed a NoteLock PDA (bypasses the `lock_note` ix — the
 /// settle tests focus on *settlement* not lock mechanics). The PDA is
 /// writable and owned by the vault program so the real handler can close
 /// it via `close = tee_authority`.
@@ -510,13 +510,13 @@ pub fn seed_note_lock(
     note_commitment: &[u8; 32],
     order_id: &[u8; 16],
     expiry_slot: u64,
-    // Amount-privacy (P3b): NoteLock.amount was removed. The param is kept so
+    // Amount-privacy: NoteLock.amount was removed. The param is kept so
     // the many call sites stay untouched, but it's no longer written anywhere.
     _amount: u64,
 ) {
     use solana_account::Account as SolAccount;
     let (pda, bump) = note_lock_pda(&h.vault_id, note_commitment);
-    // P3b layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
+    // Layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
     //          + 32 locked_by + 1 bump + 7 pad = 136 bytes (was 144 with the
     // now-removed 8-byte amount). token_mint sits between note_commitment and
     // order_id (matches `vault::state::NoteLock` exactly; keep in sync if
@@ -661,7 +661,7 @@ pub fn note_lock_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// v3.5 — batched-validity marker scaffolding
+// Batched-validity marker scaffolding
 // ---------------------------------------------------------------------------
 
 /// Mirrors `vault::state::BatchValidityMarker::SEED`.
@@ -787,7 +787,7 @@ fn to_onchain_payload(
 /// the on-chain implementation.
 pub fn compute_match_leaf_for(
     payload: &MatchResultPayload,
-    // Commitment-only leaf (amount-privacy, P1b) no longer hashes the mints;
+    // Commitment-only leaf (amount-privacy) no longer hashes the mints;
     // kept in the signature so the many call sites stay untouched.
     _quote_mint: &Pubkey,
     _base_mint: &Pubkey,
@@ -835,7 +835,7 @@ pub fn build_merkle_root_and_path_n16(
 }
 
 /// Build a `tee_forced_settle_batched` ix with the supplied inclusion
-/// proof. Mirrors `build_settle_ix` but for the v3.5 ix variant: one
+/// proof. Mirrors `build_settle_ix` but for the batched ix: one
 /// extra `match_index` byte + 4 contiguous 32-byte siblings appended
 /// to ix.data; the two per-match marker accounts collapse to a single
 /// `batch_validity_marker`.
@@ -972,7 +972,7 @@ pub fn build_verify_match_batch_ix(
 }
 
 /// (ed25519_verify, tee_forced_settle_batched) tx — mirror of
-/// `build_settle_tx` for the v3.5 path.
+/// `build_settle_tx` for the batched path.
 pub fn build_settle_batched_tx(
     h: &Harness,
     tree_id: u8,
@@ -1075,7 +1075,7 @@ pub fn build_reset_merkle_tree_ix(h: &Harness, tree_id: u8) -> Instruction {
     }
 }
 
-/// One-shot: compute the v3.5 leaf + Merkle root for a single-match
+/// One-shot: compute the batch leaf + Merkle root for a single-match
 /// "batch" (slot 0, all other slots zero-padded), seed the
 /// `BatchValidityMarker` PDA at far-future expiry, and return a
 /// ready-to-send (compute_budget + ed25519 + tee_forced_settle_batched)

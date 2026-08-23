@@ -3,8 +3,9 @@
 //! [`CryptoError::NotInField`] and [`CryptoError::InvalidByteLength`] are direct
 //! input-validation errors: both mean the value was never valid to hash, rather
 //! than that hashing failed. Returning them early is what keeps an out-of-field
-//! value from reaching `light-poseidon`, where it would surface on-chain as
-//! `PoseidonFailed (6030)` instead. See `CLAUDE.md` §7.2.
+//! value from reaching the proof system, where the same bytes surface on-chain
+//! as `InvalidProof (6000)` or `InvalidBatchBinding (6022)` instead — errors
+//! that say nothing about which input was malformed. See `CLAUDE.md` §7.2.
 //!
 //! The remaining variants report a failure inside a specific primitive —
 //! Poseidon, HKDF, AEAD, seed parsing, amount range, or merge-input shape.

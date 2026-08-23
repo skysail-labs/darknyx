@@ -148,7 +148,7 @@ pub struct Authorized {
 /// (salt + params embedded) — never plaintext. `is_admin` gates the
 /// `POST /admin/accounts` registration endpoint.
 ///
-/// `Serialize`/`Deserialize` back the Phase-1b `accounts.db` snapshot
+/// `Serialize`/`Deserialize` back the `accounts.db` snapshot
 /// ([`crate::persistence`]). Only the argon2 hashes are persisted —
 /// never plaintext — and the file lives on the dstack LUKS volume.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -409,7 +409,7 @@ impl AccountRegistry {
     /// argon2id-hashed here exactly as a registered account's would
     /// be — the env plaintext is hashed and dropped, never stored.
     ///
-    /// With Phase-1b persistence the env seed is merged into a loaded
+    /// With persistence the env seed is merged into a loaded
     /// `accounts.db` snapshot (see [`Self::ensure_admin`] +
     /// `ApiState::from_boot`): the env admin is added only if its
     /// `api_key` is absent, so a persisted registry is authoritative

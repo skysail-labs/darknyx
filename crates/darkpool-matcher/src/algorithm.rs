@@ -70,7 +70,7 @@ pub fn deviates_by_more_than_bps(p: u64, reference: u64, bps: u64) -> bool {
 /// hash::hashv` backend swapped for `sha2::Sha256` so this crate
 /// stays Anchor-free.
 ///
-/// **NOT the v3.5 Poseidon batch root** that VALID_MATCH_BATCH
+/// **NOT the Poseidon batch root** that VALID_MATCH_BATCH
 /// attests to. That root lives in `programs/vault/src/merkle.rs`
 /// and uses Poseidon over a Light-Protocol incremental tree. THIS
 /// root is returned as an audit log over the per-batch

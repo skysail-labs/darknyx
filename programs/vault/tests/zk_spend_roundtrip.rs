@@ -1,6 +1,6 @@
 //! Cross-environment VALID_SPEND round-trip.
 //!
-//! This is the most important single test in Phase 1. It exercises:
+//! The most important single test in this suite. It exercises:
 //!
 //!   1. Merkle-tree construction in Rust (via `append_leaf`) producing the same
 //!      root the circom `MerkleTreeChecker` verifies.
@@ -13,7 +13,8 @@
 //!   6. snarkjs Groth16 proof generation.
 //!   7. `groth16-solana` verification producing `Ok(())`.
 //!
-//! If this test passes, the entire Phase 1 ZK pipeline is sound.
+//! A pass means this fixture round-trips and the tampering cases below are
+//! rejected — not that VALID_SPEND holds for all inputs.
 
 use std::fs;
 use std::path::PathBuf;

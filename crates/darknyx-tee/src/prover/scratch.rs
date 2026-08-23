@@ -12,7 +12,7 @@ use std::path::PathBuf;
 ///
 /// `input.json` contains the **private witness**: every per-slot trade amount,
 /// both counterparties' owner commitments, the change and fee amounts, and the
-/// clearing price. Those are precisely the values amount-privacy (P1b/P3b) took
+/// clearing price. Those are precisely the values amount-privacy took
 /// off-chain, and this wrote them to `std::env::temp_dir()` — `/tmp`, the
 /// container's writable overlay, NOT the encrypted named volume the compose file
 /// goes out of its way to provision for state.

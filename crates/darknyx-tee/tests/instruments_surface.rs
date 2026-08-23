@@ -1,4 +1,4 @@
-//! Phase-2c surface tests: `/instruments` (public list + detail) and
+//! Surface tests for `/instruments` (public list + detail) and
 //! the deliberately-deferred `/account` (bearer → 501). Driven via
 //! `tower::ServiceExt::oneshot`.
 //!

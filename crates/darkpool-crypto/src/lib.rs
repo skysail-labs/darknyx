@@ -34,9 +34,10 @@
 //! as `InvalidProof (6000)` instead.
 //!
 //! Values reaching Poseidon must also fit in BN254 Fr. Raw 32-byte inputs pass
-//! through most of this crate without complaint and are rejected only at
-//! `light-poseidon`, surfacing on-chain as `PoseidonFailed (6030)` — see
-//! `CLAUDE.md` §7.2 and [`field`].
+//! through most of this crate without complaint: host-side they are rejected by
+//! [`field::fr_from_be_bytes`] as [`errors::CryptoError::NotInField`], and
+//! on-chain the same bytes surface as `InvalidProof (6000)` or
+//! `InvalidBatchBinding (6022)`. See `CLAUDE.md` §7.2.
 
 #![allow(clippy::too_many_arguments)]
 

@@ -1,4 +1,4 @@
-//! End-to-end test of the PR-4d HTTP surface.
+//! End-to-end test of the HTTP surface.
 //!
 //! Drives the router via `tower::ServiceExt::oneshot` so we never
 //! bind a real TCP port (no port-collision flakiness; test runs
@@ -12,8 +12,7 @@
 //!   - `GET /attestation` returns 503 in stub mode (no dstack
 //!     client). The happy path is exercised on real TDX inside
 //!     a CVM — the simulator integration test in
-//!     `tests/simulator_e2e.rs` (out of PR-4d scope; lands in
-//!     PR-4e along with the smoke-deploy job).
+//!     `tests/simulator_e2e.rs` (covered separately).
 //!
 //! Run with: `cargo test -p darknyx-tee --test http_surface`
 

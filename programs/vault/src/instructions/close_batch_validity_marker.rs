@@ -1,4 +1,4 @@
-//! v3.5 — close a `BatchValidityMarker` PDA after all matches in the
+//! Close a `BatchValidityMarker` PDA after all matches in the
 //! batch have settled (or the marker has expired and become unusable).
 //!
 //! Why this exists: `tee_forced_settle_batched` deliberately does NOT

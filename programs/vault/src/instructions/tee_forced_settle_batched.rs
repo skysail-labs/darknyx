@@ -284,7 +284,7 @@ pub struct TeeForcedSettleBatched {
     #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
     pub instructions_sysvar: UncheckedAccount,
 
-    /// v3.5 — single batch-validity marker. PDA seed = the Merkle root
+    /// The batch's single validity marker. PDA seed = the Merkle root
     /// computed in the handler from (leaf, merkle_proof, match_index).
     /// Marker must already exist (written by an upstream
     /// `verify_match_batch` ix) and be unexpired.
@@ -338,7 +338,7 @@ pub fn tee_forced_settle_batched_handler(
     )?;
 
     // ────────────────────────────────────────────────────────────────────
-    // v3.5 batch-marker check. Replaces the two per-match marker checks.
+    // Batch-marker check. Replaces the two per-match marker checks.
     //
     // Recompute the leaf hash from payload + lock mints, walk the depth-4
     // Merkle path with the provided siblings + match_index, derive the
@@ -452,13 +452,13 @@ pub fn tee_forced_settle_batched_handler(
         );
 
         // Conservation + the exact governed fee are now enforced IN-CIRCUIT
-        // (amount-privacy, P1a/P1b): VALID_MATCH_BATCH range-checks every amount
+        // (amount-privacy): VALID_MATCH_BATCH range-checks every amount
         // and proves `a_amount === quote+change+fee` (+ the seller leg) and
         // both fee inequalities over PRIVATE amounts, with fee_rate_bps bound to
         // this config as a public input. Together they prove
         // `fee == floor(notional*rate/10000)`. So the chain no longer
         // re-derives or re-checks any of it from plaintext — and the amounts
-        // leave the payload entirely (P3b). The note commitments + the batch
+        // leave the payload entirely. The note commitments + the batch
         // proof bind the values; `NoteLock.amount` is no longer consulted.
         //
         // Change-note PRESENCE is also proven in-circuit
@@ -499,7 +499,7 @@ pub fn tee_forced_settle_batched_handler(
     // vault_config at the top (CU-2); the appends mutate only `merkle_tree`.
 
     // This match's two protocol fee notes, one per mint: base (seller-side
-    // fees) + quote (buyer-side fees). Fees are PER-MATCH (amount-privacy P1b):
+    // fees) + quote (buyer-side fees). Fees are PER-MATCH (amount-privacy):
     // each active MatchSlot derives its own `note_fee_base/quote` from that
     // match's consumed commitments, so every settle in the batch appends its
     // OWN fee notes — not a batch-aggregate that only slot 0 flushes. A leg
