@@ -51,7 +51,7 @@ export interface OrderPlacer {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface RestOrderPlacerOptions {
-  /** Gateway origin, e.g. `https://<app>-8080.dstack-…`. */
+  /** CVM origin, normally the `https://<app>-8443s.dstack-…` RA-TLS route. */
   baseUrl: string;
   token: string;
   /** REQUIRED — the CVM transport. See `OrderClientOptions.fetchImpl`: an
@@ -179,7 +179,8 @@ export class WsOrderPlacer implements OrderPlacer {
         return await fn(c);
       } catch (err) {
         // A DarknyxApiError is the server's definitive reply — never retry it.
-        if (err instanceof DarknyxApiError || attempt >= this.maxRetries) throw err;
+        if (err instanceof DarknyxApiError || attempt >= this.maxRetries)
+          throw err;
         attempt += 1;
         // A shared stream reconnects itself; a private one is rebuilt here.
         if (!this.opts.client) {

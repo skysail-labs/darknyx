@@ -369,4 +369,56 @@ describe("TradingClient (/v1/stream session)", () => {
     sub.close();
     client.close();
   });
+
+  it("suspends reconnects while retaining subscriptions, then resumes them", async () => {
+    const sockets: FakeSocket[] = [];
+    const client = new TradingClient({
+      gatewayWsUrl: "wss://x",
+      token: "t",
+      reconnectDelayMs: 0,
+      webSocketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const sub = client.subscribeChannel("orders", () => undefined);
+    const first = sockets[0];
+    first.fire("open");
+    await flushMicrotasks();
+    const login = first.lastFrame();
+    first.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: login.request_id,
+        account_id: "acct",
+      }),
+    });
+    await flushMicrotasks();
+
+    client.suspend();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sockets).toHaveLength(1);
+    await expect(client.ping()).rejects.toThrow(/suspended/);
+
+    client.resume();
+    expect(sockets).toHaveLength(2);
+    const second = sockets[1];
+    second.fire("open");
+    await flushMicrotasks();
+    const secondLogin = second.lastFrame();
+    second.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: secondLogin.request_id,
+        account_id: "acct",
+      }),
+    });
+    await flushMicrotasks();
+    expect(second.sent.map((raw) => JSON.parse(raw).op)).toContain("subscribe");
+    sub.close();
+    client.close();
+  });
 });

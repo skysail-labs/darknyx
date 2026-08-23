@@ -52,6 +52,10 @@ function fakeDaemon() {
       pauseReason: null,
       lastFinalizedKeyRefreshMs: 123,
       onchainKeyMonitoring: true,
+      transportState: "ready" as const,
+      transportPauseReason: null,
+      transportRecoveryAttempts: 0,
+      transportNextAttemptMs: null,
     })),
     placeOrder: vi.fn(async () => ({
       orderId: "cd".repeat(8),
@@ -169,6 +173,10 @@ describe("control-api — routes", () => {
         pause_reason: null,
         last_finalized_key_refresh_ms: 123,
         onchain_key_monitoring: true,
+        transport_state: "ready",
+        transport_pause_reason: null,
+        transport_recovery_attempts: 0,
+        transport_next_attempt_ms: null,
       },
     });
   });

@@ -369,6 +369,7 @@ components:
       - device_id
       - compose_hash
       - boot_session_id
+      - transport_mode
       - tcb_info
       - tee_pubkey
       - tee_pubkeys
@@ -409,6 +410,18 @@ components:
             `/transport-attestation` manifest. It is not part of the separate
 
             legacy `/attestation` report_data layout.
+
+            '
+        transport_mode:
+          type: string
+          enum:
+          - ra-tls
+          - gateway-terminated
+          description: 'Boot-selected transport policy. Clients pin this operational field
+
+            to the independently verified transport manifest; it is not a trust
+
+            root by itself.
 
             '
         tcb_info:

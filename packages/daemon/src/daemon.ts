@@ -63,6 +63,10 @@ import type { CollateralRequest } from "./note-select.js";
 import { TeeReadClient } from "./tee-read.js";
 import { reconcile, type ReconcileResult } from "./reconcile.js";
 import { MemoryOrderSequence, type OrderSequence } from "./order-sequence.js";
+import type {
+  DaemonTransport,
+  DaemonTransportSupervisor,
+} from "./transport.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -70,6 +74,23 @@ const fromHex = (h: string): Uint8Array =>
 
 export const DEFAULT_TEE_KEY_REFRESH_MS = 60_000;
 export const DEFAULT_TEE_KEY_STALE_MS = 5 * 60_000;
+const TRANSPORT_RECOVERY_MAX_ATTEMPTS = 5;
+const TRANSPORT_RECOVERY_BASE_MS = 250;
+const TRANSPORT_RECOVERY_MAX_MS = 10_000;
+
+export type TransportLifecycleState =
+  | "ready"
+  | "reverifying"
+  | "reconciling"
+  | "paused";
+export type TransportPauseReason =
+  | "boot_changed"
+  | "transport_rejected"
+  | "application_attestation_rejected"
+  | "governance_rejected"
+  | "network_unavailable"
+  | "reconciliation_failed"
+  | "stopped";
 
 /** Reads finalized on-chain `vault_config.tee_pubkeys` (base58, active set), or
  *  `null` if the config account is absent. Injectable so the attestation
@@ -121,6 +142,10 @@ export interface DaemonTrustStatus {
   reconcileFailureReason: string | null;
   lastFinalizedKeyRefreshMs: number | null;
   onchainKeyMonitoring: boolean;
+  transportState: TransportLifecycleState;
+  transportPauseReason: TransportPauseReason | null;
+  transportRecoveryAttempts: number;
+  transportNextAttemptMs: number | null;
 }
 
 /** A MergeRunner that refuses — the default until the on-chain merge path is
@@ -159,6 +184,8 @@ export interface DaemonDeps {
    * explicitly.
    */
   fetchImpl: typeof fetch;
+  /** Atomic owner of the RA-TLS HTTP/WS generation. */
+  transportSupervisor?: DaemonTransportSupervisor;
   /** Verify the gateway's TEE attestation on start. Defaults to the real
    *  {@link verifyAttestation}; pass `false` to skip (tests/local-sim). */
   verifyAttestation?: typeof verifyAttestation | false;
@@ -201,6 +228,7 @@ export class Daemon {
   /** Authenticated read-only TEE surface (account/instruments/settlement/…). */
   readonly tee: TeeReadClient;
   private readonly fetchImpl: typeof fetch;
+  private readonly transportSupervisor?: DaemonTransportSupervisor;
   private readonly treeId = 0;
 
   private readonly subscribeFillsFn?: SubscribeFillsFn;
@@ -249,6 +277,13 @@ export class Daemon {
   private readonly reconcileOnStart: boolean;
   private teeKeyRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private teeKeyRefreshInFlight = false;
+  private transportState: TransportLifecycleState = "ready";
+  private transportPauseReason: TransportPauseReason | null = null;
+  private transportRecoveryAttempts = 0;
+  private transportNextAttemptMs: number | null = null;
+  private transportRecoveryInFlight: Promise<void> | null = null;
+  private transportRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
 
   private readonly settlementPollMs?: number;
   private readonly fetchInclusion?: FetchInclusionFn;
@@ -277,6 +312,7 @@ export class Daemon {
       new MemoryOrderSequence(this.store.maxSeedIndex() + 1);
     this.prover = deps.prover;
     this.fetchImpl = deps.fetchImpl;
+    this.transportSupervisor = deps.transportSupervisor;
     this.subscribeFillsFn = deps.subscribeFills;
     this.subscribeOrdersFn = deps.subscribeOrders;
     const streamSocketFactory =
@@ -352,12 +388,220 @@ export class Daemon {
       token: this.config.token,
       fetchImpl: this.fetchImpl,
     });
+    this.transportSupervisor?.setViolationHandler((error) => {
+      void this.recoverTransportNow("transport_rejected", error);
+    });
   }
 
   // ── lifecycle ──
 
+  private async verifyApplicationIdentity(
+    fetchImpl: typeof fetch,
+    expectedTransportBoot?: Uint8Array,
+  ): Promise<{
+    attestation: AttestationResult | null;
+    bootSessionId: Uint8Array;
+    teePubkeys: string[] | null;
+  }> {
+    if (this.verifyAttestationFn) {
+      const attestation = await this.verifyAttestationFn({
+        gatewayUrl: this.config.gatewayUrl,
+        token: this.config.token,
+        expected: this.config.attestation,
+        quoteVerifier: this.quoteVerifier,
+        fetchImpl,
+        strict: this.config.attestationStrict,
+        expectedTransportMode: this.config.transportMode,
+      });
+      const teePubkeys = this.config.attestOnchainCheck
+        ? [...attestation.teePubkeys]
+        : null;
+      const bootSessionId = fromHex(attestation.bootSessionId);
+      this.assertTransportBootMatches(expectedTransportBoot, bootSessionId);
+      return {
+        attestation,
+        bootSessionId,
+        teePubkeys,
+      };
+    }
+
+    const info = await fetchInfo(
+      this.config.gatewayUrl,
+      this.config.token,
+      fetchImpl,
+    );
+    if (info.transportMode !== this.config.transportMode) {
+      throw new Error(
+        `/info transport_mode ${info.transportMode} != expected ${this.config.transportMode}`,
+      );
+    }
+    const bootSessionId = fromHex(info.bootSessionId);
+    this.assertTransportBootMatches(expectedTransportBoot, bootSessionId);
+    return {
+      attestation: null,
+      bootSessionId,
+      teePubkeys: null,
+    };
+  }
+
+  private assertTransportBootMatches(
+    expected: Uint8Array | undefined,
+    observed: Uint8Array,
+  ): void {
+    if (!expected) return;
+    if (
+      expected.length !== observed.length ||
+      expected.some((byte, index) => byte !== observed[index])
+    ) {
+      throw new Error(
+        "/info boot_session_id does not match the quote-bound transport boot",
+      );
+    }
+  }
+
+  private applyVerifiedIdentity(identity: {
+    attestation: AttestationResult | null;
+    bootSessionId: Uint8Array;
+    teePubkeys: string[] | null;
+  }): void {
+    if (identity.bootSessionId.length !== 32) {
+      throw new Error("/info boot_session_id must be 32 bytes");
+    }
+    this.attestationResult = identity.attestation;
+    this.bootSessionId = identity.bootSessionId;
+    this.expectedTeePubkeys = identity.teePubkeys;
+  }
+
+  private isRetryableTransportFailure(error: unknown): boolean {
+    let current: unknown = error;
+    for (let depth = 0; depth < 4; depth += 1) {
+      const kind =
+        typeof current === "object" && current !== null && "kind" in current
+          ? String((current as { kind?: unknown }).kind)
+          : null;
+      if (kind === "fetch" || kind === "socket_lost") return true;
+      if (
+        typeof current !== "object" ||
+        current === null ||
+        !("cause" in current)
+      ) {
+        return false;
+      }
+      current = (current as { cause?: unknown }).cause;
+    }
+    return false;
+  }
+
+  private scheduleTransportRecoveryRetry(): void {
+    if (
+      this.stopped ||
+      this.transportRecoveryTimer ||
+      this.transportRecoveryAttempts >= TRANSPORT_RECOVERY_MAX_ATTEMPTS
+    ) {
+      return;
+    }
+    const exponent = Math.max(0, this.transportRecoveryAttempts - 1);
+    const ceiling = Math.min(
+      TRANSPORT_RECOVERY_MAX_MS,
+      TRANSPORT_RECOVERY_BASE_MS * 2 ** exponent,
+    );
+    const delay = Math.max(
+      1,
+      Math.floor(ceiling * (0.75 + Math.random() * 0.5)),
+    );
+    this.transportNextAttemptMs = this.now() + delay;
+    this.transportRecoveryTimer = setTimeout(() => {
+      this.transportRecoveryTimer = null;
+      this.transportNextAttemptMs = null;
+      void this.recoverTransportNow("network_unavailable");
+    }, delay);
+    this.transportRecoveryTimer.unref?.();
+  }
+
+  /**
+   * Rebuild the entire HTTP/WS generation, re-run application + finalized
+   * governance verification, then reconcile before placement resumes.
+   * Concurrent callers share one attempt; security failures never auto-retry.
+   */
+  async recoverTransportNow(
+    reason: TransportPauseReason = "boot_changed",
+    trigger?: unknown,
+  ): Promise<void> {
+    if (!this.transportSupervisor || this.stopped) return;
+    if (this.transportRecoveryInFlight) return this.transportRecoveryInFlight;
+
+    this.transportState = "reverifying";
+    this.transportPauseReason = reason;
+    this.transportRecoveryAttempts += 1;
+    this.streamClient.suspend();
+    if (trigger) this.emitError("transport", trigger);
+
+    const run = (async () => {
+      let candidate: DaemonTransport | null = null;
+      let committed = false;
+      let failureReason: TransportPauseReason = "transport_rejected";
+      try {
+        candidate = await this.transportSupervisor!.buildCandidate();
+        failureReason = "application_attestation_rejected";
+        const identity = await this.verifyApplicationIdentity(
+          candidate.fetch,
+          candidate.bootSessionId,
+        );
+        failureReason = "governance_rejected";
+        if (identity.teePubkeys) {
+          await this.requireFinalizedTeePubkeys(identity.teePubkeys, false);
+        }
+        if (this.stopped) {
+          await candidate.close();
+          candidate = null;
+          return;
+        }
+        await this.transportSupervisor!.commit(candidate);
+        committed = true;
+        candidate = null;
+        if (this.stopped) return;
+        this.applyVerifiedIdentity(identity);
+        if (identity.teePubkeys) this.lastFinalizedKeyRefreshMs = this.now();
+        this.resumeTrading();
+        this.transportState = "reconciling";
+        this.transportPauseReason = "boot_changed";
+        this.streamClient.resume();
+        const reconciliation = await this.reconcileNow(
+          "verified transport generation changed",
+        );
+        if (this.stopped) return;
+        if (reconciliation.errors.length > 0) {
+          this.transportState = "paused";
+          this.transportPauseReason = "reconciliation_failed";
+          return;
+        }
+        this.transportState = "ready";
+        this.transportPauseReason = null;
+        this.transportRecoveryAttempts = 0;
+        this.transportNextAttemptMs = null;
+      } catch (error) {
+        if (!committed) await candidate?.close().catch(() => undefined);
+        if (this.stopped) return;
+        this.transportState = "paused";
+        const retryable = this.isRetryableTransportFailure(error);
+        this.transportPauseReason = retryable
+          ? "network_unavailable"
+          : failureReason;
+        this.emitError("transport-recovery", error);
+        if (retryable) this.scheduleTransportRecoveryRetry();
+      } finally {
+        this.transportRecoveryInFlight = null;
+      }
+    })();
+    this.transportRecoveryInFlight = run;
+    return run;
+  }
+
   /** Strict startup requires one successful finalized governance read. */
-  private async requireFinalizedTeePubkeys(attested: string[]): Promise<void> {
+  private async requireFinalizedTeePubkeys(
+    attested: string[],
+    recordSuccess = true,
+  ): Promise<void> {
     const onchain = await this.onchainTeePubkeysFn(
       this.config.rpcUrl,
       this.config.programId,
@@ -368,7 +612,7 @@ export class Daemon {
       );
     }
     assertTeePubkeysMatch(attested, onchain);
-    this.lastFinalizedKeyRefreshMs = this.now();
+    if (recordSuccess) this.lastFinalizedKeyRefreshMs = this.now();
     console.log(
       `[daemon] finalized tee_pubkeys cross-check OK (${onchain.length} keys match)`,
     );
@@ -442,7 +686,16 @@ export class Daemon {
         // has already consumed.
         this.reconcileFailureReason =
           result.errors.length > 0 ? result.errors[0] : null;
-        if (result.errors.length === 0) this.tracker?.retryQuarantined();
+        if (result.errors.length === 0) {
+          this.tracker?.retryQuarantined();
+          if (
+            this.transportState === "paused" &&
+            this.transportPauseReason === "reconciliation_failed"
+          ) {
+            this.transportState = "ready";
+            this.transportPauseReason = null;
+          }
+        }
         return result;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -491,6 +744,12 @@ export class Daemon {
 
   private assertTradingEnabled(): void {
     this.pauseIfFinalizedKeysStale();
+    if (this.transportState !== "ready") {
+      throw new Error(
+        `trading paused: transport ${this.transportState}` +
+          (this.transportPauseReason ? ` (${this.transportPauseReason})` : ""),
+      );
+    }
     if (this.reconciling) {
       throw new Error(
         "trading paused: reconciling local state after a stream gap or restart",
@@ -519,6 +778,17 @@ export class Daemon {
    *  pauses new trading immediately. RPC failures retain the last good state
    *  only until its five-minute freshness budget expires. */
   async refreshTrustNow(): Promise<void> {
+    if (
+      this.transportState === "paused" &&
+      this.transportPauseReason !== "network_unavailable" &&
+      this.transportPauseReason !== "reconciliation_failed"
+    ) {
+      return;
+    }
+    if (this.transportSupervisor?.isStale()) {
+      await this.recoverTransportNow("boot_changed");
+      return;
+    }
     if (!this.expectedTeePubkeys || this.teeKeyRefreshInFlight) return;
     this.teeKeyRefreshInFlight = true;
     try {
@@ -558,7 +828,7 @@ export class Daemon {
         return;
       }
       this.lastFinalizedKeyRefreshMs = this.now();
-      this.resumeTrading();
+      if (this.transportState === "ready") this.resumeTrading();
     } finally {
       this.teeKeyRefreshInFlight = false;
     }
@@ -572,46 +842,28 @@ export class Daemon {
    */
   async start(): Promise<void> {
     if (this.started) return;
+    this.stopped = false;
 
-    if (this.verifyAttestationFn) {
-      if (this.config.attestationStrict && !this.config.attestOnchainCheck) {
-        throw new Error(
-          "strict attestation requires the finalized on-chain TEE-key check; set DARKNYX_DAEMON_ATTEST_STRICT=0 only for development",
-        );
-      }
-      this.attestationResult = await this.verifyAttestationFn({
-        gatewayUrl: this.config.gatewayUrl,
-        token: this.config.token,
-        expected: this.config.attestation,
-        quoteVerifier: this.quoteVerifier,
-        fetchImpl: this.fetchImpl,
-        strict: this.config.attestationStrict,
-      });
-      // NOT quote-bound (SW-18): this comes from the unauthenticated `/info`
-      // even on the attested path, because the quote's 64-byte `report_data` is
-      // already full with `nonce ‖ SHA-256(signer_set)`. A wrong value gets
-      // orders rejected at intake — a DoS the gateway could achieve by not
-      // answering — but cannot make a STALE session accepted.
-      this.bootSessionId = fromHex(this.attestationResult.bootSessionId);
-      if (this.config.attestOnchainCheck) {
-        this.expectedTeePubkeys = [...this.attestationResult.teePubkeys];
-        await this.requireFinalizedTeePubkeys(this.expectedTeePubkeys);
-      } else {
-        this.expectedTeePubkeys = null;
-      }
-      this.resumeTrading();
-    } else {
-      const info = await fetchInfo(
-        this.config.gatewayUrl,
-        this.config.token,
-        this.fetchImpl,
+    if (
+      this.verifyAttestationFn &&
+      this.config.attestationStrict &&
+      !this.config.attestOnchainCheck
+    ) {
+      throw new Error(
+        "strict attestation requires the finalized on-chain TEE-key check; set DARKNYX_DAEMON_ATTEST_STRICT=0 only for development",
       );
-      this.bootSessionId = fromHex(info.bootSessionId);
     }
-
-    if (this.bootSessionId.length !== 32) {
-      throw new Error("/info boot_session_id must be 32 bytes");
+    this.transportState = "reverifying";
+    this.applyVerifiedIdentity(
+      await this.verifyApplicationIdentity(
+        this.fetchImpl,
+        this.transportSupervisor?.verifiedBootSessionId(),
+      ),
+    );
+    if (this.expectedTeePubkeys) {
+      await this.requireFinalizedTeePubkeys(this.expectedTeePubkeys);
     }
+    this.resumeTrading();
 
     this.started = true;
     // One-time migration safety: an existing DB can advance a newly-created
@@ -692,16 +944,27 @@ export class Daemon {
       // says so beats one that refuses to boot.
       await this.reconcileNow("startup");
     }
+    this.transportState = this.reconcileFailureReason ? "paused" : "ready";
+    this.transportPauseReason = this.reconcileFailureReason
+      ? "reconciliation_failed"
+      : null;
   }
 
   stop(): void {
+    this.stopped = true;
+    this.transportState = "paused";
+    this.transportPauseReason = "stopped";
     this.fills?.stop();
     this.orders?.stop();
     this.tracker?.stop();
     if (this.teeKeyRefreshTimer) clearInterval(this.teeKeyRefreshTimer);
     this.teeKeyRefreshTimer = null;
+    if (this.transportRecoveryTimer) clearTimeout(this.transportRecoveryTimer);
+    this.transportRecoveryTimer = null;
+    this.transportNextAttemptMs = null;
     this.placer.close();
     this.streamClient.close();
+    void this.transportSupervisor?.close();
     this.started = false;
   }
 
@@ -857,6 +1120,11 @@ export class Daemon {
     // threw — the reconciliation pauses are independent fields precisely
     // because a trust resume must not clear them.
     const pauseReason =
+      (this.transportState !== "ready"
+        ? `transport ${this.transportState}${
+            this.transportPauseReason ? ` (${this.transportPauseReason})` : ""
+          }`
+        : null) ??
       this.tradingPauseReason ??
       (this.reconciling
         ? "reconciling local state after a stream gap or restart"
@@ -871,6 +1139,10 @@ export class Daemon {
       reconcileFailureReason: this.reconcileFailureReason,
       lastFinalizedKeyRefreshMs: this.lastFinalizedKeyRefreshMs,
       onchainKeyMonitoring: this.expectedTeePubkeys !== null,
+      transportState: this.transportState,
+      transportPauseReason: this.transportPauseReason,
+      transportRecoveryAttempts: this.transportRecoveryAttempts,
+      transportNextAttemptMs: this.transportNextAttemptMs,
     };
   }
 

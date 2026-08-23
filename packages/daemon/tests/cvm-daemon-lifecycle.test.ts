@@ -475,6 +475,8 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
         transportMode: RATLS
           ? ("ra-tls" as const)
           : ("gateway-terminated" as const),
+        deploymentTier: RATLS ? "production" : "development",
+        allowLegacyTransport: !RATLS,
         ...(RATLS
           ? {
               expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
@@ -537,6 +539,8 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       transportMode: RATLS
         ? ("ra-tls" as const)
         : ("gateway-terminated" as const),
+      deploymentTier: RATLS ? "production" : "development",
+      allowLegacyTransport: !RATLS,
       ...(RATLS
         ? {
             expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,

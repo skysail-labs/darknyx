@@ -1,13 +1,14 @@
 # Transport integrity — architecture, evidence, and remediation plan
 
-**Status:** CPU RA-TLS is deployed and live-tested. D1 replacement-socket
-hardening is code complete pending merge; D2/D3 remain open. Browser transport
-and GPU parity are deferred by product/resource decision.
+**Status:** CPU RA-TLS is deployed and live-tested. D1 is merged. D2/D3 are
+implemented together and locally verified; their CPU restart drill and merge
+remain open. Browser transport and GPU parity are deferred by product/resource
+decision.
 
 - **Canonical record since:** 2026-08-23
-- **Last code baseline reviewed:** `main` at `8e773b6` plus D1 working branch
+- **Last code baseline reviewed:** `main` at `a9a2a04b` plus the combined D2/D3 branch
 - **Primary finding:** T-03
-- **Active follow-ups:** audit_9 TR-02, TR-03, and TR-05
+- **Active follow-ups:** audit_9 TR-03 and TR-05 (TR-02 merged in PR #199)
 - **Deferred follow-ups:** T-03B/R-01 (browser); TR-10/R-22 (GPU)
 - **Source ledgers:** `audits/audit_6/tracker.md`,
   `audits/audit_8/audit_8_findings.md`,
@@ -175,8 +176,11 @@ HTTP/WebSocket pair into its venue clients. It separately verifies application
 attestation and reconciles the quote-bound signer set with finalized Solana
 governance.
 
-The current defects are lifecycle and socket-adoption gaps around this correct
-cryptographic core; they do not invalidate the manifest or quote construction.
+One supervisor now owns the daemon's HTTP and WebSocket generation. A boot or
+socket verdict pauses placement, verifies a new immutable generation, checks
+application attestation plus finalized governance, refreshes the stream, and
+reconciles before placement resumes. The remaining work is live restart
+evidence, not another daemon architecture change.
 
 ### 3.4 Deployment
 
@@ -257,9 +261,8 @@ The remaining daemon work must preserve all of these properties.
 
 | Phase | Branch / PR | Finding | Result | Live requirement | Status |
 |---|---|---|---|---|---|
-| D1 | `remediation/ratls-socket-adoption` | TR-02 | Every replacement HTTP socket is SPKI-refused before undici can dispatch bytes | Local adversarial TLS peers; no CVM | Code complete; merge pending |
-| D2 | `remediation/daemon-transport-lifecycle` | TR-05 | Restart pauses, re-verifies, reconciles, and resumes through one supervised generation | CPU CVM restart drill | Open |
-| D3 | `remediation/daemon-ratls-policy` | TR-03 + legacy-default gap | Production defaults to RA-TLS and pins the server-reported mode | Fold into D2 CPU window when stacked | Open |
+| D1 | `remediation/ratls-socket-adoption` / PR #199 | TR-02 | Every replacement HTTP socket is SPKI-refused before undici can dispatch bytes | Local adversarial TLS peers; no CVM | Merged 2026-08-23 |
+| D2 + D3 | `remediation/daemon-ratls-lifecycle-policy` | TR-03 + TR-05 + legacy-default gap | One supervised restart lifecycle; production RA-TLS default; server mode and transport boot pinned | One CPU CVM restart drill | Code complete; live evidence and merge pending |
 
 There is deliberately no GPU phase. TR-10/R-22 remain deferred as described in
 §1.3.
@@ -320,7 +323,7 @@ leave.
 - Mutation test by removing connector refusal and proving the unique request
   marker reaches the malicious peer.
 
-D1's implementation now arms `TransportAgent` with the bootstrap quote's SPKI.
+D1's merged implementation arms `TransportAgent` with the bootstrap quote's SPKI.
 The connector destroys a different-SPKI replacement before invoking undici's
 connection callback, preserves the typed `spki_mismatch` verdict through
 undici's `TypeError.cause`, and marks an exact-SPKI replacement as belonging to
@@ -330,8 +333,7 @@ The adversarial test swaps the peer after the preflight gate but before the
 application dispatch. The wrong-certificate peer receives zero requests and
 zero body bytes; the same-certificate peer succeeds. Removing the connector
 guard makes the unique private marker cross to the substituted peer, so the
-test is mutation-proven. D1 is code complete pending review and merge. No CVM
-is required.
+test is mutation-proven. D1 merged in PR #199. No CVM was required.
 
 ---
 
@@ -403,6 +405,24 @@ Requirements:
 8. Record recovery duration, attempts, stream reconnects, and RSS.
 9. Drain and stop using the CPU CVM runbook.
 
+### 8.5 Implementation status
+
+The daemon now uses stable HTTP and WebSocket delegates backed by one atomic
+generation. Typed HTTP or WebSocket refusals and cadence-detected staleness
+enter the same single-flight recovery. The stream is suspended while a fresh
+candidate is transport-verified; `/info` mode and boot are pinned to local
+policy and the quote-bound transport boot; application attestation and
+finalized signer governance are rechecked; then the stream resumes and durable
+state reconciles. Security verdicts stay paused, while only typed network
+failures receive bounded jittered backoff. Status exposes the closed-set
+lifecycle state, reason, attempt count, and next retry time.
+
+Local tests cover ten concurrent violations collapsing to one build, atomic
+HTTP/WebSocket swap, boot disagreement, application and governance rejection,
+network-only retry, reconciliation gating, no automatic placement, and stop
+during verification. The live CPU drill above remains mandatory before
+closure.
+
 ---
 
 ## 9. D3 — production policy and observable transport mode
@@ -441,6 +461,16 @@ is an operational surface: the daemon rejects disagreement and requires
 - `/info`, the transport manifest, OpenAPI, Rust, and TypeScript agree.
 - A verified endpoint whose `/info` mode disagrees is rejected before auth.
 - Nightly environment-parity and no-global-fetch guards remain green.
+
+### 9.4 Implementation status
+
+Omission now selects `ra-tls` and a `production` deployment tier. Production
+rejects `gateway-terminated`; development and simulator deployments need both
+the explicit legacy mode and `DARKNYX_DAEMON_ALLOW_LEGACY_TRANSPORT=1`.
+`/info.transport_mode` is emitted from boot-selected server state, appears in
+both OpenAPI contracts, and is pinned at startup and after every supervised
+recovery. These changes ship with D2 so policy and restart behavior cannot
+drift between PRs.
 
 ---
 
@@ -481,10 +511,11 @@ never `https://api.devnet.solana.com`.
 
 ### 11.1 PR order
 
-1. D1 lands independently because it is the confidentiality boundary D2 uses.
-2. D2 may be stacked with D3 for review, but each invariant and test remains
-   independently visible.
-3. Do not add browser or GPU changes to these PRs.
+1. D1 landed independently because it is the confidentiality boundary the
+   lifecycle supervisor uses.
+2. D2 and D3 ship in one PR; each invariant and test remains independently
+   visible within it.
+3. Do not add browser or GPU changes to this PR.
 
 Every PR records finding IDs, invariant restored, affected wire behavior,
 tests, live evidence where required, and rollback.

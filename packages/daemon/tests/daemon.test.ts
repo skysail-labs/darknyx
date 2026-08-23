@@ -63,6 +63,8 @@ const config = (): DaemonConfig => ({
   // Legacy path: predates T-03P and exercises the gateway-terminated
   // transport. Stated rather than defaulted.
   transportMode: "gateway-terminated" as const,
+  deploymentTier: "simulator" as const,
+  allowLegacyTransport: true,
   gatewayWsUrl: "wss://gw",
   token: "tok",
   rpcUrl: "https://rpc",
@@ -107,6 +109,7 @@ function fakeFetch(): typeof fetch {
           tee_pubkey: PublicKey.default.toBase58(),
           tee_pubkeys: [PublicKey.default.toBase58()],
           boot_session_id: "5a".repeat(32),
+          transport_mode: "gateway-terminated",
         }),
         { status: 200 },
       );

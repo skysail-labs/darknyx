@@ -79,6 +79,10 @@ impl BootAppInfo {
 /// in `Arc` and cloned cheaply into each request's State extractor.
 pub struct ApiState {
     pub app_info: BootAppInfo,
+    /// Boot-selected client transport policy. `/info` reports this exact
+    /// server state so clients can pin the operational API to the quote-bound
+    /// transport manifest instead of inferring a mode from route failures.
+    pub transport_mode: crate::config::TransportModeConfig,
     /// Fresh random identifier generated once per process boot. Every order
     /// signature binds it, invalidating queued requests after a restart.
     pub boot_session_id: [u8; 32],
@@ -566,6 +570,7 @@ impl ApiState {
         Self {
             // T-03P: off unless main.rs supplies an RA-TLS identity.
             transport_identity: None,
+            transport_mode: crate::config::TransportModeConfig::GatewayTerminated,
             transport_rate_limiter:
                 super::transport_attestation::TransportAttestationRateLimiter::new(),
             app_info,
@@ -659,6 +664,13 @@ impl ApiState {
     /// `with_shard_pubkeys` (same source `signers`).
     pub fn with_signer_set_hash(mut self, hash: [u8; 32]) -> Self {
         self.signer_set_hash = hash;
+        self
+    }
+
+    /// Surface the configured transport mode on `/info`. This is operational
+    /// cross-check data; the nonce-bound transport quote remains authoritative.
+    pub fn with_transport_mode(mut self, mode: crate::config::TransportModeConfig) -> Self {
+        self.transport_mode = mode;
         self
     }
 
@@ -1017,6 +1029,7 @@ impl ApiState {
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             oracle: Some(OracleCache::new()),
             oracle_mode: None,
+            transport_mode: crate::config::TransportModeConfig::GatewayTerminated,
             // No scheduler running by default — tests that need
             // to drive the `/settlement/status/*` endpoint must
             // spawn one and call `with_settle_state(...)`.

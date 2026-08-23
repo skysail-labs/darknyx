@@ -114,6 +114,7 @@ async fn info_returns_stub_app_fields() {
     assert_eq!(json["app_name"], "darknyx-tee-stub");
     assert_eq!(json["device_id"], "stub-device-id");
     assert!(json["compose_hash"].is_string());
+    assert_eq!(json["transport_mode"], "gateway-terminated");
     assert!(json["tcb_info"].is_object());
     assert!(json["tcb_info"]["mrtd"].is_string());
     assert!(json["tee_pubkey"].is_string());
