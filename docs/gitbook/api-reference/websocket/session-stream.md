@@ -20,7 +20,7 @@ The legacy `/ws/trading`, `/ws/orders`, and `/ws/fills` routes are removed. The
 ## Connect and log in
 
 ```text
-wss://<gateway-host>/v1/stream
+wss://<ra-tls-origin>/v1/stream
 ```
 
 The socket upgrades **unauthenticated**. Every op except `ping` is rejected until
@@ -48,6 +48,11 @@ multiplexed session instead of opening one socket per market or channel. A
 token refresh must retain the same account identity; attempting to switch
 accounts on an authenticated socket returns stream error `4030` and requires a
 new connection.
+
+For Node clients, open this URL with the verified WebSocket factory returned by
+`createVerifiedTransport`, not a stock WebSocket or an accept-any-certificate
+setting. That factory gates the upgrade socket against the enclave's
+quote-bound, boot-scoped certificate before a login frame can leave.
 
 ## Subscribe to channels
 

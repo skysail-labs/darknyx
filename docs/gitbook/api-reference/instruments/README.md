@@ -84,8 +84,8 @@ on-chain `MarketConfig` when that value is required for independent monitoring.
 
 ## One endpoint, several books
 
-All instruments in the array share the same gateway, bearer-token session, and
-attestation identity. The signed `symbol` selects one isolated book; cancels,
+All instruments in the array share the same verified enclave origin,
+bearer-token session, and attestation identity. The signed `symbol` selects one isolated book; cancels,
 reads, and streams stay on the same connection. A match proof never mixes
 symbols, and an atomic modify cannot move an order between markets—cancel and
 place a fresh order when changing pairs.

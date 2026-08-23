@@ -79,7 +79,7 @@ wire contract is unambiguous.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `viewing_pubkey` | string | Yes | 32-byte contributory X25519 public key derived by the SDK. It is signed in the canonical body. Low-order/non-contributory points are rejected before booking. |
-| `session_id` | string | Yes | 32-byte current `/info.boot_session_id`, signed in the canonical body. A CVM restart changes it and invalidates stale orders. The value is not quote-bound; a substituted value is rejected by intake rather than weakening replay protection. |
+| `session_id` | string | Yes | 32-byte current `/info.boot_session_id`, signed in the canonical body. A CVM restart changes it and invalidates stale orders. Programmatic clients verify the same value in the transport-attestation manifest; a substituted value is rejected by intake rather than weakening replay protection. |
 
 ### Signature
 

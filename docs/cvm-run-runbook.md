@@ -585,7 +585,7 @@ deployment keeps booting.
 > Note the browser→trader-host leg is unaffected by any of this: it uses
 > trader-host's own public certificate, and it is still plaintext AT
 > trader-host. That is **T-03B**, deferred — see
-> [`transport-integrity-plan.md`](transport-integrity-plan.md) §5.6.
+> [`transport-integrity-remediation-plan.md`](transport-integrity-remediation-plan.md) §3–§4.
 
 ## 6. STOP THE CVM
 

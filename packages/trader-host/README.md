@@ -1,6 +1,12 @@
 # `@darknyx/trader-host`
 
-Production-origin boundary for the Darknyx browser trader. It serves a reviewed
+> **Deferred product surface (2026-08-23).** The browser trader is not an
+> active or launch-qualified Darknyx access path. This package is retained for
+> testing and future evaluation; do not deploy it for external users or real
+> value. It remains an ordinary plaintext boundary for browser orders and its
+> upstream WebSocket has not completed the verified-transport cutover.
+
+Origin boundary for the deferred Darknyx browser trader. It serves a reviewed
 static build and `release.json`, applies the required cross-origin isolation,
 CSP/Trusted Types, HSTS and browser capability headers, and owns the same-origin
 session plus live-data boundary.

@@ -12,8 +12,9 @@ Darknyx exposes a **REST + WebSocket API** from the confidential-VM deployment.
 Authentication is **two layers**: an account **bearer token** (who is
 allowed to talk to the venue) plus a per-order **trading-key signature** (who
 cryptographically owns the order). Market and health reads are public; private
-state and order management are authenticated. Attestation verifies the server
-before a client discloses order intent.
+state and order management are authenticated. The Node SDK and daemon first
+verify the enclave's boot-scoped RA-TLS certificate on the connection they will
+use; only then do they disclose credentials or order intent.
 {% endhint %}
 
 ## The authentication model
@@ -76,6 +77,7 @@ reconcile after reconnecting.
 | `GET` | `/admin/metrics/settlement` | admin bearer | Bounded settlement queue, throughput, and latency telemetry |
 | `GET` | `/system/status` | public | Liveness / degraded-mode snapshot |
 | `GET` | `/time` | public | Server slot + unix time |
+| `GET` | `/transport-attestation` | public | Quote binding the live TLS certificate, boot, image and signer set |
 | `GET` | `/attestation` | public | TDX attestation quote |
 | `GET` | `/info` | public | Running image identity (compose hash, app id, signer) |
 | `GET` | `/health` | public | Liveness probe |
@@ -93,29 +95,41 @@ connection drops.
 
 ## Quick start
 
-```bash
-# 1. Exchange credentials for a bearer token.
-TOKEN=$(curl -s -X POST "$GATEWAY/auth/token" \
-  -H "Content-Type: application/json" \
-  -d '{"api_key":"...","api_secret":"...","passphrase":"..."}' \
-  | jq -r .access_token)
+```ts
+import { createVerifiedTransport } from "@darknyx/sdk/transport-node";
 
-# 2. Read the markets (public).
-curl -s "$GATEWAY/instruments" | jq .
+// Obtain these pins from the independently approved release and finalized
+// VaultConfig, not from the server you are about to verify.
+const transport = await createVerifiedTransport({
+  baseUrl: process.env.DARKNYX_URL!,
+  deps: verifierDependencies,
+  expectedComposeHash,
+  expectedSignerSetSha256,
+  createWebSocket,
+});
 
-# 3. Check venue-wide readiness and the selected market's readiness.
-curl -s "$GATEWAY/system/status" | jq .
-curl -s "$GATEWAY/instruments/SOL-USDC" | jq .trading_enabled
+const tokenResponse = await transport.fetch(
+  new URL("/auth/token", process.env.DARKNYX_URL!),
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ api_key, api_secret, passphrase }),
+  },
+);
 
-# 4. Place an order. The body carries the collateral-note commitment, the
-#    VALID_INPUT proof, signed viewing key + boot session, and a trading-key
-#    signature over the canonical body. The SDK builds all of these. See
-#    Orders → Place Order for the full field reference.
-curl -s -X POST "$GATEWAY/orders" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d @order.json | jq .
+const instruments = await transport.fetch(
+  new URL("/instruments", process.env.DARKNYX_URL!),
+);
+// Pass transport.fetch and transport.webSocketFactory to the SDK order and
+// stream clients so every private operation stays on the verified transport.
 ```
+
+The verifier dependency and pin-loading setup is deployment-specific; the
+reference daemon is the complete integration example. Raw `curl` is useful for
+public diagnostics only after an operator has independently verified the
+endpoint. Do not use `curl -k` or disable Node TLS verification for credentials
+or orders: accepting an arbitrary self-signed certificate removes the RA-TLS
+guarantee.
 
 {% hint style="success" %}
 **Use the SDK**
@@ -126,6 +140,12 @@ contributory viewing key, and the current boot session, all of which the **TypeS
 for you from your keys and a deposited note. Hand-building the body is possible
 (the wire contract is documented), but the SDK is the intended path. See
 [SDK → TypeScript Client](../sdk/typescript-client.md).
+{% endhint %}
+
+{% hint style="warning" %}
+The browser trader is currently deferred and is not the supported access path.
+Its prototype relays sensitive traffic through an ordinary trader host, so the
+programmatic trust model above must not be assumed for browser sessions.
 {% endhint %}
 
 ## Rate limits

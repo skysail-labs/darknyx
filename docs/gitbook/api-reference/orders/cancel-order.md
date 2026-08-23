@@ -41,7 +41,7 @@ the body.
 | ----------------------- | -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `trading_key`           | string         | Yes      | 32-byte hex. Must be the key that placed the order.                                                                                                                                |
 | `cancel_nonce`          | decimal string | Yes      | A canonical `u64` decimal string bound into the signed cancel body. It must **strictly increase** per trading key; the string form avoids JavaScript precision loss.               |
-| `session_id`            | string         | Yes      | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. The value is not quote-bound; a substituted value only makes the engine reject the request. |
+| `session_id`            | string         | Yes      | Current 32-byte `/info.boot_session_id`, hex. It scopes the cancel to one engine boot. Programmatic clients verify the same value in the transport-attestation manifest; a substituted value only makes the engine reject the request. |
 | `trading_key_signature` | string         | Yes      | 64-byte hex. Ed25519 signature over the canonical cancel body: `{ order_id, trading_key, cancel_nonce, session_id }`.                                                              |
 
 The cancel nonce is part of the signed bytes, so a captured cancel request cannot

@@ -18,11 +18,15 @@ short-lived-token refresh, and **cancel-on-disconnect** for market makers.
 ## Connect
 
 ```text
-wss://<gateway-host>/v1/stream
+wss://<ra-tls-origin>/v1/stream
 ```
 
 The socket upgrades without credentials in the URL. Its first authenticated
 operation is a `login` frame. Set `cancel_on_disconnect` in that frame:
+
+Create it with the verified WebSocket factory returned by the same Node
+transport that handles REST. A stock WebSocket does not authenticate the
+engine's self-signed, boot-scoped certificate.
 
 ```json
 {
@@ -121,7 +125,7 @@ also answered.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/v1/stream`);
+const ws = transport.webSocketFactory(`${WSS}/v1/stream`);
 let id = 0;
 const next = () => `r-${++id}`;
 

@@ -8,35 +8,40 @@ description: "Where the Darknyx API lives, the common request and response conve
 {% hint style="info" %}
 **TL;DR**
 
-Every endpoint, REST and WebSocket, is served over HTTPS from the **same
-origin**. TLS terminates at the dstack gateway — itself an attested confidential
-VM — which reaches the Darknyx engine over a mutually attested encrypted tunnel.
-Use the gateway origin for HTTPS and the same origin (swap the scheme to
-`wss://`) for WebSocket.
+Every endpoint, REST and WebSocket, is served from the same RA-TLS origin. The
+Darknyx engine terminates TLS itself with a boot-random, attestation-bound key;
+the dstack `s`-suffix route passes the TLS stream through without terminating
+it. Use the HTTPS origin for REST and swap the scheme to `wss://` for the shared
+stream.
 {% endhint %}
 
-## The gateway
+## The RA-TLS origin
 
-Darknyx is reached through the dstack gateway, whose TLS certificate key is
-generated inside its own confidential VM. Traffic continues to the Darknyx CVM
-over a WireGuard tunnel established only after both sides verify each other's
-attestation — so the path is protected from the infrastructure operator end to
-end, across two measured boundaries rather than one. See
-[Transport & Attestation](./transport-and-attestation.md) for what that does and
-does not guarantee. A single origin serves everything:
+The public hostname routes raw TLS to port `8443` inside the Darknyx CVM. Its
+certificate is self-signed by design: clients authenticate its public key with
+`GET /transport-attestation`, not with a public certificate authority. A single
+verified origin serves everything:
 
 ```text
-HTTPS    https://<gateway-host>
-WebSocket wss://<gateway-host>
+HTTPS     https://<app-id>-8443s.dstack-pha-<node>.phala.network
+WebSocket wss://<app-id>-8443s.dstack-pha-<node>.phala.network
 ```
 
 - REST paths are mounted at the root (`/auth/token`, `/orders`, `/instruments`, …).
 - The sole WebSocket path is `/v1/stream`; connect with the `wss://` scheme and
   authenticate in-band with `op: login`.
 
-The exact host for a given deployment is published with that deployment. The
-identity of the code behind the host is independently verifiable. See
-[`/info` and `/attestation`](./transport-and-attestation.md).
+The exact host and approved measurement are published with the reviewed
+release. The `s` suffix selects TLS passthrough; omitting it reaches a different
+gateway-terminated transport and is not equivalent. Verify the connection
+before authentication as described in
+[Transport & Attestation](./transport-and-attestation.md).
+
+{% hint style="warning" %}
+The browser trader is deferred and not a supported external access path. Its
+ordinary trader host has a different trust boundary and must not be assumed to
+inherit the direct SDK/daemon guarantee described here.
+{% endhint %}
 
 ## Common headers
 
@@ -77,7 +82,7 @@ per status.
 https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
 {% endopenapi %}
 
-A liveness probe. Returns `200` with the process uptime when the gateway is up.
+A liveness probe. Returns `200` with the process uptime when the engine is up.
 Use it for load-balancer health checks; use [`/system/status`](../system/system-status.md)
 for a richer, trading-relevant readiness signal (is matching running, is
 settlement wired).

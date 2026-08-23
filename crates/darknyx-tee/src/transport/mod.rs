@@ -20,8 +20,7 @@
 //! `8080:8080` publication together — `scripts/check-ratls-cutover.sh` fails the
 //! build if the two move independently, in either direction.
 //!
-//! Design record: `docs/transport-integrity-remediation-plan.md` §7; evidence:
-//! `docs/transport-integrity-plan.md`.
+//! Design and evidence record: `docs/transport-integrity-remediation-plan.md`.
 
 pub mod identity;
 pub mod manifest;

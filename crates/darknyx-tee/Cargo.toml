@@ -161,7 +161,7 @@ rand          = { workspace = true }
 # the transport-attestation quote. The key comes from the OS CSPRNG at every
 # process boot and is never persisted or derived from `dstack.get_key()` —
 # a deterministic key would recreate the very persistence gap this closes
-# (see docs/transport-integrity-plan.md §4).
+# (see docs/transport-integrity-remediation-plan.md §2.3 and §3.1).
 rcgen         = { workspace = true }
 # Compiler-resistant scrub for the RA-TLS private key: `iter_mut()` writes can
 # be optimised away, `Zeroizing` cannot. Resolves to the 1.8.2 already in the

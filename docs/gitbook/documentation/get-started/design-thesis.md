@@ -17,15 +17,21 @@ Darknyx separates those powers:
   proof-valid deposits, withdrawals, merges, and settlements.
 - **An attested confidential VM matches private orders.** Its code identity and
   complete settlement-signer set are bound into an Intel TDX quote that clients
-  can verify before disclosing intent. Ingress crosses a separate confidential
-  gateway whose measurement the current client does not yet pin; that transport
-  boundary is documented explicitly rather than folded into the matcher claim.
+  can verify before disclosing intent. The reference SDK/daemon also binds the
+  boot-random TLS certificate on the actual connection to a separate
+  nonce-challenged quote, so the gateway passes ciphertext rather than
+  terminating the protected session.
 - **The client keeps custody secrets.** Spending and viewing keys remain with the
   trader; the venue receives only the material needed to validate and match an
   order.
 
 The product is a fully collateralized spot venue with private order flow,
 uniform batch clearing, on-chain custody, and recoverable shielded balances.
+
+The current product direction is programmatic access through the SDK and
+non-custodial daemon. Browser trading is deferred and is not part of the launch
+claim; its ordinary hosting boundary must be removed or cryptographically
+crossed before that path can serve external users or real value.
 
 ## The trust decomposition
 

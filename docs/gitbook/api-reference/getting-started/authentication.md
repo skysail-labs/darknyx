@@ -38,6 +38,14 @@ bearer token alone never lets a caller move or cancel another key's orders.
 
 Exchange API credentials for a short-lived bearer token.
 
+{% hint style="warning" %}
+Send credentials only through the quote-verified transport described in
+[Transport & Attestation](./transport-and-attestation.md). The raw HTTP snippets
+below illustrate the wire shape; they do not replace the SDK's RA-TLS check.
+Never make them work against the engine's self-signed certificate with `curl -k`
+or an accept-any-certificate setting.
+{% endhint %}
+
 {% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/auth/token" method="post" %}
 https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
 {% endopenapi %}
@@ -101,7 +109,7 @@ Open the sole WebSocket endpoint without credentials in the URL, then send the
 token in an in-band `login` frame:
 
 ```text
-wss://<gateway-host>/v1/stream
+wss://<ra-tls-origin>/v1/stream
 ```
 
 ```json
@@ -199,7 +207,8 @@ you. The exact field layout for each is on the corresponding endpoint page:
 These require no token:
 
 - `GET /health`, `GET /system/status`, `GET /time`
-- `GET /info`, `GET /attestation`, and the gateway-served `/evidences/*` files
+- `GET /info`, `GET /transport-attestation`, `GET /attestation`, and the
+  separately gateway-served `/evidences/*` files
 - `GET /instruments`, `GET /instruments/{symbol}`
 - `GET /tree/root`
 - `GET /transparency`

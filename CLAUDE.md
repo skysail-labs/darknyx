@@ -50,15 +50,18 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
   byte-identical Poseidon / nullifier / note / key derivation that the TS SDK
   has parity tests against.
-* **Browser trader (`packages/browser-client/` + `packages/trader-host/`)** —
-  shipped 2026-08. `browser-client` is the in-browser trader: keys and proving
-  stay on-device in a custody Worker behind WebAuthn-PRF, and it ships as a
-  signed release whose artifacts are SRI-pinned. `trader-host` is the ordinary
-  Node process that serves that release and **proxies** its CVM and RPC calls;
-  it holds no keys. `packages/client-core/` is the platform-neutral logic both
-  it and the SDK share. **`trader-host` is the reason T-03B exists**: it sees
-  every browser order in plaintext, so the browser half of the transport work
-  is about removing that trust, not about the daemon.
+* **Deferred browser trader (`packages/browser-client/` +
+  `packages/trader-host/`)** — implemented and devnet-tested in 2026-08, but
+  **not an active or launch-qualified product surface**. Product work is paused
+  while Darknyx decides between a daemon-first product and resuming the browser
+  path. `browser-client` keeps keys and proving on-device in a custody Worker
+  behind WebAuthn-PRF. `trader-host` is the ordinary Node process that serves
+  the release and proxies CVM/RPC calls; it holds no keys but sees browser order
+  and stream plaintext. `packages/client-core/` is the platform-neutral logic
+  the browser stack uses. T-03B, R-01, and the remaining browser audit findings
+  must close before any external browser user or real value. Do not expand,
+  deploy, or describe this surface as shipped without an explicit product
+  decision reopening it.
 
   **Each of these has its own README — read it rather than expanding this
   file.** `packages/browser-client/README.md` (custody Worker, WebAuthn-PRF,

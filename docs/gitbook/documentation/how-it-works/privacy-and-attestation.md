@@ -8,11 +8,12 @@ description: "What Darknyx hides, what remains public, and how clients verify th
 {% hint style="info" %}
 **TL;DR**
 
-Darknyx keeps order intent inside hardware-protected gateway and matcher memory,
-and balances inside on-chain commitments. The host operator should not be able
-to read that protected memory. Clients verify the matcher's hardware quote,
-image measurement, and complete on-chain settlement-signer set before sending
-orders; the current client does not yet pin the separate gateway measurement.
+On the programmatic path, Darknyx keeps order intent inside the measured matcher
+and balances inside on-chain commitments. The engine terminates TLS with a
+boot-random key inside its confidential VM; the deployment gateway passes that
+encrypted stream through. The SDK and daemon verify that live certificate,
+hardware quote, image measurement, boot session, and complete on-chain
+settlement-signer set before sending credentials or orders.
 {% endhint %}
 
 ## Who can see your orders?
@@ -22,7 +23,7 @@ orders; the current client does not yet pin the separate gateway measurement.
 | **Centralized exchange** | The operator | Can front-run, trade against you, or leak data. |
 | **On-chain order book** | The sequencer / validators, and anyone indexing the chain | Reorder, censor, sandwich (MEV); the leak is permanent and public. |
 | **Off-chain dark desk** | The operator | Custody and order intent both exposed to one party. |
-| **Darknyx** | A confidential ingress gateway and the measured matcher, both inside protected VM memory | The host and chain do not receive plaintext orders. Clients verify the matcher; the gateway pin is a documented external-use gate. |
+| **Darknyx programmatic path** | The measured matcher inside protected VM memory | The host and chain do not receive plaintext orders. The client verifies that the certificate on its connection belongs to the approved matcher boot. |
 
 The difference from "encrypted on-chain orders" is that on Darknyx your order is
 **never a transaction at all** (see [Trade Flow](./trade-flow.md)). What lands on
@@ -32,7 +33,7 @@ Solana is the settled *result*, with a zero-knowledge proof, never the order.
 
 | Property | What is hidden | Mechanism |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent stays inside hardware-protected gateway and matcher memory, never in a tx, log, or account. |
+| **Order privacy** | Side, size, limit price | On the supported programmatic path, order intent crosses enclave-terminated RA-TLS and stays inside matcher memory; it never appears in a tx, log, or account. |
 | **Trader privacy** | The link from an order or settled note to your wallet | Orders use a **trading key**. Deposit and withdrawal transfers remain visible, but do not publish the shielded note owner. |
 | **Position privacy** | What you hold | Balances are on-chain **note commitments** (Poseidon hashes) that seal owner, value, and token until you spend them. |
 | **Amount privacy** | The size and price of a settled trade | Settlement publishes only note commitments and a zero-knowledge proof of conservation; the traded amounts and the clearing price never appear on-chain. |
@@ -54,45 +55,58 @@ substitutes for the other.
 Verification is a client-side step (the SDK ships a helper). In order, you confirm:
 
 ```text
- 1. Hardware attestation valid?
-        TDX quote signature checks out; platform TCB is current.
+ 1. Transport belongs to a live enclave boot?
+        A fresh quote binds the certificate on the actual connection.
                           │  yes
                           ▼
- 2. Right code?
+ 2. Hardware attestation and code valid?
+        TDX quote signature checks out; platform TCB is current;
         quote event log commits to the compose_hash YOU expect.
                           │  yes
                           ▼
- 3. Same engine end-to-end?
-        quote report_data binds the ordered full signer set, and that set ==
-        finalized VaultConfig.tee_pubkeys on Solana.
+ 3. Same boot and settlement authority end-to-end?
+        transport quote binds the boot session and ordered full signer set;
+        that set == finalized VaultConfig.tee_pubkeys on Solana.
                           │  all three hold
                           ▼
                  trust the channel with order intent
 ```
 
-- **Step 1** is standard DCAP verification of the hardware quote.
-- **Step 2** rejects malformed or ambiguous event logs, requires exactly one
+- **Step 1** observes the self-signed certificate on the connection that will
+  carry the request and verifies a fresh transport quote binding its SPKI. A
+  probe to a different socket is not a substitute.
+- **Step 2** performs DCAP verification, rejects malformed or ambiguous event
+  logs, requires exactly one
   runtime-typed compose event, derives the trusted compose hash from the
   DCAP-verified RTMR3 log, and compares it with a release measurement obtained
   independently. `/info` and `/transparency` are useful displays, not the root
   of trust.
-- **Step 3** checks every shard signer, in order. The quote commits to the full
-  set; `tee_pubkey` is simply the first member exposed for convenience. The
-  client compares the complete set with a finalized on-chain `VaultConfig` read.
+- **Step 3** checks the boot session and every shard signer, in order. The
+  transport quote commits to both; `tee_pubkey` is simply the first signer
+  exposed for convenience. The client compares the complete set with a
+  finalized on-chain `VaultConfig` read.
 
-The SDK verifies the quote and returns the quote-bound signer set; the client
-still supplies the independently approved compose hash and compares the full
-returned set with finalized on-chain configuration. The reference daemon does
-this comparison automatically and pauses new trading when it becomes stale or
-mismatched.
+The SDK verifies the transport evidence and returns the quote-bound identity;
+the client still supplies the independently approved compose hash and compares
+the full returned signer set with finalized on-chain configuration. The
+reference daemon performs these checks automatically and pauses new trading
+when its evidence becomes stale or mismatched.
 
 {% hint style="warning" %}
 **TLS alone is not verification**
 
-Connecting over TLS gives you a private channel to *some* machine. Only attestation
-tells you the machine runs the real engine. A client that skips the attestation
-check has confidentiality without integrity. Pin an expected measurement and
-verify it before sending orders.
+Connecting over ordinary TLS gives you a private channel to *some* machine.
+Darknyx clients instead bind the certificate on the connection they use to a
+fresh enclave quote and an independently approved measurement. Disabling
+certificate checks or verifying a separate probe connection defeats that
+guarantee.
+{% endhint %}
+
+{% hint style="warning" %}
+**Browser access is deferred.** The implemented browser prototype currently
+relays sensitive traffic through an ordinary trader host that can read it. It is
+not the supported external-access path and is not launch-qualified. Use the SDK
+or daemon for the programmatic trust model described on this page.
 {% endhint %}
 
 ## What attestation does not cover

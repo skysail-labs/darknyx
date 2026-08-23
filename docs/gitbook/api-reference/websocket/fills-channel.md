@@ -28,11 +28,15 @@ spend it.
 ## Connect
 
 ```text
-wss://<gateway-host>/v1/stream
+wss://<ra-tls-origin>/v1/stream
 ```
 
 Login in-band, then send `{"op":"subscribe","channels":["fills"]}`. The
 channel is per-account: you only receive memos for orders you placed.
+
+Use the verified WebSocket factory returned by the same Node transport that
+handles REST. A stock WebSocket does not authenticate the engine's self-signed,
+boot-scoped certificate.
 
 ## Memo shape
 
@@ -115,7 +119,7 @@ continuations, and reconstructs merge outputs without live stream history.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/v1/stream`);
+const ws = transport.webSocketFactory(`${WSS}/v1/stream`);
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ op: "login", request_id: "login-1", token: TOKEN }));

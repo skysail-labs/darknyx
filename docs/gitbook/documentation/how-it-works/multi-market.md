@@ -10,7 +10,7 @@ description: "How one attested Darknyx venue serves several independently govern
 
 One Darknyx confidential VM can serve several spot pairs. Each pair has its own
 order book, oracle, limits, and on-chain market configuration, while traders use
-one gateway, one attestation check, and one authenticated stream. Matches from
+one verified enclave origin, one attestation check, and one authenticated stream. Matches from
 different markets never share a proof batch.
 {% endhint %}
 
@@ -23,7 +23,7 @@ before it could even discover a market.
 Darknyx instead presents one venue:
 
 ```text
-one gateway + one verified CVM + one /v1/stream session
+one verified origin + one CVM + one /v1/stream session
                            │
              ┌─────────────┼─────────────┐
              ▼             ▼             ▼

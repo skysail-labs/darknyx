@@ -3,29 +3,31 @@
 > End-to-end attestation deep-dive for the in-CVM matching/settlement
 > layer. Read after `docs/tee-architecture.md` (the in-TEE design).
 >
-> **⚠️ Note (2026-08-15) — the transport half of this document is a TARGET
-> DESIGN, not as-built.** Everything about `dstack-ingress`, a custom
-> `api.darknyx.example.com` domain, TLS terminating inside our CVM, and
-> `report_data[32..64] = SHA-256(served TLS cert pubkey)` describes a deployment
-> that **does not exist**. What actually runs:
+> **Transport status (2026-08-23).** The programmatic path now uses in-process
+> RA-TLS. `darknyx-tee` generates a boot-random, memory-only certificate key and
+> serves TLS 1.3 on `:8443`; the dstack `-8443s` route passes that TLS stream
+> through without terminating it. `GET /transport-attestation` returns a
+> separate nonce-bound quote whose manifest commits to the served SPKI, boot
+> session, instance, and complete ordered signer set. The existing
+> `/attestation` contract remains `nonce ‖ SHA-256(signer set)` and is unchanged.
+> The CPU production compose does not publish plaintext `:8080`.
 >
-> - TLS terminates at the **dstack gateway** (an attested TDX CVM, but not ours),
->   reached at `<app-id>-<port>.dstack-pha-<node>.phala.network`. There is no
->   dstack-ingress in our compose and no custom domain.
-> - `report_data` is `nonce ‖ SHA-256(signer set)`
->   (`crates/darknyx-tee/src/api/attestation.rs:105-107`). **No certificate is
->   bound into it**, so step A of §"verify TLS-cert binding" cannot be performed
->   as written.
-> - The browser trader does not connect to the enclave at all; an ordinary
->   `trader-host` process relays its traffic and sees order intent in plaintext.
+> Four post-cutover programmatic gaps remain tracked in
+> [`transport-integrity-remediation-plan.md`](transport-integrity-remediation-plan.md): replacement
+> sockets must be SPKI-refused inside the connector before request dispatch; the
+> daemon needs supervised re-verification/reconciliation after a boot rotation;
+> production configuration must default to and pin RA-TLS; and the GPU compose
+> still needs the same cutover, but is deferred until confidential-GPU access
+> returns.
 >
-> Closing that gap is tracked as **T-03P / T-03B** —
+> The browser trader is a separate, **deferred and non-launch-qualified**
+> surface. It does not connect to the enclave directly; an ordinary
+> `trader-host` currently relays its traffic and sees order intent in plaintext.
+> T-03B/R-01 must close before external browser users or real value. Historical
+> dstack-ingress/custom-domain sections below are design research, not the
+> as-built programmatic path. See
 > [`transport-integrity-remediation-plan.md`](transport-integrity-remediation-plan.md)
-> for the architecture and PR plan,
-> [`transport-integrity-plan.md`](transport-integrity-plan.md) for the evidence.
-> The attestation-chain material below (KMS, RTMR replay, signer-set binding,
-> `/transparency`) is accurate; treat only the transport/ingress sections as
-> aspirational until that work lands.
+> for the consolidated architecture, evidence, and phase history.
 >
 > **Note (post tree-sharding):** this doc predates K-shard tree-sharding and
 > says `vault_config.tee_pubkey` (singular) throughout. The on-chain field is
@@ -49,7 +51,7 @@ verifier, different cadence, and different consequence on failure:
 | 1 | **dstack-kms** | The CVM's TDX quote (cert chain + RTMR3 + compose-hash whitelist) | KMS refuses to derive app keys; CVM cannot start | Once per CVM boot |
 | 2 | **Our admin multisig** | A specific new CVM's TDX quote, before signing `set_tee_pubkey` | Multisig refuses to sign rotation; new image cannot settle | Once per image upgrade |
 | 3 | **Solana vault program** | Ed25519 signature on `MatchResultPayload` canonical hash matches one of `vault_config.tee_pubkeys` (`is_authorized_tee`) | Settle ix reverts | Every settle tx |
-| 4 | **Client (browser/SDK)** | RA-TLS evidence + TDX quote behind the API endpoint | Client refuses to send orders | Once per session start |
+| 4 | **Programmatic client (SDK/daemon)** | RA-TLS evidence + TDX quote bound to the live connection | Client refuses to send orders | At session start and after transport rotation |
 | 5 | **External observer** | All of the above, via the public `/transparency` endpoint | Public trust signal degrades; nothing breaks technically | Continuous |
 
 **Crucially: there is no on-chain TDX quote verification in v2.** The
@@ -71,7 +73,7 @@ understanding the flow.
 | **dstack-kms RootKey** | dstack-kms's TEE (Phala-managed). Multi-party in their MPC topology. | Master KDF input for *every* application's keys. | Rotated only on KMS-level security incidents. RootPubKey published on-chain in the EVM `DstackKms` contract. |
 | **Darknyx App Root** | dstack-kms TEE, derived per `(app_hash, deployer_id)`. | KDF input for our per-purpose keys. | New value each time our `compose_hash` changes. |
 | **Ed25519 signer** | Our CVM's memory (TDX-encrypted). Derived via `getKey("darknyx/ed25519-signer/v2")` → seed → Ed25519 key. | Signs `canonical_payload_hash(MatchResultPayload)` for `tee_forced_settle_batched`. | Stable for the lifetime of our `compose_hash`. |
-| **TLS cert private key** | dstack-ingress container's memory inside the CVM. Derived from our App Root via the TLS path. | TLS termination on `api.darknyx.example.com`. | Rotated automatically on each Let's Encrypt renewal (every ~60 days). |
+| **RA-TLS certificate private key** | `darknyx-tee` process memory. Generated from the OS CSPRNG and never persisted or derived from the app root. | TLS termination on the programmatic `:8443` listener. | Fresh on every engine process boot. |
 | **Admin multisig signing keys** | The 3-of-5 signers' hardware wallets / Ledgers / Yubikeys. **Outside the TEE.** | Sign `set_tee_pubkey` + governance txs. | Rotated per multisig membership changes (organisational, not technical). |
 
 What about the `root_key` field in `vault_config`? That's a long-lived
@@ -608,11 +610,7 @@ Honest assessment of what the v2 design trusts:
 4. **Our admin multisig signers** honestly verify TDX quotes
    off-chain before signing. (Trust each individual signer, but
    only 3 of 5 need to be honest.)
-5. **`dstack-ingress`'s ACME implementation** does not leak the TLS
-   private key. (Trust Phala's code; auditable + open-source.)
-6. **Let's Encrypt** does not issue certificates outside our CAA
-   policy. (Trust LE; mitigated by CT log monitoring.)
-7. **Our SDK's `EXPECTED_COMPOSE_HASH` constant** is correct and
+5. **Our SDK's `EXPECTED_COMPOSE_HASH` constant** is correct and
    pins the right version. (Trust that a malicious commit replacing
    this constant would be caught in code review — same as any
    security-critical const.)
@@ -621,11 +619,14 @@ What we do NOT trust:
 
 - The cloud provider (GCP / Phala's hardware operator) — TDX
   hardware encryption prevents memory snooping.
-- The network — TLS terminates at the dstack gateway, itself an attested TDX
-  CVM that reaches this enclave over a mutually attested WireGuard tunnel, so no
-  unprotected hop carries plaintext. **In-enclave RA-TLS is not shipped** (T-03);
-  until it is, this line trusts the gateway's measurement, which no client
-  currently pins, and the TLS session is not bound to the quote.
+- The network carrying programmatic order content — TLS terminates inside
+  `darknyx-tee` with a boot-random key, and the dstack `-8443s` route is raw
+  passthrough. Clients bind the served SPKI to a nonce-bound TDX quote before
+  sending credentials. Timing, volume, endpoint metadata, denial of service,
+  and the open replacement-socket hardening item remain outside that statement.
+- The ordinary `trader-host` for browser traffic — that product surface is
+  deferred precisely because the host still sees browser order and stream
+  plaintext. No programmatic RA-TLS claim is extended to it.
 - An individual multisig signer — 3-of-5 threshold.
 - An individual KMS node — Phala's KMS uses multiple nodes (MPC
   capable).

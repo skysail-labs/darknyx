@@ -11,8 +11,10 @@ description: "A worked TypeScript client that authenticates, reads markets, buil
 A reference client that ties the pieces together: get a bearer token, read
 markets and server time, use the SDK's **order builders** to assemble a signed
 order from a deposited note, submit it, and subscribe to the order and fill
-streams. The SDK owns the cryptography (note commitments, the input proof,
-viewing-key derivation, and canonical signing) so your code works in economic terms.
+streams. The Node client first creates one quote-verified RA-TLS transport and
+injects its HTTP and WebSocket adapters everywhere. The SDK owns the
+cryptography (note commitments, the input proof, viewing-key derivation, and
+canonical signing) so your code works in economic terms.
 {% endhint %}
 
 ## What the SDK does for you
@@ -40,6 +42,9 @@ The SDK also ships:
   Wallet-message signatures are not used as spend authority.
 - **System helpers**: server time (for slot-based expiry) and the degraded-mode
   status.
+- **Node transport**: `createVerifiedTransport` binds the certificate on the
+  live HTTP/WebSocket connection to a fresh enclave quote, approved compose
+  hash, boot session, and finalized signer-set pin.
 
 ## Client implementation
 
@@ -63,17 +68,32 @@ import {
   DarknyxApiError,
   deriveOrderId,
 } from "@darknyx/sdk";
+import { createVerifiedTransport } from "@darknyx/sdk/transport-node";
+
+// Abridged: build `verifierDependencies` with the DCAP verifier used by the
+// reference daemon. Obtain the compose and signer-set pins independently from
+// the reviewed release and finalized VaultConfig.
+const transport = await createVerifiedTransport({
+  baseUrl: GATEWAY,
+  deps: verifierDependencies,
+  expectedComposeHash,
+  expectedSignerSetSha256,
+  createWebSocket,
+});
 
 class DarknyxClient {
   private token: string | null = null;
 
-  constructor(private gateway: string) {
+  constructor(
+    private gateway: string,
+    private fetchImpl: typeof fetch,
+  ) {
     this.gateway = gateway.replace(/\/$/, "");
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────
   async login(apiKey: string, apiSecret: string, passphrase: string) {
-    const r = await fetch(`${this.gateway}/auth/token`, {
+    const r = await this.fetchImpl(`${this.gateway}/auth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret, passphrase }),
@@ -91,13 +111,13 @@ class DarknyxClient {
 
   // ── Reference data + health ──────────────────────────────────────────
   getInstruments() {
-    return fetch(`${this.gateway}/instruments`).then((r) => r.json());
+    return this.fetchImpl(`${this.gateway}/instruments`).then((r) => r.json());
   }
   systemStatus() {
-    return fetchSystemStatus(this.gateway);
+    return fetchSystemStatus(this.gateway, { fetchImpl: this.fetchImpl });
   }
   serverTime() {
-    return fetchServerTime(this.gateway);
+    return fetchServerTime(this.gateway, { fetchImpl: this.fetchImpl });
   }
 
   // ── Orders ───────────────────────────────────────────────────────────
@@ -105,7 +125,7 @@ class DarknyxClient {
   // order-builder from your keys + a spendable note (it fills the note
   // commitment, VALID_INPUT proof, viewing key, session, and signature).
   placeOrder(order: object) {
-    return fetch(`${this.gateway}/orders`, {
+    return this.fetchImpl(`${this.gateway}/orders`, {
       method: "POST",
       headers: this.auth(),
       body: JSON.stringify(order),
@@ -113,7 +133,7 @@ class DarknyxClient {
   }
 
   cancelOrder(orderId: string, cancel: object) {
-    return fetch(`${this.gateway}/orders/${orderId}`, {
+    return this.fetchImpl(`${this.gateway}/orders/${orderId}`, {
       method: "DELETE",
       headers: this.auth(),
       body: JSON.stringify(cancel),
@@ -121,7 +141,7 @@ class DarknyxClient {
   }
 
   modifyOrder(orderId: string, modify: object) {
-    return fetch(`${this.gateway}/orders/${orderId}`, {
+    return this.fetchImpl(`${this.gateway}/orders/${orderId}`, {
       method: "PUT",
       headers: this.auth(),
       body: JSON.stringify(modify),
@@ -129,11 +149,11 @@ class DarknyxClient {
   }
 
   getOrder(orderId: string) {
-    return fetch(`${this.gateway}/orders/${orderId}`, { headers: this.auth() }).then((r) => r.json());
+    return this.fetchImpl(`${this.gateway}/orders/${orderId}`, { headers: this.auth() }).then((r) => r.json());
   }
 
   settlementStatus(batchId: number) {
-    return fetch(`${this.gateway}/settlement/status/${batchId}`, { headers: this.auth() }).then((r) => r.json());
+    return this.fetchImpl(`${this.gateway}/settlement/status/${batchId}`, { headers: this.auth() }).then((r) => r.json());
   }
 }
 ```
@@ -164,10 +184,11 @@ const aon = aonPolicy({ amount: 10_000_000n, priceLimit: 150_000_000n });
 // from /tree/inclusion, generate the VALID_INPUT proof, then assemble + sign the
 // wire body (note commitment, proof, viewing key, session, trading signature). The
 // prover is pluggable: `nodeValidInputProver` runs the compiled circuit via
-// snarkjs in Node; a browser app supplies its own WASM prover.
+// snarkjs in Node. The separate browser product/prover remains deferred.
 const order = await proveAndBuildOrder({
   baseUrl: GATEWAY,
   token: client["token"]!,
+  fetchImpl: transport.fetch,
   prover: nodeValidInputProver({ wasmPath, zkeyPath }),
   ownerCommitmentBlinding,
   tokenMint,
@@ -186,7 +207,10 @@ const order = await proveAndBuildOrder({
 });
 
 // Submit over REST...
-const res = await placeOrder({ baseUrl: GATEWAY, token: client["token"]! }, order);
+const res = await placeOrder(
+  { baseUrl: GATEWAY, token: client["token"]!, fetchImpl: transport.fetch },
+  order,
+);
 console.log("placed", res.order_id, res.status);
 ```
 
@@ -205,6 +229,7 @@ directly. `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
 const orders = subscribeOrderUpdates({
   gatewayWsUrl: WSS,
   token: client["token"]!,
+  webSocketFactory: transport.webSocketFactory,
   onUpdate: (u) => {
     if (u.kind === "partially_filled") console.log("partial", u.filled_quantity, "resting", u.new_amount);
     if (u.kind === "fully_filled") console.log("filled", u.order_id);
@@ -217,6 +242,7 @@ const orders = subscribeOrderUpdates({
 const fills = subscribeFills({
   gatewayWsUrl: WSS,
   token: client["token"]!,
+  webSocketFactory: transport.webSocketFactory,
   masterSeed,
   ownerCommitment,
   store: noteStore,
@@ -236,6 +262,7 @@ and resolves a promise per call:
 const trader = new TradingClient({
   gatewayWsUrl: WSS,
   token: client["token"]!,
+  webSocketFactory: transport.webSocketFactory,
   cancelOnDisconnect: true,
 });
 await trader.connect();
@@ -261,7 +288,7 @@ await trader.cancel(hex(orderId), cancel);
 ## Usage
 
 ```typescript
-const client = new DarknyxClient("https://<gateway-host>");
+const client = new DarknyxClient(GATEWAY, transport.fetch);
 await client.login(API_KEY, API_SECRET, PASSPHRASE);
 
 const status = await client.systemStatus();
@@ -276,12 +303,12 @@ console.log(markets.map((m) => m.symbol));
 ```
 
 {% hint style="success" %}
-**Verify the engine first**
+**One verified transport, everywhere**
 
-For the full trust guarantee, verify the enclave's attestation against an
-independently approved measurement before sending order intent. The SDK helper
-verifies DCAP, the measured event log, freshness, and the quote-bound signer
-set; your client must also compare that complete set with finalized on-chain
-`VaultConfig.tee_pubkeys`. The reference daemon performs both halves. Skipping
-them gives you a private channel to *a* machine, not a verified one.
+Every helper that can reach the venue requires an injected `fetchImpl`, and
+every stream constructor accepts the verified `webSocketFactory`. Always pass
+the pair from the same `createVerifiedTransport` result. Falling back to global
+`fetch`, a stock WebSocket, or an accept-any-certificate switch bypasses the
+property even if another call successfully verified an attestation quote. The
+reference daemon is the complete pin-loading and DCAP-verifier integration.
 {% endhint %}

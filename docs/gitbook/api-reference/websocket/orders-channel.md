@@ -17,7 +17,7 @@ orders. Use it instead of polling `GET /orders/{id}`.
 ## Connect
 
 ```text
-wss://<gateway-host>/v1/stream
+wss://<ra-tls-origin>/v1/stream
 ```
 
 Login in-band, then send `{"op":"subscribe","channels":["orders"]}` on the
@@ -25,6 +25,10 @@ same session used for order operations and fills. The channel is
 **per-account**: events are routed to you
 by the order-id → account mapping the engine records at intake, so a subscriber
 only ever receives events for orders it placed.
+
+Use the verified WebSocket factory returned by the same Node transport that
+handles REST. A stock WebSocket does not authenticate the engine's self-signed,
+boot-scoped certificate.
 
 ## Event shape
 
@@ -99,7 +103,7 @@ is a low-latency notifier, not a durable log.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/v1/stream`);
+const ws = transport.webSocketFactory(`${WSS}/v1/stream`);
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ op: "login", request_id: "login-1", token: TOKEN }));

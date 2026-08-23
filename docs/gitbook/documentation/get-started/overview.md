@@ -18,11 +18,12 @@ proofs, but never the order book or a settled trade's plaintext price and size.
 
 Darknyx is a dark pool: an order book where resting orders are not public. Side,
 size, and limit price never appear in a Solana transaction, a log, or an
-account. They cross a hardware-protected ingress gateway and live in the
-hardware-isolated matching engine, whose exact compiled code is measured and
-remotely verifiable. The current client pins the engine rather than the separate
-gateway measurement; see [Transport & Attestation](/api-reference/getting-started/transport-and-attestation)
-for that explicit boundary.
+account. They travel over an attestation-bound TLS connection that terminates
+inside the hardware-isolated matching engine, whose exact compiled code and
+boot-scoped certificate are remotely verifiable. The dstack gateway passes that
+TLS stream through without learning the plaintext. See
+[Transport & Attestation](/api-reference/getting-started/transport-and-attestation)
+for the verification boundary and current pre-release qualification.
 
 Unlike an off-chain matching desk, Darknyx does not give one ordinary operator both
 custody and readable order flow:
@@ -45,7 +46,7 @@ Darknyx enforces three distinct privacy properties, each by a separate mechanism
 
 | Property | What is hidden | How |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent stays inside hardware-protected gateway and matcher memory, never in any Solana tx, log, or account. |
+| **Order privacy** | Side, size, limit price | On the programmatic path, order intent travels over enclave-terminated RA-TLS and stays inside matcher memory; it never appears in a Solana tx, log, or account. |
 | **Trader privacy** | The link from an order or trade to your wallet | You sign orders with a **trading key**, not your wallet. Deposits and withdrawals retain their unavoidable public transfer boundaries. |
 | **Position privacy** | What you hold | Balances are UTXO-style **notes** stored on-chain as Poseidon hashes. Owner, value, and token are sealed inside the hash until you spend it with a proof. |
 
