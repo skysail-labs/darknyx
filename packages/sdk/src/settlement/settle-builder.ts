@@ -55,7 +55,7 @@ export interface Groth16Proof {
 
 /** All-zero Groth16 proof. Kept as a public export for callers (tests) that
  *  build placeholder proof structures; the settle ix no longer carries a
- *  proof inline (v3.1 split it into the `verify_valid_price` ix). */
+ *  proof inline. */
 export const ZERO_PROOF: Groth16Proof = {
   piA: new Uint8Array(64),
   piB: new Uint8Array(128),
