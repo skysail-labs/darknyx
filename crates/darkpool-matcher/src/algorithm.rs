@@ -533,11 +533,10 @@ pub(crate) fn generate_matches(
         // assembler therefore computes both commitments and overwrites these
         // fields (`darknyx-tee/src/matcher/interval.rs`).
         //
-        // They used to be filled in with the RETIRED v2 SHA-256 construction
-        // (`change_note::derive_inner`), which produced values the chain would
-        // never create. That was not merely dead: the assembler's overwrite is
-        // conditional on its Poseidon derivation succeeding, so an error there
-        // left the stale SHA value in the payload rather than failing. Emitting
+        // Filling them in here with any placeholder value would be worse than
+        // leaving them zero: the assembler's overwrite is CONDITIONAL on its
+        // Poseidon derivation succeeding, so an error there would leave the
+        // placeholder in the payload rather than failing. Emitting
         // the zero sentinel makes "not yet derived" explicit and unusable.
         let note_e_commitment = ZERO_COMMITMENT;
         let note_f_commitment = ZERO_COMMITMENT;

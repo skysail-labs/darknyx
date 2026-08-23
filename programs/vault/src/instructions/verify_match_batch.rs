@@ -82,12 +82,12 @@ pub fn verify_match_batch_handler(
     let clock = Clock::get()?;
     // S-04: the TTL is DERIVED, never supplied.
     //
-    // `expiry_slot` used to be a caller argument bounded only to
-    // `(clock.slot, clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`. Paired
-    // with a deliberately unauthenticated `payer` ("anyone can push a valid
-    // proof" — a real liveness property worth keeping) and an `init` marker
-    // that lets exactly ONE party set the TTL per root, that handed any
-    // observer a lever the design never meant to expose: replay the SAME proof
+    // A caller-supplied `expiry_slot`, even bounded to
+    // `(clock.slot, clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, hands
+    // any observer a lever. Paired with a deliberately unauthenticated `payer`
+    // ("anyone can push a valid proof" — a real liveness property worth
+    // keeping) and an `init` marker that lets exactly ONE party set the TTL per
+    // root, an attacker can replay the SAME proof
     // and root with `expiry_slot = clock.slot + 1`, land first, and the TEE's
     // own verify then fails on the `init` collision while all N settles in the
     // batch fail `BatchValidityMarkerExpired`. Meanwhile the 2N `lock_note`

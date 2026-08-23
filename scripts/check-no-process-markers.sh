@@ -23,6 +23,11 @@ DEFAULT_TARGETS=(
   "$ROOT/crates/darkpool-matcher"
   "$ROOT/programs/vault"
 )
+# darknyx-tee-loadgen is deliberately ABSENT. Its run.rs numbers the sequential
+# stages of a load-test run ("Phase 1: plan + deposit", "Phase 2: prove all
+# VALID_INPUT concurrently"), which the `phase[- ]N` pattern cannot tell apart
+# from an implementation-process marker. Rewording correct prose to satisfy the
+# tool is the wrong trade; the crate was swept by hand instead.
 
 if [ "$#" -gt 0 ]; then
   TARGETS=("$@")
