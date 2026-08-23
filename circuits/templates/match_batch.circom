@@ -283,9 +283,9 @@ template MatchSlot() {
 
     // ─────────────────────────────────────────────────────────────────
     // VALID_PRICE constraints — range checks + headline mul check.
-    // The Poseidon3 price_commitment binding from the old VALID_PRICE
-    // template is GONE: in the batched flow, (clearing_price, batch_slot)
-    // are committed directly via the leaf hash (more useful + cheaper).
+    // There is no separate Poseidon price-commitment binding: in the batched
+    // flow, (clearing_price, batch_slot) are committed directly via the leaf
+    // hash, which is both more useful and cheaper.
     // ─────────────────────────────────────────────────────────────────
 
     component priceBits = Num2Bits(64);

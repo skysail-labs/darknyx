@@ -3,7 +3,7 @@
  *
  * Mirrors `settle-builder.test.ts`, but covers the batched-validity ix
  * that replaces the v3.1 per-match `verify_valid_create` +
- * `verify_valid_price` + `tee_forced_settle` triplet.
+ * per-match verification triplet.
  *
  * Verifies that:
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`

@@ -17,9 +17,8 @@ export const DEPOSITED_NOTE_SEED = enc("deposited_note");
 export const NOTE_LOCK_SEED = enc("note_lock");
 export const VAULT_TOKEN_SEED = enc("vault_token");
 export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
-// v3.1 `valid_create` + `valid_price` per-match seeds were removed in
-// Phase 1c-hard. Both markers got subsumed by a single
-// `BatchValidityMarker` (one per batch, keyed by Merkle root).
+// There are no per-match validity seeds. Batch validity is a single
+// `BatchValidityMarker`, one per batch, keyed by the batch's Merkle root.
 export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
 // A seed belongs here only while `programs/vault/src/state.rs` still declares
