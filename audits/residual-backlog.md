@@ -90,9 +90,11 @@ capture one authenticated request per won race. The rest is Low/Info
 (`TR-03…TR-09`, `PF-31`). The RA-TLS cryptographic core itself — manifest,
 identity, verification core, WS gate, Rust↔TS lockstep — read **clean**, and
 the CPU cutover evidence is corroborated by source. The 2026-08-23 follow-up
-nonetheless reopens T-03P until TR-02, daemon recovery/policy, and GPU parity
-close. `TR-01` and the browser `R-` queue are deferred with the browser product,
-with re-entry before any external browser user or real value.
+nonetheless reopens T-03P until daemon recovery and production-mode policy
+close. TR-02's connector-level replacement refusal is code complete pending
+merge; GPU parity remains a separately deferred deployment surface. `TR-01`
+and the browser `R-` queue are deferred with the browser product, with re-entry
+before any external browser user or real value.
 
 **`audit_9` Part B (same day, owner-requested supplement on the funds /
 privacy / intent-leak lenses for the Solana program + TEE trust surfaces)
@@ -332,11 +334,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-<<<<<<< Updated upstream
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven after v11 / browser, plus six more from the Wave 3 teaching pass) |
-=======
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven more after the v11 / browser landing); **TR-03, TR-09, TR-17** (five more after the RA-TLS landing, `audit_9`) |
->>>>>>> Stashed changes
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven after v11 / browser, plus six more from the Wave 3 teaching pass); **TR-03, TR-09, TR-17** (five more after the RA-TLS landing, `audit_9`) |
 | **Root cause** | Module docs describe intended, retired, or planned behaviour as current: a promised eviction never built, a "keys never leave here" getter used at five call sites, `interval.rs` naming a function the enclave does not call, `canonical_payload_hash` called "shared" when it has four implementations, a revocation denylist described as in-memory after persistence landed. |
 | **Shared fix** | One doc-accuracy pass over module headers, done *after* the code fixes land so the two are corrected together rather than twice. |
 | **Why together** | This is the single most reliable finding-generator in the sweep — several code findings were located *because* a comment claimed something the code did not do. Treat the docs as an audit surface. |
@@ -346,11 +344,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-<<<<<<< Updated upstream
-| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), **R-21** (Medium — ICICLE prove path never called the SW-14 helper) |
-=======
-| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), TR-11 (Medium — the icicle backend re-introduced SW-14's exact shape) |
->>>>>>> Stashed changes
+| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), **R-21 / TR-11** (Medium — the ICICLE backend re-introduced SW-14's exact shape and never called the witness-scratch helper) |
 | **Root cause** | The `.wtns`/`input.json` encodes the amounts and owner commitments that amount-privacy (P1b) removed from the leaf and payload — and it crosses two boundaries TDX does not cover: the container filesystem, and GPU device memory. |
 | **Shared fix** | A `tmpfs` mount plus `TMPDIR` covers **all three prover backends at once** (they share `snarkjs.rs::native_witness_wtns`). Require positive confidential-compute evidence before ICICLE accepts `CUDA`, failing closed. |
 | **Why together** | One witness, two escape routes, one owner. SW-32 is a merge condition on PR #65. The assumption that landing SW-14's mount would make the GPU path inherit the fix is how **R-21** happened: `icicle_prove_wtns` still uses `temp_dir()`. |
@@ -410,10 +404,10 @@ Classes are ordered by the severity of their worst member.
 | | |
 |---|---|
 | **Members** | **TR-01 (High)**, **TR-10 (High)**, TR-04 (Low), TR-05 (Low), TR-02 (Medium, the temporal variant) |
-| **Root cause** | RA-TLS verification was built per-connection but adopted per-protocol and per-artifact: the HTTP leg of every consumer is gated while the WebSocket leg only where the consumer is the daemon (TR-01); the cutover was applied to the CPU compose while the GPU compose still publishes plaintext `:8080` and the guard only checks the file CI names (TR-10); the gate is checked before dispatch rather than at socket adoption, so a replacement connection can carry one request unverified (TR-02). The daemon's own transport module refuses the half-protected shape ("worse than unprotected, because it reads as protected") — trader-host's relay and the GPU compose were left in exactly that shape. |
-| **Sites** | `packages/trader-host/src/live-proxy.ts:382-388` (ungated upstream WS); `deploy/docker-compose.gpu.yaml:129-130` + `.github/workflows/pr-checks.yml:231` (guard scope); `packages/sdk/src/tee/transport-agent.node.ts:405-447` (check-then-dispatch); `packages/trader-host/src/cvm-transport.ts:73-90` (no boot pin / no staleness); `packages/daemon/bin/daemon.ts` (no `isStale` consumer). |
+| **Root cause** | RA-TLS verification was built per-connection but adopted per-protocol and per-artifact: the HTTP leg of every consumer is gated while the WebSocket leg only where the consumer is the daemon (TR-01); the cutover was applied to the CPU compose while the GPU compose still publishes plaintext `:8080` and the guard only checks the file CI names (TR-10); the original gate was checked before dispatch rather than at socket adoption, so a replacement connection could carry one request unverified (TR-02, now code complete pending merge). The daemon's own transport module refuses the half-protected shape ("worse than unprotected, because it reads as protected") — trader-host's relay and the GPU compose were left in exactly that shape. |
+| **Sites** | `packages/trader-host/src/live-proxy.ts:382-388` (ungated upstream WS); `deploy/docker-compose.gpu.yaml:129-130` + `.github/workflows/pr-checks.yml:231` (guard scope); `packages/sdk/src/tee/transport-agent.node.ts` (connector-level replacement adoption); `packages/trader-host/src/cvm-transport.ts:73-90` (no boot pin / no staleness); `packages/daemon/bin/daemon.ts` (no `isStale` consumer). |
 | **Counter-example in repo** | `packages/sdk/src/tee/transport-ws.node.ts` — the per-upgrade SPKI gate the relay needs, already live-tested over the passthrough route; and `daemon/src/transport.ts:95-102`, which throws rather than verify HTTP while streaming unverified. |
-| **Shared fix** | Adopt the SDK's gated factory in trader-host's relay (copy the neighbour), pin the boot session on every reconnect, and consume `isStale` in the daemon lifecycle. For TR-02, move verification to socket-adoption time so no dispatch can precede it. |
+| **Shared fix** | Adopt the SDK's gated factory in trader-host's relay (copy the neighbour), pin the boot session on every reconnect, and consume `isStale` in the daemon lifecycle. TR-02 now moves replacement authentication into the connector so no dispatch can precede it. |
 | **Why together** | One property — *no credential-bearing byte leaves on a connection whose peer identity was not verified on that connection* — four sites where it currently has an exception. |
 | **Cost** | ~2 days for the class (TR-01 ~1 d; TR-04+TR-05 ~1 d; TR-02's tripwire ~0.5 d, its structural fix ~2–3 d more). |
 
@@ -437,10 +431,11 @@ CVM run to verify, not merely a green local gate.
 
 > **Transport status correction — 2026-08-23.** The T-03P row below preserves
 > the 2026-08-16 CPU cutover evidence, but its `Closed` label is superseded.
-> T-03P is **reopened for post-cutover hardening** because audit_9 TR-02 leaves a
-> replacement-socket check/dispatch race, TR-05 leaves daemon boot-rotation
-> recovery unsupervised, TR-10 leaves the GPU compose on plaintext, and the
-> daemon still selects the legacy transport when its mode is unset. The ordered
+> T-03P is **reopened for post-cutover hardening** because TR-05 leaves daemon
+> boot-rotation recovery unsupervised and the daemon still selects the legacy
+> transport when its mode is unset. Audit_9 TR-02's replacement-socket guard is
+> code complete pending merge. TR-10 leaves the separately deferred GPU compose
+> on plaintext. The ordered
 > execution plan is
 > [`../docs/transport-integrity-remediation-plan.md`](../docs/transport-integrity-remediation-plan.md).
 > T-03B and R-01 remain deferred by product decision; the browser implementation
@@ -452,7 +447,7 @@ CVM run to verify, not merely a green local gate.
 | N-18           | ZK + governance                  | Run a public Phase-2 ceremony for every production Groth16 zkey with at least five independent contributors, transcript and artifact hashes, final random beacon, reproducible verification, auditor artifact sign-off, and a post-ceremony CVM settlement.                                 | **External gate — Open**                                                                                                                                     | Ceremony transcript, contributor evidence, beacon, `snarkjs zkey verify`, regenerated VKs, auditor sign-off, and live settle evidence.                                                                                                                            |
 | N-19           | Governance + operations          | Rehearse split Squads control: cold 4-of-7 owns upgrade/root authority; operations 3-of-5 is `VaultConfig.admin`; every TEE-key rotation is independently attestation-verified.                                                                                                             | **External gate — In progress**                                                                                                                              | Rehearsal transaction set, authority/account inspection, attestation records, recovery/rotation drill, and signer runbook.                                                                                                                                        |
 | T-03 (parent)  | TEE + SDK + infrastructure       | Bind the verified enclave identity to the client transport session and govern every component that can terminate or forward the connection. **Split 2026-08-15 into T-03P / T-03B; the parent stays Open until both close** (or the owner formally removes a client class from the product). | **Open.** Re-entry fired 2026-08-15 (`audit_8` / `R-01`) when the browser implementation entered scope. Browser and GPU surfaces are now deferred; the CPU daemon follow-ups remain active. The consolidated architecture, evidence, and phased plan is [`../docs/transport-integrity-remediation-plan.md`](../docs/transport-integrity-remediation-plan.md). | Programmatic hardening closed with live evidence, then either both browser child findings closed or browser access formally removed; finish with the cross-surface audit. |
-| T-03P          | TEE + SDK                        | Programmatic clients (Node SDK, daemon, and loadgen) verify a quote-bound transport identity **on the certificate of the actual socket** carrying each request. | **REOPENED 2026-08-23 for post-cutover CPU hardening.** The 2026-08-16 CPU cutover and its evidence remain valid, but TR-02 leaves a replacement-socket pre-dispatch gap, TR-05 leaves boot-rotation recovery unsupervised, and the daemon still defaults to legacy transport when unset. Execute D1–D3 in [`../docs/transport-integrity-remediation-plan.md`](../docs/transport-integrity-remediation-plan.md). TR-10/R-22 GPU parity is separately deferred until confidential-GPU access returns. **Prior closure evidence:** on `nightly-test-cvm` (prod9, image-89), actual socket SPKI matched the manifest; relayed-quote and old-boot negatives rejected; plaintext 8080 was unreachable; WebSocket passthrough, API surface, settlement, and daemon business flow passed. Median transport establishment was 1413 ms with no observed RSS leak. | D1 pre-dispatch replacement-socket negative; D2 restart/re-attest/reconcile/resume CPU drill; D3 production-safe mode policy and pin. Preserve the 2026-08-16 CPU cutover evidence as the baseline. |
+| T-03P          | TEE + SDK                        | Programmatic clients (Node SDK, daemon, and loadgen) verify a quote-bound transport identity **on the certificate of the actual socket** carrying each request. | **REOPENED 2026-08-23 for post-cutover CPU hardening.** The 2026-08-16 CPU cutover and its evidence remain valid. D1/TR-02 is code complete pending merge: the connector refuses a different-SPKI replacement before dispatch, with a mutation-proven zero-byte adversarial test. TR-05 still leaves boot-rotation recovery unsupervised, and the daemon still defaults to legacy transport when unset. Execute D2–D3 in [`../docs/transport-integrity-remediation-plan.md`](../docs/transport-integrity-remediation-plan.md). TR-10/R-22 GPU parity is separately deferred until confidential-GPU access returns. **Prior closure evidence:** on `nightly-test-cvm` (prod9, image-89), actual socket SPKI matched the manifest; relayed-quote and old-boot negatives rejected; plaintext 8080 was unreachable; WebSocket passthrough, API surface, settlement, and daemon business flow passed. Median transport establishment was 1413 ms with no observed RSS leak. | D1 pre-dispatch replacement-socket negative (code complete); D2 restart/re-attest/reconcile/resume CPU drill; D3 production-safe mode policy and pin. Preserve the 2026-08-16 CPU cutover evidence as the baseline. |
 | T-03B          | TEE + browser client             | Browser-sensitive traffic (`/orders`, cancel/modify, `/v1/stream`, recovery, session) is not readable by any ordinary host. Today `trader-host` relays all of it in plaintext. | **DEFERRED 2026-08-16 (owner decision), re-entry bounded.** Explicitly deferred while the venue is devnet-only; the bound is **before any external browser user or real value**. `trader-host` is an ordinary Node process we operate and sees every browser order in plaintext. R-01 is deferred with it. Earlier B1/B2 analysis is retained in the consolidated transport record as historical context, not a currently authorized implementation phase. | At re-entry, select and review the browser design, then prove ciphertext-only handling across both order and fill directions, replay/counter/route safety, and a live browser deposit-order-cancel flow. |
 | Release bundle | Release engineering + governance | Build without `devnet-admin`; prove destructive instructions absent; independently verify deployed program hash and all authorities; attach recovery drill, transaction-size/CU headroom, dependency audit, and final CVM evidence.                                                         | **External gate — Open until the production candidate exists.**                                                                                              | Reproducible production build and hashes, deployed-program inspection, authority inventory, closed trackers, recovery evidence, and signed release checklist.                                                                                                     |
 
@@ -534,7 +529,7 @@ and
 | R-23 | Low | Vault governance | `initialize_tree` uses `VaultError::InvalidProof` for `tree_id >= num_trees`. New variant. | **Open — `audit_8`.** Found in the Wave 4 teaching pass. |
 | PF-30 | Perf-Nit | Browser recovery | Sequential `getAccountInfo` per recovered note. Batch via the host's existing `getMultipleAccounts` allowlist. | **Open — `audit_8`.** |
 | TR-01 | **High** | Trader-host + T-03B | Gate the browser stream relay's upstream WebSocket if the browser product resumes: wrap the relay's `new WebSocket(...)` (`live-proxy.ts:382-388`) in the SDK's verified WebSocket factory, refusing and closing downstream on SPKI mismatch. This protects trader-host's upstream hop but does not remove trader-host's own plaintext visibility, so it is not T-03B closure by itself. | **Deferred with the browser product — 2026-08-23.** Re-entry before any external browser user or real value. Evidence: [`audit_9/audit_9_findings.md`](audit_9/audit_9_findings.md). |
-| TR-02 | Medium | SDK transport | Close the check-then-dispatch socket race in `createVerifiedFetch` (`transport-agent.node.ts:405-447`): a pooled-socket death between `ensureVerified` and undici's dispatch makes the replacement socket carry the request with no verification gate (the connector accepts any certificate). Strongest fix: verify at socket-adoption inside the custom connector; cheap tripwire: post-response socket-identity assertion + credential rotation. | **Open — `audit_9`.** Mechanism established from the adapter's own state model; practical exploitability needs an on-path lab PoC (§5 of the findings). |
+| TR-02 | Medium | SDK transport | Authenticate every post-bootstrap socket inside the custom connector before undici receives it. The expected SPKI is immutable for the transport generation; a different-SPKI replacement is destroyed before dispatch, while an exact match inherits the already quote-bound boot verdict. | **Code complete 2026-08-23; merge pending.** `transport-relay-attack.test.ts` swaps the peer after the gate and proves a substituted certificate receives zero requests and zero body bytes; the same certificate succeeds. Removing the connector guard makes the unique private marker cross, so the regression is mutation-proven. No CVM is required for this socket-boundary fix. |
 | TR-03 | Low | TEE API + clients | Ship the `transport_mode` field `config.rs:66-70` promises on `/info` (it is absent from `/info`, `/system/status`, and the OpenAPI), and have the daemon pin it at startup the way R-06 pins `oracle_mode`. | **Open — `audit_9`.** C6 drift + missing pinning surface. |
 | TR-04 | Low | Trader-host | If the browser product resumes, use `createVerifiedTransport` (or pass `expectedBootSessionId` on reconnect) in `cvm-transport.ts` so a restarted enclave fails re-verification instead of silently passing on compose+signers alone; surface `isStale()`. | **Deferred with the browser product — 2026-08-23.** Same re-entry as T-03B. |
 | TR-05 | Low | Daemon | Consume `isStale()` on the existing attestation-refresh cadence: pause placement, rebuild the transport, re-attest, resume. Today a CVM restart degrades every request with `boot_session_mismatch` and no lifecycle path trips. | **Open — `audit_9`.** |
@@ -679,23 +674,16 @@ SW-11.
    compose to router, pin `oracle_mode` in the daemon, and do not let push
    open a trading gate on a value-bearing boot. **R-05** is an hour
    (`redirect: "error"` in `fetchBounded`). **R-07** + **PF-29** are the
-<<<<<<< Updated upstream
    browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in
    the same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
    each about an hour). **R-21** is the leftover SW-14 hole on the
    ICICLE prove path (route through `witness_scratch_base`). **R-22**
    when the next GPU compose is rebuilt (mirror CPU RA-TLS or
    document the lag). **R-11** / **R-12** / **R-13** last, after the
-   code moves.
-=======
-   browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in the
-   same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
-   each about an hour). **R-11** / **R-12** / **R-13** last, after the
-   code moves. **`audit_9`'s TR-01 joins this slice** — it is the same
-   trader-host/browser boundary, and the stream is ungated (and, against a
-   cutover CVM, simply down) until it lands; TR-04/TR-05 ride along, and
-   TR-02's tripwire is worth taking in the same pass.
->>>>>>> Stashed changes
+   code moves. **`audit_9`'s TR-01 and TR-04 join that deferred browser
+   slice.** TR-02's connector fix is code complete; TR-05 and TR-03 remain in
+   the active CPU daemon lifecycle/policy slice, independently of browser
+   re-entry.
 1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
    in-band recovery. Ship the fail-closed half (divergence stops tree reads and
    pauses trading) even if the scope fix lands separately.

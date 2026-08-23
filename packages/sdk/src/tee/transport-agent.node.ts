@@ -13,12 +13,12 @@
  * This adapter closes that by making the socket itself the unit of trust:
  *
  * 1. A custom `https.Agent` records each TLS socket's SPKI at connect time.
- * 2. A socket starts **unverified**. Nothing sensitive may cross it.
- * 3. The first exchange on a new socket is the transport attestation, fetched
- *    *over that socket*, and verified against *that socket's* recorded SPKI.
- * 4. Only then is the socket marked verified.
- * 5. A new socket — reconnect, pool growth, keep-alive expiry — starts at
- *    step 2 again. Verification is never inherited.
+ * 2. The first socket is a bootstrap channel. Nothing sensitive may cross it.
+ * 3. The transport attestation is fetched *over that socket* and verified
+ *    against *that socket's* recorded SPKI.
+ * 4. The verified, boot-random SPKI then arms the connector.
+ * 5. A replacement socket is accepted before dispatch only when its SPKI is
+ *    identical. A mismatch is destroyed before undici receives the socket.
  *
  * # Why `maxSockets: 1`
  *
@@ -63,6 +63,28 @@ function sha256Der(der: Uint8Array): Uint8Array {
   return new Uint8Array(createHash("sha256").update(der).digest());
 }
 
+function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/** Recover a typed connector refusal through undici's `TypeError.cause`. */
+function transportErrorFrom(
+  error: unknown,
+): TransportVerificationError | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (cursor instanceof TransportVerificationError) return cursor;
+    if (typeof cursor !== "object" || cursor === null || !("cause" in cursor)) {
+      return undefined;
+    }
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 function hexToBytes(hex: string, field: string): Uint8Array {
   if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {
     throw new TransportVerificationError(
@@ -103,10 +125,12 @@ export class TransportAgent extends Agent {
   private lastConnected?: TLSSocket;
   /** SPKI hash per live socket. */
   private readonly spki = new WeakMap<object, Uint8Array>();
-  /** Sockets that have passed verification. Never inherited across sockets. */
+  /** Bootstrap-verified sockets and connector-authenticated replacements. */
   private readonly verified = new WeakSet<object>();
   /** The socket most recently established, for the single-connection pool. */
   private current?: TLSSocket;
+  /** Quote-bound boot SPKI. Immutable after the bootstrap exchange succeeds. */
+  private expectedSpkiSha256?: Uint8Array;
 
   constructor() {
     // `connect` is the hook that makes this whole adapter work.
@@ -134,7 +158,31 @@ export class TransportAgent extends Agent {
           if (!err && socket) {
             const tls = socket as unknown as TLSSocket;
             try {
-              this.spki.set(tls, socketSpkiSha256(tls));
+              const observed = socketSpkiSha256(tls);
+              this.spki.set(tls, observed);
+
+              // The first socket is a bootstrap channel: it may carry only the
+              // nonce-bound transport-attestation exchange. Once that evidence
+              // arms the agent, every replacement is authenticated HERE, before
+              // this callback hands it to undici and before undici can write an
+              // application request.
+              const expected = this.expectedSpkiSha256;
+              if (expected && !equalBytes(observed, expected)) {
+                tls.destroy();
+                callback(
+                  new TransportVerificationError(
+                    "replacement TLS socket does not match the verified boot",
+                    "spki_mismatch",
+                  ),
+                  null as never,
+                );
+                return;
+              }
+
+              // A same-SPKI replacement belongs to the already quote-bound,
+              // boot-random key. It can inherit this transport generation's
+              // verdict without a second quote exchange.
+              if (expected) this.verified.add(tls);
               this.current = tls;
               // Also remembered SEPARATELY, and deliberately NOT cleared on
               // close. `current` answers "is there a live connection"; this
@@ -146,9 +194,17 @@ export class TransportAgent extends Agent {
               tls.once("close", () => {
                 if (this.current === tls) this.current = undefined;
               });
-            } catch {
-              // Leave it unrecorded: `spkiFor` throws, so the socket can never
-              // be marked verified. Failing closed beats guessing.
+            } catch (error) {
+              tls.destroy();
+              callback(
+                transportErrorFrom(error) ??
+                  new TransportVerificationError(
+                    "replacement TLS socket could not be authenticated",
+                    "malformed",
+                  ),
+                null as never,
+              );
+              return;
             }
           }
           callback(err as Error | null, socket as never);
@@ -174,6 +230,33 @@ export class TransportAgent extends Agent {
   }
 
   markVerified(socket: object): void {
+    this.verified.add(socket);
+  }
+
+  /**
+   * Arm the connector with the SPKI established by the bootstrap quote.
+   *
+   * The bootstrap socket must be the socket whose certificate produced
+   * `expected`. Once set, the value is immutable for this agent: a new boot
+   * requires a new transport generation and a new agent.
+   */
+  armExpectedSpki(socket: TLSSocket, expected: Uint8Array): void {
+    const observed = this.spkiFor(socket);
+    if (!equalBytes(observed, expected)) {
+      this.destroySocket(socket);
+      throw new TransportVerificationError(
+        "bootstrap socket does not match the verified transport identity",
+        "spki_mismatch",
+      );
+    }
+    const armed = this.expectedSpkiSha256;
+    if (armed && !equalBytes(armed, expected)) {
+      throw new TransportVerificationError(
+        "transport identity is immutable for one agent generation",
+        "spki_mismatch",
+      );
+    }
+    if (!armed) this.expectedSpkiSha256 = new Uint8Array(expected);
     this.verified.add(socket);
   }
 
@@ -369,11 +452,10 @@ async function verifyOnce(
     // connection ends. `lastConnected` only advances when the connector runs,
     // so a reused-then-closed socket still resolves to the right one.
     //
-    // The residual race is unchanged and still documented above: undici
-    // exposes no per-response socket attribution, so a concurrent request on
-    // the same agent could in principle open a newer connection between the
-    // response and this read. `connections: 1` plus the single-flight guard in
-    // `createVerifiedFetch` is what keeps that from happening in practice.
+    // During bootstrap, `connections: 1` plus the single-flight guard prevents
+    // a concurrent application dispatch. After this exchange arms the agent,
+    // the connector itself accepts only the quote-bound SPKI before returning
+    // any replacement socket to undici.
     const live = agent.currentSocket() ?? agent.lastConnectedSocket();
     if (!live) {
       // The socket went away between the exchange and this read.
@@ -392,7 +474,8 @@ async function verifyOnce(
     }
     socket = live;
   } catch (e) {
-    if (e instanceof TransportVerificationError) throw e;
+    const transportError = transportErrorFrom(e);
+    if (transportError) throw transportError;
     fail("malformed", "attestation exchange failed");
   } finally {
     clearTimeout(timer);
@@ -437,13 +520,14 @@ async function verifyOnce(
     fail(failure, "see the failure kind");
   }
 
-  agent.markVerified(socket);
+  agent.armExpectedSpki(socket, observedSpkiSha256);
   return { socket, manifest: observed, spkiSha256: observedSpkiSha256 };
 }
 
 /**
- * A `fetch` that refuses to send anything until the socket carrying it has
- * passed transport verification, and re-verifies whenever a new socket appears.
+ * A `fetch` that refuses to send anything until the bootstrap socket has passed
+ * transport verification. The armed connector authenticates every replacement
+ * socket against that boot's quote-bound SPKI before dispatch.
  *
  * Use this for every request that carries a credential, order intent, or any
  * other private payload.
@@ -491,11 +575,20 @@ export function createVerifiedFetch(
 
     await ensureVerified();
     const fetchImpl = opts.fetchImpl ?? (undiciFetch as unknown as typeof fetch);
-    return fetchImpl(input, {
-      ...init,
-      redirect: "error",
-      dispatcher: agent,
-    } as never);
+    try {
+      return await fetchImpl(input, {
+        ...init,
+        redirect: "error",
+        dispatcher: agent,
+      } as never);
+    } catch (error) {
+      // undici wraps connector failures in `TypeError: fetch failed`. Preserve
+      // the closed-set transport reason for daemon policy without forwarding
+      // undici diagnostics or request material.
+      const transportError = transportErrorFrom(error);
+      if (transportError) throw transportError;
+      throw error;
+    }
   };
 }
 

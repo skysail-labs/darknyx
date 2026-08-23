@@ -9,9 +9,9 @@
  *    if `openssl` is unavailable — and the skip is loud, because a silently
  *    skipped test of the load-bearing function is worse than no test.
  *
- * 2. **The state machine**, with stub sockets. Verification must attach to a
- *    specific socket and never be inherited by a different one. That property
- *    is about object identity, not TLS, so stubs test it precisely.
+ * 2. **The state machine**, with stub sockets. Bootstrap verification attaches
+ *    to one socket; only the connector may adopt a replacement after matching
+ *    the quote-bound SPKI. Arbitrary socket identity is never trusted.
  */
 
 import { execFileSync } from "node:child_process";
