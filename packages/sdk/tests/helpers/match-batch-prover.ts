@@ -17,7 +17,7 @@
  * Leaf-hash layout — MUST match `template MatchSlot()` in
  * `circuits/templates/match_batch.circom`. Single Poseidon11 (11 inputs ≤ 12
  * = light-poseidon's MAX_X5_LEN-1, so the on-chain handler can re-derive this
- * hash via solana_poseidon::hashv). Commitment-only (amount-privacy, P1b): the
+ * hash via solana_poseidon::hashv). Commitment-only (amount-privacy): the
  * note commitments bind the amounts/mints/price transitively, so the leaf no
  * longer hashes them (the old two-stage Poseidon12+Poseidon9 leaf, tags
  * 20/21, is retired).
@@ -42,7 +42,7 @@ import { snarkjsFullProve } from "./snarkjs-prover.js";
 
 // Domain tags — MUST match the circuit constants.
 const DOMAIN_BATCH_ROOT = 22n;
-// Commitment-only leaf (amount-privacy, P1b). Replaces the old two-stage
+// Commitment-only leaf (amount-privacy). Replaces the old two-stage
 // leaf's DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21.
 const DOMAIN_LEAF_V2 = 23n;
 /** `Poseidon3(29, note_commitment, inner_hash)` — the public consume handle. */

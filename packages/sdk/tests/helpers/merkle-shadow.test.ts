@@ -10,7 +10,7 @@ import { poseidonHashBytesBE } from "../../src/utxo/note.js";
 
 import { MerkleShadow, TREE_DEPTH } from "./merkle-shadow.js";
 
-describe("Phase 5 — MerkleShadow parity with on-chain incremental tree", () => {
+describe("MerkleShadow parity with on-chain incremental tree", () => {
   it("[empty_tree_root_matches] empty root survives 20 levels of poseidon2(0,0)", async () => {
     const t = await MerkleShadow.create();
     const root = await t.computeRoot();

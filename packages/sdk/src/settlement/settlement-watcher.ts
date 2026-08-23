@@ -5,7 +5,7 @@
  * by `tee_forced_settle`) and converts each occurrence into a
  * user-friendly `MatchNotification` the client / UI consumes.
  *
- * Key Phase-5 details:
+ * Key details:
  *   - `isPartialFill` is derived from `buyerChangeAmt` / `sellerChangeAmt`.
  *   - `relockActive` tells the relayer whether the client still has an
  *     active order — if true, DO NOT resubmit; the continuing order's
@@ -16,7 +16,7 @@
 
 /** Matches the on-chain `TradeSettled` event (Borsh order).
  *
- *  Amount-privacy (P3b): the trade amounts / change / fees / clearing price
+ *  Amount-privacy: the trade amounts / change / fees / clearing price
  *  were removed from the event (they were a public leak). The event now carries
  *  only leaf indices + relock flags + root; a client reconstructs its own
  *  amounts from the per-account FillMemo (`fills` on `/v1/stream`). */
@@ -94,7 +94,7 @@ export function sellerNotification(ev: TradeSettledEvent): MatchNotification {
  *  discriminator) into a `TradeSettledEvent`. The producer is
  *  `programs/vault/src/instructions/tee_forced_settle.rs::TradeSettled`.
  *
- *  Layout (Borsh) — amount-privacy (P3b) dropped the amount/price fields:
+ *  Layout (Borsh) — amount-privacy dropped the amount/price fields:
  *    1   tree_id      <- the shard the outputs landed in; LEADS the event
  *    16  match_id
  *    8   note_c_leaf

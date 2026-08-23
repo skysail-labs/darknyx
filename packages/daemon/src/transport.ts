@@ -1,5 +1,5 @@
 /**
- * The daemon's transport selection (T-03P, Phase 2e).
+ * The daemon's transport selection (T-03P).
  *
  * The daemon either verifies the socket carrying each request against a
  * quote-bound certificate (`ra-tls`) or it does not (`gateway-terminated`,

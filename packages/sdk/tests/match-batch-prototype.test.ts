@@ -377,7 +377,7 @@ const ready2 = artefactsReady(2);
 });
 
 // ---------------------------------------------------------------------------
-// Exact fee (amount-privacy P1b + C-04) — in-circuit floor `(fee+1)*10000 >
+// Exact fee (amount-privacy + C-04) — in-circuit floor `(fee+1)*10000 >
 // notional*rate` AND ceiling `fee*10000 <= notional*rate` ⇒ fee is pinned to
 // exactly ⌊notional*rate/10000⌋.
 // ---------------------------------------------------------------------------

@@ -43,7 +43,7 @@ export * from "./orders/builders.js";
 export * from "./orders/orders-ws-client.js";
 export * from "./system/system-client.js";
 export * from "./oracle/pyth-push.js";
-// Order submission (Phase 5 / D2): buildOrder assembly, the VALID_INPUT prover
+// Order submission: buildOrder assembly, the VALID_INPUT prover
 // + witness fetch, and the REST + multiplexed /v1/stream clients.
 export * from "./orders/build-order.js";
 export * from "./orders/order-client.js";

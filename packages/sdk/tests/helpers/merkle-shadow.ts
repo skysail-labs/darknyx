@@ -1,5 +1,5 @@
 /**
- * Phase-5 devnet E2E helper — a shadow incremental Merkle tree.
+ * Devnet E2E helper — a shadow incremental Merkle tree.
  *
  * The on-chain `vault_config` keeps only the `right_path` + rightmost
  * leaf index; it does NOT store the full set of leaves (too expensive).

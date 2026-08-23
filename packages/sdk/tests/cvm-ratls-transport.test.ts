@@ -1,5 +1,5 @@
 /**
- * The verified transport against a REAL enclave (T-03P, Phase 3).
+ * The verified transport against a REAL enclave (T-03P).
  *
  * Gated on `RUN_CVM_RATLS=1` + `DARKNYX_TEE_RATLS_URL` (the `s`-suffix
  * passthrough route). Self-skips otherwise.

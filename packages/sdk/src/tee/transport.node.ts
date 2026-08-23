@@ -1,5 +1,5 @@
 /**
- * The one entry point a Node consumer should use (T-03P, Phase 2d).
+ * The one entry point a Node consumer should use (T-03P).
  *
  * `TransportAgent`, `verifyTransportOnSocket`, `createVerifiedFetch` and
  * `createVerifiedWebSocketFactory` are each individually correct and each

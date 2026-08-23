@@ -2,7 +2,7 @@
  * settlement-watcher: TradeSettled event decoder + projection into
  * MatchNotification.
  *
- * Amount-privacy (P3b): the event carries only leaf indices + relock flags +
+ * Amount-privacy: the event carries only leaf indices + relock flags +
  * root — no amounts/price. Partial-fill is inferred from change-leaf presence,
  * and the client reads its own amounts from the per-account FillMemo.
  */

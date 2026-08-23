@@ -235,14 +235,13 @@ export async function outstandingMintPda(
   );
 }
 
-// v3.1 `validCreateMarkerPda` + `validPriceMarkerPda` lived here.
-// Removed in Phase 1c-hard along with their per-match builders /
-// markers / verify ixs. The v3.5 batched flow uses
-// `batchValidityMarkerPda` (below), one PDA per batch keyed by Merkle
-// root rather than per-match binding hash.
+// Batch validity is ONE marker per batch, keyed by the batch's Merkle root.
+// There is no per-match marker PDA, no per-match binding hash, and no
+// per-match verify ix. `seeds.ts` carries the same note, and both exist so a
+// reader does not go hunting for a per-match PDA that nothing derives.
 
 /**
- * v3.5 — BatchValidityMarker PDA. Seed is the Merkle root committed by
+ * BatchValidityMarker PDA. Seed is the Merkle root committed by
  * the verify_match_batch proof's first public input. Created by
  * `verify_match_batch` and consumed by `tee_forced_settle_batched`.
  */

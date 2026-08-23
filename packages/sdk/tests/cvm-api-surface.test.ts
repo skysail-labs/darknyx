@@ -1,8 +1,7 @@
 /**
- * CVM API/WS surface coverage — the first AUTOMATED check of the 5-phase
- * hardening (error envelope + x-request-id, system endpoints, rate limiting,
- * account view + settings, and the multiplexed `/v1/stream` lifecycle)
- * against a LIVE enclave. Everything before this was hit by hand with curl.
+ * CVM API/WS surface coverage against a LIVE enclave: the error envelope +
+ * x-request-id, the system endpoints, rate limiting, the account view +
+ * settings, and the multiplexed `/v1/stream` lifecycle.
  *
  * These assertions are deliberately CHEAP — no on-chain deposit / proof — so the
  * test runs in seconds and exercises the surface, not the settle pipeline. The
@@ -38,7 +37,7 @@ async function json(res: Response): Promise<Record<string, unknown>> {
   }
 }
 
-maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
+maybeDescribe("CVM API/WS surface", () => {
   let token: string;
   let bootSessionId: string;
 

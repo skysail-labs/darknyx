@@ -1,5 +1,5 @@
 /**
- * `createVerifiedTransport` (T-03P, Phase 2d).
+ * `createVerifiedTransport` (T-03P).
  *
  * The factory exists because the individual pieces are each easy to wire up
  * wrongly, and the interesting failure is not exotic: build the agent, forget

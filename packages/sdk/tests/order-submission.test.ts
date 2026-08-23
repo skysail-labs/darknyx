@@ -1,5 +1,5 @@
 /**
- * Order-submission surface (Phase 5 / D2): the inclusion-proof fetch, the
+ * Order-submission surface: the inclusion-proof fetch, the
  * prove→build orchestrator (with a stub prover), and the `/v1/stream`
  * client driven by an injected socket.
  */

@@ -1,5 +1,5 @@
 /**
- * Verified WebSocket transport (T-03P, Phase 2c).
+ * Verified WebSocket transport (T-03P).
  *
  * The property under test is narrow and important: **no frame the caller hands
  * this socket may reach the wire before the connection has been checked, and

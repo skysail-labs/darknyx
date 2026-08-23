@@ -1,5 +1,5 @@
 /**
- * Daemon transport selection (T-03P, Phase 2e).
+ * Daemon transport selection (T-03P).
  *
  * The property worth guarding is that there is **no partial mode**. A daemon
  * that verified HTTP but streamed over an unverified WebSocket would be worse

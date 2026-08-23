@@ -1,7 +1,7 @@
 /**
  * Durable trade history — the "backfill" half of "backfill then tail".
  *
- * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is a pure
+ * Amount-privacy: the off-TEE indexer (`packages/indexer`) is a pure
  * COMMITMENT LOCATOR. Its rows carry no amounts. Recovery v3 encrypts the
  * side's trade + change tuple in the settlement envelope and locates the exact
  * consumed input plus both output commitments.
@@ -26,7 +26,7 @@ import { deriveOrderId } from "../keys/key-generators.js";
 
 /** One located fill as served by the indexer's `GET /fills`.
  *
- *  COMMITMENT LOCATOR shape (amount-privacy P3b): it tells you THAT an order
+ *  COMMITMENT LOCATOR shape (amount-privacy): it tells you THAT an order
  *  had a fill and surfaces the opaque recovery ciphertext. */
 export interface IndexerFill {
   orderId: string;

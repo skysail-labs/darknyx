@@ -1,5 +1,5 @@
 /**
- * Phase-5 devnet E2E helpers — shared between setup + trade-flow tests.
+ * Devnet E2E helpers — shared between setup + trade-flow tests.
  *
  * Deliberately NOT exported from the SDK proper — these live under
  * `tests/helpers/` so they stay dependency-light and explicit about their

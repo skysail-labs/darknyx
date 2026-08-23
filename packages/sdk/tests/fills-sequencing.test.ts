@@ -1,7 +1,7 @@
 /**
  * "Backfill then tail" — the durable (indexer) + live (WS) fills paths.
  *
- * Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR (no amounts), so
+ * Amount-privacy: the indexer is a COMMITMENT LOCATOR (no amounts), so
  * `backfillHistory` locates exact and partial fills (input/output commitments,
  * ciphertext, and finalized Solana slot) but does not reconstruct openings by
  * itself. Recovery v3 or the low-latency WS `FillMemo` verifies outputs against

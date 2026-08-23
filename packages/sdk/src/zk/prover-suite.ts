@@ -103,10 +103,13 @@ export interface IDarkPoolZkProverSuite {
 /**
  * Placeholder prover that refuses to produce proofs. Useful when wiring an
  * SDK client that only exercises code paths which never call the prover
- * (or unit tests that replace the relevant member). The selected
- * browser/native adapter lands after `packages/client-prover-bench` closes the
- * Phase-0 gates; injecting this stub ensures the typecheck passes while making
- * it impossible to accidentally submit a no-op proof.
+ * (or unit tests that replace the relevant member). Injecting this stub keeps
+ * the typecheck honest while making it impossible to accidentally submit a
+ * no-op proof.
+ *
+ * The real implementations are `BrowserProverSuite`
+ * (`packages/browser-client/src/prover/`) in the browser, and the snarkjs
+ * shell-out helper under `packages/sdk/tests/helpers/` for Node tests.
  */
 /// Each field is annotated with the interface's own member type rather than
 /// letting TypeScript infer it. Without the annotation the inferred field type

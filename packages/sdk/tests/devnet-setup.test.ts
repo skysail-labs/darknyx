@@ -1,5 +1,5 @@
 /**
- * Phase-5 Darknyx Darkpool — one-time devnet bootstrap for the E2E trade flow.
+ * One-time devnet bootstrap for the E2E trade flow.
  *
  * This file is meant to run ONCE per environment (or whenever the token pair
  * changes / the market is reset). It is idempotent where possible — initialize_market
@@ -292,7 +292,7 @@ async function tryReadVaultConfig(
 
 // ────────────────────────────────────────────────────────────────────────────
 
-maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
+maybeDescribe("devnet E2E — one-shot setup", () => {
   let connection: Connection;
   let admin: Keypair;
   let tee: Keypair;

@@ -1,5 +1,5 @@
 /**
- * Phase-5 settlement tx builder.
+ * Settlement tx builder.
  *
  * Mirrors `programs/vault/src/instructions/tee_forced_settle.rs`:
  *   - Canonical SHA-256 payload hash (byte-identical across TS + Rust + TEE).
@@ -64,7 +64,7 @@ export const ZERO_PROOF: Groth16Proof = {
 
 /** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload`.
  *
- *  Amount-privacy (P3b): the seven plaintext amount fields (baseAmount,
+ *  Amount-privacy: the seven plaintext amount fields (baseAmount,
  *  quoteAmount, buyer/sellerChangeAmt, buyer/sellerFeeAmt, clearingPrice) were
  *  removed — they're proven in-circuit + bound by the note commitments, and
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
@@ -164,7 +164,7 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     fixed(p.noteEuseTag, 32),
     fixed(p.noteFuseTag, 32),
     u64LE(p.batchSlot),
-    // Amount-privacy (P3b): the seven plaintext amount fields were removed
+    // Amount-privacy: the seven plaintext amount fields were removed
     // from the payload (proven in-circuit + bound by the note commitments).
     // v8 added the fixed 128-byte recovery bundle; recovery v3 repacks it.
     fixed(p.fillRecovery, 128),
@@ -182,7 +182,7 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
  */
 export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
-  // v7: amount-privacy (P3b) dropped the seven plaintext amount fields.
+  // v7: amount-privacy dropped the seven plaintext amount fields.
   // v8 appended the 128-byte fill_recovery field (repacked internally in v2).
   // v9: removed the two vestigial nullifiers.
   // v10: clean Darknyx namespace cutover; wire fields remain unchanged.
@@ -267,7 +267,7 @@ export function buildEd25519VerifyIx(params: {
 }
 
 // ---------------------------------------------------------------------------
-// v3.5 — tee_forced_settle_batched
+// tee_forced_settle_batched
 // ---------------------------------------------------------------------------
 
 export interface BuildSettleBatchedIxParams {
@@ -399,7 +399,7 @@ export async function buildSettleBatchedIx(
 }
 
 // ---------------------------------------------------------------------------
-// v3.5 — close_batch_validity_marker
+// close_batch_validity_marker
 // ---------------------------------------------------------------------------
 
 export interface BuildCloseBatchValidityMarkerIxParams {
@@ -455,10 +455,10 @@ export async function buildCloseBatchValidityMarkerIx(
 // ---------- Convenience helpers ----------
 
 /** Construct an exact-fill payload with sensible zero defaults for the
- *  Phase-5 fields. Callers can mutate the returned object for partial
+ *  Callers can mutate the returned object for partial
  *  fills / fees / re-locks.
  *
- *  Amount-privacy (P3b): `baseAmount` / `quoteAmount` / `clearingPrice` no
+ *  Amount-privacy: `baseAmount` / `quoteAmount` / `clearingPrice` no
  *  longer ride the payload. They're accepted as optional args for call-site
  *  back-compat (and to read as "this is a 100-base/5000-quote fill") but are
  *  not written anywhere. */

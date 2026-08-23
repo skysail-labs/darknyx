@@ -1,7 +1,8 @@
 /**
  * Tests the withdraw factory's transport behaviour using a stub ProofProvider.
- * Since the real snarkjs prover doesn't ship until Phase 3, we inject a simple
- * fake prover that returns a fixed-length proof. The test asserts:
+ * The subject is transport behaviour, not proving, so a stub prover returning
+ * a fixed-length proof is injected — a real proof would cost seconds per case
+ * without changing anything asserted here. The test asserts:
  *   - merkle-proof-fetch / note-build / proof-generation / instruction-build /
  *     transaction-send stages fire in order
  *   - the correct VALID_SPEND public inputs are forwarded to the prover
