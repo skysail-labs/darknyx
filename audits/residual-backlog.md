@@ -334,11 +334,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-<<<<<<< Updated upstream
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven after v11 / browser, plus six more from the Wave 3 teaching pass) |
-=======
-| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven more after the v11 / browser landing); **TR-03, TR-09, TR-17** (five more after the RA-TLS landing, `audit_9`) |
->>>>>>> Stashed changes
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances**; **R-11** (seven after v11 / browser, plus six more from the Wave 3 teaching pass); **TR-03, TR-09, TR-17** (five more after the RA-TLS landing, `audit_9`) |
 | **Root cause** | Module docs describe intended, retired, or planned behaviour as current: a promised eviction never built, a "keys never leave here" getter used at five call sites, `interval.rs` naming a function the enclave does not call, `canonical_payload_hash` called "shared" when it has four implementations, a revocation denylist described as in-memory after persistence landed. |
 | **Shared fix** | One doc-accuracy pass over module headers, done *after* the code fixes land so the two are corrected together rather than twice. |
 | **Why together** | This is the single most reliable finding-generator in the sweep — several code findings were located *because* a comment claimed something the code did not do. Treat the docs as an audit surface. |
@@ -348,11 +344,7 @@ Classes are ordered by the severity of their worst member.
 
 | | |
 |---|---|
-<<<<<<< Updated upstream
-| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), **R-21** (Medium — ICICLE prove path never called the SW-14 helper) |
-=======
-| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), TR-11 (Medium — the icicle backend re-introduced SW-14's exact shape) |
->>>>>>> Stashed changes
+| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65), **R-21 / TR-11** (Medium — the ICICLE backend re-introduced SW-14's exact shape and never called the witness-scratch helper) |
 | **Root cause** | The `.wtns`/`input.json` encodes the amounts and owner commitments that amount-privacy (P1b) removed from the leaf and payload — and it crosses two boundaries TDX does not cover: the container filesystem, and GPU device memory. |
 | **Shared fix** | A `tmpfs` mount plus `TMPDIR` covers **all three prover backends at once** (they share `snarkjs.rs::native_witness_wtns`). Require positive confidential-compute evidence before ICICLE accepts `CUDA`, failing closed. |
 | **Why together** | One witness, two escape routes, one owner. SW-32 is a merge condition on PR #65. The assumption that landing SW-14's mount would make the GPU path inherit the fix is how **R-21** happened: `icicle_prove_wtns` still uses `temp_dir()`. |
@@ -682,23 +674,16 @@ SW-11.
    compose to router, pin `oracle_mode` in the daemon, and do not let push
    open a trading gate on a value-bearing boot. **R-05** is an hour
    (`redirect: "error"` in `fetchBounded`). **R-07** + **PF-29** are the
-<<<<<<< Updated upstream
    browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in
    the same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
    each about an hour). **R-21** is the leftover SW-14 hole on the
    ICICLE prove path (route through `witness_scratch_base`). **R-22**
    when the next GPU compose is rebuilt (mirror CPU RA-TLS or
    document the lag). **R-11** / **R-12** / **R-13** last, after the
-   code moves.
-=======
-   browser SW-11 analogue. **R-08**, **R-09**, **R-14**, **R-15…R-20** in the
-   same browser/host slice (`R-05` / `R-17` / `R-18` / `R-20` are
-   each about an hour). **R-11** / **R-12** / **R-13** last, after the
-   code moves. **`audit_9`'s TR-01 joins this slice** — it is the same
-   trader-host/browser boundary, and the stream is ungated (and, against a
-   cutover CVM, simply down) until it lands; TR-04/TR-05 ride along, and
-   TR-02's tripwire is worth taking in the same pass.
->>>>>>> Stashed changes
+   code moves. **`audit_9`'s TR-01 and TR-04 join that deferred browser
+   slice.** TR-02's connector fix is code complete; TR-05 and TR-03 remain in
+   the active CPU daemon lifecycle/policy slice, independently of browser
+   re-entry.
 1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
    in-band recovery. Ship the fail-closed half (divergence stops tree reads and
    pauses trading) even if the scope fix lands separately.
