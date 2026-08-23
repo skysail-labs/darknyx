@@ -573,6 +573,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
                 expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
                 attestation: {
                   composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+                  teePubkey: process.env.DARKNYX_EXPECT_TEE_PUBKEY,
                 },
               }
             : {}),
@@ -645,6 +646,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
             expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
             attestation: {
               composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+              teePubkey: process.env.DARKNYX_EXPECT_TEE_PUBKEY,
             },
           }
         : {}),
@@ -737,6 +739,10 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
             }
           : {}),
       }),
+      // The restart leg measures the one reconciliation that follows a real
+      // transport-generation swap. Skipping the redundant pre-marker scan
+      // keeps the billable choreography deterministic.
+      reconcileOnStart: !RESTART_DRILL,
       settlementPollMs: 2000,
     });
   });

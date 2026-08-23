@@ -418,7 +418,17 @@ async function verifyOnce(
         dispatcher: agent,
       } as never,
     );
-    if (!res.ok) fail("malformed", `attestation endpoint returned ${res.status}`);
+    if (!res.ok) {
+      // A gateway/CVM rolling restart presents as 429/5xx before the new
+      // enclave is ready. That is availability, not evidence that the peer is
+      // malformed. Retrying it can never cause acceptance without a later
+      // successful quote + socket verification.
+      const transient = res.status === 429 || res.status >= 500;
+      fail(
+        transient ? "socket_lost" : "malformed",
+        `attestation endpoint returned ${res.status}`,
+      );
+    }
 
     const declared = res.headers.get("content-length");
     if (declared !== null && Number(declared) > LIMITS.bodyBytes) {
@@ -476,7 +486,14 @@ async function verifyOnce(
   } catch (e) {
     const transportError = transportErrorFrom(e);
     if (transportError) throw transportError;
-    fail("malformed", "attestation exchange failed");
+    // Syntax proves the peer answered with invalid evidence; a rejected,
+    // reset, timed-out, or aborted exchange proves only that no evidence was
+    // available yet. Conflating those made a normal ~60-second CVM redeploy a
+    // terminal security verdict, so the daemon never reached its retry path.
+    if (e instanceof SyntaxError) {
+      fail("malformed", "attestation response was not valid JSON");
+    }
+    fail("socket_lost", "attestation exchange was unavailable");
   } finally {
     clearTimeout(timer);
   }

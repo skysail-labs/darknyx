@@ -420,4 +420,52 @@ describe("verifyTransportOnSocket retries a lost socket, never a verdict", () =>
     ).rejects.toMatchObject({ kind: "socket_lost" });
     expect(count.n, "socket_lost should be retried a bounded number of times").toBe(3);
   });
+
+  it("classifies a raw fetch outage as retryable socket loss", async () => {
+    const count = { n: 0 };
+    const fetchImpl = (async () => {
+      count.n += 1;
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl,
+      } as never),
+    ).rejects.toMatchObject({ kind: "socket_lost" });
+    expect(count.n).toBe(3);
+  });
+
+  it("classifies a rolling-restart 503 as retryable socket loss", async () => {
+    const count = { n: 0 };
+    const fetchImpl = (async () => {
+      count.n += 1;
+      return new Response("unavailable", { status: 503 });
+    }) as unknown as typeof fetch;
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl,
+      } as never),
+    ).rejects.toMatchObject({ kind: "socket_lost" });
+    expect(count.n).toBe(3);
+  });
+
+  it("does not retry a syntactically malformed attestation response", async () => {
+    const count = { n: 0 };
+    const fetchImpl = (async () => {
+      count.n += 1;
+      return new Response("not-json", { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl,
+      } as never),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    expect(count.n).toBe(1);
+  });
 });
