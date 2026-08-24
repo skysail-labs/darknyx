@@ -247,7 +247,11 @@ async function main(): Promise<void> {
       // `ws` is the daemon's WebSocket implementation; the gate wraps it so no
       // frame is sent before the upgrade socket has been checked.
       createWebSocket: (url: string) =>
-        new WebSocket(url) as unknown as NodeWebSocketLike,
+        new WebSocket(url, {
+          // The enclave certificate is self-signed. WebPKI is intentionally
+          // deferred to the quote-bound SPKI gate wrapping this exact socket.
+          rejectUnauthorized: false,
+        }) as unknown as NodeWebSocketLike,
       onTransportViolation: (error) =>
         transportSupervisor?.reportViolation(error),
     });

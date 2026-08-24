@@ -146,7 +146,12 @@ export class TradingClient {
     ws.addEventListener("open", () => {
       void this.sendLogin(false);
     });
-    ws.addEventListener("message", (event) => this.onMessage(event.data));
+    ws.addEventListener("message", (event) => {
+      // `close()` is asynchronous. A suspended/replaced socket may still
+      // deliver buffered frames, which must not mutate the new generation.
+      if (this.ws !== ws) return;
+      this.onMessage(event.data);
+    });
     ws.addEventListener("error", (event) => {
       const error =
         event instanceof Error ? event : new Error("WebSocket transport error");

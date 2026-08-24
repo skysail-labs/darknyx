@@ -554,10 +554,12 @@ export class Daemon {
     this.transportState = "reverifying";
     this.transportPauseReason = reason;
     this.transportRecoveryAttempts += 1;
-    this.streamClient.suspend();
-    if (trigger) this.emitError("transport", trigger);
-
     const run = (async () => {
+      // Yield so the single-flight latch below is assigned before the
+      // synchronous error event can let a subscriber re-enter this method.
+      await Promise.resolve();
+      this.streamClient.suspend();
+      if (trigger) this.emitError("transport", trigger);
       let candidate: DaemonTransport | null = null;
       let committed = false;
       let failureReason: TransportPauseReason = "transport_rejected";
@@ -998,6 +1000,7 @@ export class Daemon {
     if (this.transportRecoveryTimer) clearTimeout(this.transportRecoveryTimer);
     this.transportRecoveryTimer = null;
     this.transportNextAttemptMs = null;
+    this.transportRecoveryAttempts = 0;
     this.placer.close();
     this.streamClient.close();
     void this.transportSupervisor?.close();

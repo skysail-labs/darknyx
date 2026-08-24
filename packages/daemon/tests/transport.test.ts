@@ -162,6 +162,14 @@ describe("buildDaemonTransport — legacy mode", () => {
     expect(t.webSocketFactory).toBeUndefined();
     expect(t.isStale()).toBe(false);
   });
+
+  it("rejects a hand-built production legacy config", async () => {
+    await expect(
+      buildDaemonTransport(cfg({ deploymentTier: "production" }), {
+        verifierDeps: {} as never,
+      }),
+    ).rejects.toThrow(/forbidden in production/);
+  });
 });
 
 describe("buildDaemonTransport — ra-tls refuses to half-protect", () => {
@@ -189,7 +197,7 @@ describe("buildDaemonTransport — ra-tls refuses to half-protect", () => {
         verifierDeps: {} as never,
         createWebSocket: () => ({}) as never,
       }),
-    ).rejects.toThrow(/compose hash/i);
+    ).rejects.toThrow(/EXPECT_COMPOSE_HASH|compose hash/i);
   });
 
   it("refuses a signer-set pin that is not 32 bytes", async () => {

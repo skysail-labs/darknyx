@@ -521,6 +521,15 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     console.log(`  · CVM_RESTART_READY boot=${before} rss_mb=${rssBeforeMb}`);
 
     const states = new Set<string>();
+    // `reconciling` can be shorter than a polling interval on an empty state
+    // set. The daemon emits its reconciliation boundary synchronously, so use
+    // that event as the non-sampling record while retaining status polling for
+    // the longer transport states.
+    const unsubscribeStateEvents = buyer.subscribe((event) => {
+      if (event.type === "error" && event.context === "reconcile") {
+        states.add("reconciling");
+      }
+    });
     let requestFailures = 0;
     let recoveryObserved = false;
     const deadline = startedMs + 240_000;
@@ -563,10 +572,12 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
         console.log(`  · CVM_RESTART_RECOVERED ${JSON.stringify(result)}`);
         expect(states.has("reverifying")).toBe(true);
         expect(states.has("reconciling")).toBe(true);
+        unsubscribeStateEvents();
         return;
       }
       await sleep(recoveryObserved ? 100 : 500);
     }
+    unsubscribeStateEvents();
     throw new Error(
       `daemon did not recover from a real boot rotation; states=${[
         ...states,

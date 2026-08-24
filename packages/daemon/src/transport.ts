@@ -28,7 +28,7 @@ import {
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
 import { TransportVerificationError } from "@darknyx/sdk/transport-node";
 
-import type { DaemonConfig } from "./config.js";
+import { assertTransportConfigCoherent, type DaemonConfig } from "./config.js";
 
 export interface DaemonTransport {
   /** Use for every CVM request. */
@@ -78,6 +78,10 @@ export async function buildDaemonTransport(
   cfg: DaemonConfig,
   deps: BuildTransportDeps,
 ): Promise<DaemonTransport> {
+  // This boundary is public to programmatic embedders, which may construct a
+  // DaemonConfig without loadConfig(). Enforce the production policy here too
+  // so the legacy early return cannot bypass it.
+  assertTransportConfigCoherent(cfg);
   if (cfg.transportMode === "gateway-terminated") {
     return {
       fetch: deps.fetchImpl ?? fetch,

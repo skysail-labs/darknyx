@@ -453,6 +453,22 @@ describe("verifyTransportOnSocket retries a lost socket, never a verdict", () =>
     expect(count.n).toBe(3);
   });
 
+  it("does not retry a definitive non-OK attestation status", async () => {
+    const count = { n: 0 };
+    const fetchImpl = (async () => {
+      count.n += 1;
+      return new Response("forbidden", { status: 403 });
+    }) as unknown as typeof fetch;
+    await expect(
+      verifyTransportOnSocket({
+        ...baseOpts,
+        agent: new TransportAgent(),
+        fetchImpl,
+      } as never),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    expect(count.n).toBe(1);
+  });
+
   it("does not retry a syntactically malformed attestation response", async () => {
     const count = { n: 0 };
     const fetchImpl = (async () => {

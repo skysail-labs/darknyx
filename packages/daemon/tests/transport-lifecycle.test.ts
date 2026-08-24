@@ -215,6 +215,34 @@ describe("daemon transport lifecycle", () => {
     expect(placer.place).not.toHaveBeenCalled();
   });
 
+  it("latches recovery before a synchronous error subscriber can re-enter", async () => {
+    const old = generation("old");
+    const next = generation("next");
+    const factory = vi.fn(async () => next.transport);
+    const supervisor = new DaemonTransportSupervisor(old.transport, factory);
+    const { daemon } = buildDaemon(supervisor, async () => identity("5b"));
+    let reentrant: Promise<void> | null = null;
+    daemon.subscribe((event) => {
+      if (
+        event.type === "error" &&
+        event.context === "transport" &&
+        reentrant === null
+      ) {
+        reentrant = daemon.recoverTransportNow("boot_changed");
+      }
+    });
+
+    await daemon.recoverTransportNow("boot_changed", new Error("boot rotated"));
+    await reentrant;
+
+    expect(
+      reentrant,
+      "the transport event must have re-entered",
+    ).not.toBeNull();
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(old.close).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a security verdict paused and closes the rejected candidate", async () => {
     const old = generation("old");
     const rejected = generation("rejected");
@@ -235,6 +263,36 @@ describe("daemon transport lifecycle", () => {
       tradingEnabled: false,
       transportState: "paused",
       transportPauseReason: "application_attestation_rejected",
+      transportNextAttemptMs: null,
+    });
+  });
+
+  it("keeps placement paused when reconciliation fails after the swap", async () => {
+    const old = generation("old");
+    const next = generation("next");
+    const supervisor = new DaemonTransportSupervisor(
+      old.transport,
+      async () => next.transport,
+    );
+    const { daemon, reconcileSpy } = buildDaemon(supervisor, async () =>
+      identity("5b"),
+    );
+    reconcileSpy.mockResolvedValue({
+      ordersRephased: 0,
+      ordersUnknown: 0,
+      mergeLatchesCleared: 0,
+      notesRecovered: 0,
+      errors: ["chain reconciliation failed"],
+    });
+
+    await daemon.recoverTransportNow("boot_changed");
+
+    expect(old.close).toHaveBeenCalledTimes(1);
+    expect(next.close).not.toHaveBeenCalled();
+    expect(daemon.getTrustStatus()).toMatchObject({
+      tradingEnabled: false,
+      transportState: "paused",
+      transportPauseReason: "reconciliation_failed",
       transportNextAttemptMs: null,
     });
   });
@@ -306,6 +364,7 @@ describe("daemon transport lifecycle", () => {
       transportState: "paused",
       transportPauseReason: "stopped",
       transportNextAttemptMs: null,
+      transportRecoveryAttempts: 0,
     });
   });
 

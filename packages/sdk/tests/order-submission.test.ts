@@ -372,6 +372,7 @@ describe("TradingClient (/v1/stream session)", () => {
 
   it("suspends reconnects while retaining subscriptions, then resumes them", async () => {
     const sockets: FakeSocket[] = [];
+    const orderFrames: unknown[] = [];
     const client = new TradingClient({
       gatewayWsUrl: "wss://x",
       token: "t",
@@ -382,7 +383,9 @@ describe("TradingClient (/v1/stream session)", () => {
         return socket;
       },
     });
-    const sub = client.subscribeChannel("orders", () => undefined);
+    const sub = client.subscribeChannel("orders", (frame) =>
+      orderFrames.push(frame),
+    );
     const first = sockets[0];
     first.fire("open");
     await flushMicrotasks();
@@ -398,6 +401,17 @@ describe("TradingClient (/v1/stream session)", () => {
     await flushMicrotasks();
 
     client.suspend();
+    first.fire("message", {
+      data: JSON.stringify({
+        op: "event",
+        seq: 2,
+        channel: "orders",
+        result: { order_id: "stale-generation" },
+      }),
+    });
+    expect(orderFrames, "a suspended socket delivered a stale frame").toEqual(
+      [],
+    );
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(sockets).toHaveLength(1);
     await expect(client.ping()).rejects.toThrow(/suspended/);
