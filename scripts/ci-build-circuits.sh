@@ -39,7 +39,6 @@ build_wasm() {
     echo "[$name] done."
 }
 
-build_wasm valid_wallet_create
 build_wasm valid_deposit
 build_wasm valid_spend
 build_wasm valid_input

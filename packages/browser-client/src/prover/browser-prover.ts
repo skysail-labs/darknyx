@@ -4,7 +4,6 @@ import type {
   IDarkPoolZkProverSuite,
   MergeInputs,
   SpendInputs,
-  WalletCreateInputs,
 } from "@darknyx/sdk";
 
 import type {
@@ -162,23 +161,6 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
       expectedPublic,
     })) as Groth16ProofBytes;
   }
-
-  walletCreate = {
-    prove: async (inputs: WalletCreateInputs): Promise<Groth16ProofBytes> =>
-      this.#prove(
-        "wallet_create",
-        {
-          userCommitment: String(inputs.userCommitment),
-          rootKey: strings(inputs.rootKey),
-          spendingKey: String(inputs.spendingKey),
-          viewingKey: String(inputs.viewingKey),
-          r0: String(inputs.r0),
-          r1: String(inputs.r1),
-          r2: String(inputs.r2),
-        },
-        [String(inputs.userCommitment)],
-      ),
-  };
 
   deposit = {
     prove: async (inputs: DepositInputs): Promise<Groth16ProofBytes> =>

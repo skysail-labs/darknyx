@@ -47,13 +47,6 @@
       "expiry_slot": { "offset": 40, "size": 8 },
       "bump": { "offset": 48, "size": 1 }
     },
-    "WalletEntry": {
-      "account_len": 88,
-      "commitment": { "offset": 8, "size": 32 },
-      "owner": { "offset": 40, "size": 32 },
-      "created_slot": { "offset": 72, "size": 8 },
-      "bump": { "offset": 80, "size": 1 }
-    },
     "DepositedNoteEntry": {
       "account_len": 56,
       "note_commitment": { "offset": 8, "size": 32 },

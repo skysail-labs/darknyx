@@ -317,9 +317,7 @@ async function supported() {
       token: async () => "test-token",
     },
     vault,
-    inventory: {
-      allocateDepositIndex: async () => 9,
-    },
+    inventory: {},
     prover: {
       deposit: {
         prove: async (witness) => {

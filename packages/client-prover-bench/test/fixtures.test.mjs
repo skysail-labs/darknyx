@@ -6,7 +6,6 @@ import { buildFixtures } from "../src/fixtures.mjs";
 test("fixture corpus covers every client-side circuit and pins signal counts", async () => {
   const fixtures = await buildFixtures();
   assert.deepEqual(Object.keys(fixtures), [
-    "wallet_create",
     "deposit",
     "input",
     "spend",
@@ -21,7 +20,6 @@ test("fixture corpus covers every client-side circuit and pins signal counts", a
       ]),
     ),
     {
-      wallet_create: 1,
       deposit: 5,
       input: 4,
       spend: 8,

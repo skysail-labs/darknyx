@@ -51,8 +51,7 @@ pub struct NoteOpening {
     /// for the conservation constraint to hold — enforced by
     /// [`Self::verify_commitment`] (the commitment binds the amount).
     pub amount: u64,
-    /// `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Distinct
-    /// from the wallet `user_commitment`.
+    /// `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`.
     pub owner_commitment: [u8; 32],
     /// v2: the note's single `inner_hash` (replaces the old nonce +
     /// blinding pair). Anchors the commitment — and, off-enclave, the

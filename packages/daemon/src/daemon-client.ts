@@ -53,14 +53,12 @@ export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
   const connection = createConnection(opts.rpcUrl);
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
   const circuitsDir =
-    process.env.DARKNYX_DAEMON_CIRCUITS_DIR ?? resolve(repoRoot, "circuits/build");
+    process.env.DARKNYX_DAEMON_CIRCUITS_DIR ??
+    resolve(repoRoot, "circuits/build");
   const stubs = new UnimplementedProverSuite("deposit-only daemon client");
   const deposit = nodeValidDepositProver(
     opts.depositArtifacts ?? {
-      wasmPath: resolve(
-        circuitsDir,
-        "valid_deposit/circuit_js/circuit.wasm",
-      ),
+      wasmPath: resolve(circuitsDir, "valid_deposit/circuit_js/circuit.wasm"),
       zkeyPath: resolve(circuitsDir, "valid_deposit/circuit_final.zkey"),
     },
   );
@@ -74,7 +72,6 @@ export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
       merkleProofProvider: STUB_MERKLE,
     },
     zkProver: {
-      walletCreate: stubs.walletCreate,
       deposit,
       spend: stubs.spend,
       merge: stubs.merge,

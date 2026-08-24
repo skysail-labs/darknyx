@@ -131,17 +131,6 @@ pub fn merkle_tree_pda(program_id: &Pubkey, tree_id: u8) -> (Pubkey, u8) {
     )
 }
 
-pub fn wallet_entry_pda(
-    program_id: &Pubkey,
-    commitment: &[u8; 32],
-    owner: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[b"wallet", commitment.as_ref(), owner.as_ref()],
-        program_id,
-    )
-}
-
 pub fn note_lock_pda(program_id: &Pubkey, commitment: &[u8; 32]) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"note_lock", commitment.as_ref()], program_id)
 }
@@ -281,26 +270,6 @@ impl Harness {
             trader,
             test_mint,
         }
-    }
-
-    /// Create a WalletEntry PDA for a user_commitment.
-    pub fn create_wallet_stub(&mut self, user_commitment: &[u8; 32], owner: &Pubkey) {
-        use solana_account::Account as SolAccount;
-        let (pda, bump) = wallet_entry_pda(&self.vault_id, user_commitment, owner);
-        let mut data = vec![0u8; 88];
-        data[0..8].copy_from_slice(&anchor_disc("WalletEntry"));
-        data[8..40].copy_from_slice(user_commitment);
-        data[40..72].copy_from_slice(&owner.to_bytes());
-        data[72..80].copy_from_slice(&0u64.to_le_bytes());
-        data[80] = bump;
-        let acct = SolAccount {
-            lamports: self.svm.minimum_balance_for_rent_exemption(data.len()),
-            data,
-            owner: self.vault_id,
-            executable: false,
-            rent_epoch: 0,
-        };
-        self.svm.set_account(pda, acct).unwrap();
     }
 }
 

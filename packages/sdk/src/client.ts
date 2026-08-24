@@ -7,9 +7,7 @@ import type {
   TransactionForwarder,
 } from "./providers.js";
 import {
-  deriveMasterViewingKey,
   deriveSpendingKey,
-  deriveRootKey,
   deriveTradingKeyAtOffset,
   deriveOwnerCommitmentBlinding,
   resolveMasterSeed,
@@ -99,8 +97,6 @@ export class DarkPoolClient {
     return {
       masterSeed: this.resolvedSeed,
       spendingKey: deriveSpendingKey(this.resolvedSeed),
-      viewingKey: deriveMasterViewingKey(this.resolvedSeed),
-      rootKey: deriveRootKey(this.resolvedSeed),
       tradingKey: deriveTradingKeyAtOffset(
         this.resolvedSeed,
         this.tradingOffset,

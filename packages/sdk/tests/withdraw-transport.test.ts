@@ -49,11 +49,6 @@ const PROGRAM_ID = new PublicKey(
 
 class FakeProverSuite implements IDarkPoolZkProverSuite {
   public capturedSpendInputs: SpendInputs[] = [];
-  walletCreate = {
-    prove: async () => {
-      throw new Error("not used in withdraw test");
-    },
-  };
   deposit = {
     prove: async () => {
       throw new Error("not used in withdraw test");

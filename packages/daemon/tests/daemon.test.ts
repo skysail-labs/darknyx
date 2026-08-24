@@ -28,11 +28,6 @@ function keystore(): Keystore {
   for (let i = 0; i < 64; i++) masterSeed[i] = (i * 13 + 5) & 0xff;
   const id: AccountIdentity = {
     masterSeed,
-    ownerBlinding: 0xabcn,
-    r0: 1n,
-    r1: 2n,
-    r2: 3n,
-    rootKeyPubkey: new Uint8Array(32).fill(4),
   };
   return new Keystore(id);
 }
@@ -50,11 +45,6 @@ function countingKeystore(): CountingKeystore {
   const base = keystore();
   return new CountingKeystore({
     masterSeed: base.masterSeed,
-    ownerBlinding: base.ownerBlinding,
-    r0: 1n,
-    r1: 2n,
-    r2: 3n,
-    rootKeyPubkey: new Uint8Array(32).fill(4),
   });
 }
 
@@ -413,10 +403,7 @@ describe("Daemon — deposit", () => {
   const MINT = new Uint8Array(32).fill(9);
 
   it("calls the deposit fn, stores the minted note, returns it", async () => {
-    // Typed with the REAL DepositParams, not a two-field structural stand-in.
-    // With the narrow inline type, `mock.calls[0][0]` did not carry
-    // `depositIndex`, and the assertion below had to cast to reach it — a cast
-    // that quietly asserted nothing about what the daemon actually passed.
+    // Typed with the REAL DepositParams so this pins the daemon-to-SDK surface.
     const depositFn = vi.fn(async (params: DepositParams) => ({
       signature: "depsig",
       leafIndex: 42n,
@@ -440,7 +427,7 @@ describe("Daemon — deposit", () => {
     });
 
     expect(depositFn).toHaveBeenCalledOnce();
-    expect(typeof depositFn.mock.calls[0][0].depositIndex).toBe("bigint");
+    expect(depositFn.mock.calls[0][0]).not.toHaveProperty("depositIndex");
     expect(out.leafIndex).toBe(42n);
     const stored = store.get(out.commitment)!;
     expect(stored.amount).toBe(1000n);

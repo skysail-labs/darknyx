@@ -2,23 +2,21 @@
 /**
  * darknyx-keystore-init — create (or recreate) an encrypted daemon keystore.
  *
- * Generates a fresh account identity (random 64-byte master seed + the
- * seed-derived owner/user blindings) bound to the operator's root (payer)
- * Solana key, seals it under a passphrase, and writes a separate encrypted,
+ * Generates a fresh account identity (one random 64-byte master seed), seals
+ * it under a passphrase, and writes a separate encrypted,
  * versioned seed backup. It also creates the authenticated order-sequence
  * sidecar; back that file up with the keystore and restore its latest
  * `next_index`. Plaintext seed import/export is deliberately absent.
  *
  *   DARKNYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase> \
  *   DARKNYX_DAEMON_SEED_BACKUP_PASSPHRASE=<distinct-passphrase> \
- *   darknyx-keystore-init --root-key <BASE58_PUBKEY> [--out ./darknyx-keystore.json] \
+ *   darknyx-keystore-init [--out ./darknyx-keystore.json] \
  *                     --backup-out ./darknyx-seed-backup.json [--force]
  *
  *   # Disaster recovery onto a fresh keystore:
- *   darknyx-keystore-init --root-key <BASE58_PUBKEY> \
+ *   darknyx-keystore-init \
  *                     --import-backup ./darknyx-seed-backup.json [--force]
  *
- *   --root-key   (required) base58 pubkey of the funding/root wallet.
  *   --out        keystore path (default ./darknyx-keystore.json).
  *   --sequence-out order-sequence path (default <out>.order-sequence).
  *   --sequence-start recovered next index; REQUIRED with --import-backup.
@@ -32,7 +30,6 @@
  */
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { PublicKey } from "@solana/web3.js";
 import {
   exportEncryptedMasterSeed,
   importEncryptedMasterSeed,
@@ -55,8 +52,6 @@ function flag(name: string): boolean {
 }
 
 async function main(): Promise<void> {
-  const rootKeyB58 = arg("root-key");
-  if (!rootKeyB58) throw new Error("--root-key <BASE58_PUBKEY> is required");
   const out = arg("out") ?? "./darknyx-keystore.json";
   const sequenceOut = arg("sequence-out") ?? `${out}.order-sequence`;
   const passphrase = process.env.DARKNYX_DAEMON_KEYSTORE_PASSPHRASE;
@@ -94,7 +89,6 @@ async function main(): Promise<void> {
     throw new Error(`${sequenceOut} exists; pass --force to overwrite`);
   }
 
-  const rootKeyPubkey = new PublicKey(rootKeyB58).toBytes();
   const restoredSeed = importBackup
     ? importEncryptedMasterSeed(
         readFileSync(importBackup, "utf8"),
@@ -102,8 +96,8 @@ async function main(): Promise<void> {
       )
     : null;
   const identity = restoredSeed
-    ? deriveAccountIdentity(restoredSeed, rootKeyPubkey)
-    : generateAccountIdentity(rootKeyPubkey);
+    ? deriveAccountIdentity(restoredSeed)
+    : generateAccountIdentity();
 
   // A restored seed may have allocated indices that are not discoverable from
   // chain history (cancelled/unmatched orders never settle). Validate this
@@ -129,7 +123,6 @@ async function main(): Promise<void> {
 
   const ks = new Keystore(identity);
   const ownerCommit = await ks.ownerCommitment();
-  const userCommit = await ks.userCommitment();
 
   if (backupOut) {
     const backup = exportEncryptedMasterSeed(
@@ -160,10 +153,8 @@ async function main(): Promise<void> {
       : `seed restored from encrypted backup: ${importBackup}`,
   );
   console.log("");
-  console.log("Register these on-chain (create_wallet) before trading:");
-  console.log(`  root_key:         ${rootKeyB58}`);
+  console.log("Derived shielded account identity:");
   console.log(`  owner_commitment: ${ownerCommit.toString(16)}`);
-  console.log(`  user_commitment:  ${Buffer.from(userCommit).toString("hex")}`);
 }
 
 main().catch((e) => {

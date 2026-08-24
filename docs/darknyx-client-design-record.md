@@ -264,7 +264,7 @@ together they decide whether traders need a persistent process at all.
 
 ### 4.2 Benchmark matrix
 
-**Circuits:** `VALID_WALLET_CREATE`, `VALID_DEPOSIT`, `VALID_INPUT` (primary),
+**Circuits:** `VALID_DEPOSIT`, `VALID_INPUT` (primary),
 `VALID_SPEND`, `VALID_MERGE(2)`, `VALID_MERGE(4)`.
 
 **Backends:**

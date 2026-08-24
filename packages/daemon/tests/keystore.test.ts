@@ -13,7 +13,6 @@ import nacl from "tweetnacl";
 import {
   exportEncryptedMasterSeed,
   importEncryptedMasterSeed,
-  userCommitmentFromKeys,
 } from "@darknyx/sdk";
 
 import {
@@ -27,15 +26,7 @@ import {
 function identity(): AccountIdentity {
   const masterSeed = new Uint8Array(64);
   for (let i = 0; i < 64; i++) masterSeed[i] = (i * 7 + 3) & 0xff;
-  const rootKeyPubkey = new Uint8Array(32).fill(11);
-  return {
-    masterSeed,
-    ownerBlinding: 0xfeedn,
-    r0: 1n,
-    r1: 2n,
-    r2: 3n,
-    rootKeyPubkey,
-  };
+  return { masterSeed };
 }
 
 const tmpDirs: string[] = [];
@@ -53,11 +44,11 @@ function tmpFile(): string {
 function serializeIdentityForV1(id: AccountIdentity): string {
   return JSON.stringify({
     seed: Buffer.from(id.masterSeed).toString("hex"),
-    ownerBlinding: id.ownerBlinding.toString(),
-    r0: id.r0.toString(),
-    r1: id.r1.toString(),
-    r2: id.r2.toString(),
-    rootKeyPubkey: Buffer.from(id.rootKeyPubkey).toString("hex"),
+    ownerBlinding: "65261",
+    r0: "1",
+    r1: "2",
+    r2: "3",
+    rootKeyPubkey: Buffer.from(new Uint8Array(32).fill(11)).toString("hex"),
   });
 }
 
@@ -106,50 +97,19 @@ function writeFileObject(path: string, value: Record<string, unknown>): void {
 }
 
 describe("Keystore — derivation", () => {
-  it("validates seed + pubkey lengths", () => {
+  it("validates the seed length", () => {
     expect(
       () => new Keystore({ ...identity(), masterSeed: new Uint8Array(32) }),
     ).toThrow(/64 bytes/);
-    expect(
-      () => new Keystore({ ...identity(), rootKeyPubkey: new Uint8Array(16) }),
-    ).toThrow(/32 bytes/);
   });
 
-  it("derives a stable spending key + owner/user commitments", async () => {
+  it("derives a stable spending key and owner commitment", async () => {
     const ks = new Keystore(identity());
     expect(typeof ks.spendingKey).toBe("bigint");
     const oc1 = await ks.ownerCommitment();
     const oc2 = await ks.ownerCommitment();
     expect(oc1).toBe(oc2); // deterministic
-    const uc = await ks.userCommitment();
-    expect(uc).toHaveLength(32);
-
-    // T-07 regression. The keystore used to return this value with its top byte
-    // forced to zero, which made it un-matchable against any registered
-    // WalletEntry. Pin the property that actually matters: the keystore returns
-    // the derivation UNMODIFIED.
-    //
-    // Asserting a top-byte bound instead would not regress. `uc[0] <= 0x30` is
-    // satisfied by a zeroed byte too, so the old corrupting behaviour would sail
-    // through — and for this fixture the honest answer is that we do not control
-    // what the top byte is. Comparing against the raw derivation catches the
-    // mutation whatever the byte happens to be.
-    const raw = await userCommitmentFromKeys({
-      rootKeyPubkey: identity().rootKeyPubkey,
-      spendingKey: ks.spendingKey,
-      viewingKey: ks.viewingKey,
-      r0: 1n,
-      r1: 2n,
-      r2: 3n,
-    });
-    expect(uc).toEqual(raw);
-
-    // And it is a canonical BN254 element — checked against the modulus, not by
-    // a first-byte heuristic, which is not sufficient at the boundary.
-    const BN254_R =
-      21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-    const asInt = uc.reduce((acc, byte) => (acc << 8n) | BigInt(byte), 0n);
-    expect(asInt).toBeLessThan(BN254_R);
+    expect(ks.ownerBlinding).toBe(new Keystore(identity()).ownerBlinding);
   });
 
   it("derives distinct per-order trading keys; signatures verify", () => {
@@ -169,23 +129,17 @@ describe("Keystore — derivation", () => {
 });
 
 describe("account identity derivation", () => {
-  const rootKey = new Uint8Array(32).fill(8);
-
-  it("is deterministic from (seed, rootKey)", () => {
+  it("retains only the seed and defensively copies it", () => {
     const seed = new Uint8Array(64).fill(3);
-    const a = deriveAccountIdentity(seed, rootKey);
-    const b = deriveAccountIdentity(seed, rootKey);
-    expect(a.ownerBlinding).toBe(b.ownerBlinding);
-    expect(a.r0).toBe(b.r0);
-    expect(a.r1).toBe(b.r1);
-    expect(a.r2).toBe(b.r2);
-    // the four blindings are distinct domains
-    expect(new Set([a.ownerBlinding, a.r0, a.r1, a.r2]).size).toBe(4);
+    const derived = deriveAccountIdentity(seed);
+    seed[0] = 4;
+    expect(derived.masterSeed[0]).toBe(3);
+    expect(Object.keys(derived)).toEqual(["masterSeed"]);
   });
 
   it("generate produces a fresh 64-byte seed each time", () => {
-    const a = generateAccountIdentity(rootKey);
-    const b = generateAccountIdentity(rootKey);
+    const a = generateAccountIdentity();
+    const b = generateAccountIdentity();
     expect(a.masterSeed).toHaveLength(64);
     expect(Buffer.from(a.masterSeed).equals(Buffer.from(b.masterSeed))).toBe(
       false,
@@ -193,16 +147,18 @@ describe("account identity derivation", () => {
   });
 
   it("recreating from the same seed yields a usable, identical keystore", () => {
-    const id = generateAccountIdentity(rootKey);
-    const recreated = deriveAccountIdentity(id.masterSeed, rootKey);
+    const id = generateAccountIdentity();
+    const recreated = deriveAccountIdentity(id.masterSeed);
     expect(new Keystore(recreated).spendingKey).toBe(
       new Keystore(id).spendingKey,
     );
-    expect(recreated.ownerBlinding).toBe(id.ownerBlinding);
+    expect(new Keystore(recreated).ownerBlinding).toBe(
+      new Keystore(id).ownerBlinding,
+    );
   });
 
   it("restores the same identity from an authenticated seed backup", async () => {
-    const id = generateAccountIdentity(rootKey);
+    const id = generateAccountIdentity();
     const backup = exportEncryptedMasterSeed(
       id.masterSeed,
       "separate backup passphrase",
@@ -211,17 +167,16 @@ describe("account identity derivation", () => {
       JSON.stringify(backup),
       "separate backup passphrase",
     );
-    const restored = deriveAccountIdentity(restoredSeed, rootKey);
+    const restored = deriveAccountIdentity(restoredSeed);
     const before = new Keystore(id);
     const after = new Keystore(restored);
 
     expect(after.spendingKey).toBe(before.spendingKey);
     expect(await after.ownerCommitment()).toBe(await before.ownerCommitment());
-    expect(await after.userCommitment()).toEqual(await before.userCommitment());
 
     const path = tmpFile();
     saveKeystore(restored, path, "new-device-passphrase");
-    expect(readFileObject(path).version).toBe(2);
+    expect(readFileObject(path).version).toBe(3);
     expect(loadKeystore(path, "new-device-passphrase").spendingKey).toBe(
       before.spendingKey,
     );
@@ -229,7 +184,7 @@ describe("account identity derivation", () => {
 });
 
 describe("Keystore — encrypted at rest", () => {
-  it("writes only the fixed v2 profile at mode 0600 and round-trips", async () => {
+  it("writes only the fixed v3 profile at mode 0600 and round-trips", async () => {
     const path = tmpFile();
     const id = identity();
     const fsync = vi.spyOn(fs, "fsyncSync");
@@ -239,7 +194,7 @@ describe("Keystore — encrypted at rest", () => {
     expect(fsync).toHaveBeenCalledTimes(2);
     const file = readFileObject(path);
     expect(file).toMatchObject({
-      version: 2,
+      version: 3,
       kdf: "scrypt",
       profile: "scrypt-n17-r8-p1-v1",
       cipher: "aes-256-gcm",
@@ -267,14 +222,18 @@ describe("Keystore — encrypted at rest", () => {
     expect(fs.readFileSync(path)).toEqual(before);
   });
 
-  it("opens the pinned v2 known-answer vector", () => {
+  it("opens the pinned v2 known-answer vector and migrates it to v3", () => {
     const path = tmpFile();
     const vector =
       '{"version":2,"kdf":"scrypt","profile":"scrypt-n17-r8-p1-v1","cipher":"aes-256-gcm","salt":"000102030405060708090a0b0c0d0e0f","iv":"a0a1a2a3a4a5a6a7a8a9aaab","ciphertext":"324fd30dbcb5fd70c97e75843662aab3350264486a23e4b4ca3a1d7bc3534f7e61f513c894df13d48c481d452784dc9544daeaef8f4c3f01e3513eca3dc54da85656d9713bbeaceeba93d42feb527e30825aeae0bf6df3af7ad39ea5b9c7518cdd0d3477bd73060839395459b16e7dac66dc18e750209dbd6258112ab00d10de74b8169d27021f76787d2deeb6f793f3202008f6c845ec569ffd7610ac109ac70c0f5790bbb0c774173013c9ff88dce76c40ad6e49b044da2b6cfc6b0234f4bebcfb0b550e179c6ad7d3cb89bb02022a86c42fe0d979e61f8fe681674fe37e161ba03b070a3d491a0aa1e5ffd2b5a07f78cf7448e9203b1e7f8cc3ef51bbf1bb10477d559b44beac03c9269068f28e10ef","tag":"e9afdb5bcd7c00744d5ccda24c1d109a"}';
     fs.writeFileSync(path, vector, { mode: 0o600 });
     const ks = loadKeystore(path, "correct horse battery staple");
     expect(ks.spendingKey).toBe(new Keystore(identity()).spendingKey);
-    expect(fs.readFileSync(path, "utf8")).toBe(vector);
+    expect(readFileObject(path)).toMatchObject({
+      version: 3,
+      profile: "scrypt-n17-r8-p1-v1",
+    });
+    expect(fs.readFileSync(path, "utf8")).not.toBe(vector);
   });
 
   it("migrates a valid v1 file only after decrypting and validating it", () => {
@@ -285,7 +244,7 @@ describe("Keystore — encrypted at rest", () => {
     const loaded = loadKeystore(path, "legacy passphrase");
     expect(loaded.spendingKey).toBe(expected.spendingKey);
     expect(readFileObject(path)).toMatchObject({
-      version: 2,
+      version: 3,
       profile: "scrypt-n17-r8-p1-v1",
     });
     expect(fs.statSync(path).mode & 0o777).toBe(0o600);
@@ -311,10 +270,17 @@ describe("Keystore — encrypted at rest", () => {
       ...JSON.parse(serializeIdentityForV1(identity())),
       seed: "00",
     };
-    writeLegacyV1(path, "right-passphrase-01", identity(), JSON.stringify(malformed));
+    writeLegacyV1(
+      path,
+      "right-passphrase-01",
+      identity(),
+      JSON.stringify(malformed),
+    );
     const before = fs.readFileSync(path);
 
-    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/seed must be 64 bytes/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
+      /seed must be 64 bytes/,
+    );
     expect(fs.readFileSync(path)).toEqual(before);
     expect(readFileObject(path).version).toBe(1);
   });
@@ -342,7 +308,7 @@ describe("Keystore — encrypted at rest", () => {
     });
 
     expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
-      /atomic migration to v2 failed/,
+      /atomic migration to v3 failed/,
     );
     expect(fs.readFileSync(path)).toEqual(before);
     expect(
@@ -366,24 +332,28 @@ describe("Keystore — encrypted at rest", () => {
     wrongProfile.profile = "scrypt-n14-r8-p1-v1";
     writeFileObject(path, wrongProfile);
     expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
-      /unsupported keystore v2 profile/,
+      /unsupported keystore v3 profile/,
     );
 
     saveKeystore(identity(), path, "right-passphrase-01");
     const shortSalt = readFileObject(path);
     shortSalt.salt = "00";
     writeFileObject(path, shortSalt);
-    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/salt must be 16 bytes/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
+      /salt must be 16 bytes/,
+    );
   });
 
-  it("authenticates the v2 header and rejects tampering", () => {
+  it("authenticates the v3 header and rejects tampering", () => {
     const path = tmpFile();
     saveKeystore(identity(), path, "right-passphrase-01");
     const file = readFileObject(path);
     const iv = file.iv as string;
     file.iv = `${iv.slice(0, -2)}${iv.endsWith("00") ? "01" : "00"}`;
     writeFileObject(path, file);
-    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/decrypt failed/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
+      /decrypt failed/,
+    );
   });
 
   it("rejects an oversized file before parsing or deriving a key", () => {
@@ -421,8 +391,8 @@ describe("keystore custody edges (SW-16)", () => {
     // A strong KDF profile buys TIME against a weak secret, not immunity: at
     // N=2^17 a short passphrase is still enumerable, and this file is exactly
     // what an attacker walks off with.
-    expect(() =>
-      saveKeystore(identity(), tmpFile(), "hunter2"),
-    ).toThrow(/at least 12 characters/);
+    expect(() => saveKeystore(identity(), tmpFile(), "hunter2")).toThrow(
+      /at least 12 characters/,
+    );
   });
 });

@@ -1,5 +1,4 @@
 export const CLIENT_CIRCUIT_ARITIES = Object.freeze({
-  wallet_create: 1,
   deposit: 5,
   input: 4,
   spend: 8,

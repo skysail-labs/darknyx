@@ -191,7 +191,7 @@ By domain, additionally:
 |---|---|
 | A circom circuit | `CRYPTOGRAPHY.md` §7, then the circuit + its `vk_*.rs` + its `*-prover.test.ts`. **See [§5](#5-touching-circuits-the-failure-mode-thats-bitten-us) — the disaster section.** |
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
-| `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive with a TS counterpart has a byte-equality contract with it** — `viewing_keys.rs` is Rust-only and deliberately has neither, so a changed derivation there breaks previously issued keys with no test to catch it. Comment conventions: [§10.5](#105-comment-conventions). |
+| `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive with a TS counterpart has a byte-equality contract with it.** Comment conventions: [§10.5](#105-comment-conventions). |
 | `crates/darkpool-matcher` | `tests/parity.rs` + `tests/paging_differential.rs` + `tests/chaining_sentinel.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave matches through `PreparedMatchTick::new` + `next_page`, NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. Output inner hashes live in `darkpool-crypto::match_output`, not here — `change_note.rs` holds role constants only. |
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). **Comment conventions: [§10.5](#105-comment-conventions)** — enforced by `scripts/check-no-process-markers.sh`. |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
@@ -210,7 +210,7 @@ Everything runs from the repo root.
 npm install                                        # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                      # pot16 (~72 MB) + pot18 (~288 MB)
                                                    #   + pot19 (~576 MB, N=16)
-bash scripts/build-circuits.sh                     # compile all 9 circom circuits;
+bash scripts/build-circuits.sh                     # compile all 8 circom circuits;
                                                    #   regenerates vk_*.rs Rust consts
 cargo build --examples -p darkpool-crypto          # TS↔Rust parity helper binaries
 ```
@@ -344,6 +344,7 @@ node scripts/check-script-awaits.mjs                # .mjs get no typecheck; a f
 # `npm install` builds workspace packages. Skip these and browser-client alone
 # reports ~15 "Cannot find module '@darknyx/client-core'" errors. It is easy to
 # miss locally, because a stale dist/ from an earlier build is usually on disk.
+node scripts/clean-ts-dist.mjs
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json          # emits dist/
 ./node_modules/.bin/tsc -p packages/client-core/tsconfig.json  # emits dist/
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
@@ -910,7 +911,6 @@ check fails, or proofs don't verify.
 | Note secret | `darkpool-crypto/src/keys.rs::derive_note_secret` | `sdk/src/keys/key-generators.ts::deriveNoteSecret` | `keys-parity.test.ts` |
 | Output `inner_hash` (trade/change/fee) | `darkpool-crypto/src/match_output.rs::{match_output_inner_hash, match_fee_inner_hash}` | `sdk/src/utxo/match-output.ts` | `match-output-parity.test.ts` + `inner-hash-parity.test.ts` |
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
-| User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
 | Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
 | Canonical payload hash — **FOUR independent implementations, not one shared** (see note below) | `vault::settlement_shared.rs::canonical_payload_hash` · `darknyx-tee/src/settle/payload.rs::canonical_hash` · `vault/tests/settle_harness/mod.rs::canonical_payload_hash` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `canonical_payload_hash_fixed_vector` (on-chain) + the drift assertion in `payload.rs` + `settle-builder-batched.test.ts` |
@@ -960,7 +960,7 @@ on-chain. (There is **no** `PoseidonFailed (6030)` variant on the vault — code
 ### 8.1 Per-leaf PDAs are the replay-protection backbone
 
 Durable note transitions use PDAs whose existence locks out replay:
-`WalletEntry` registers a user commitment, `DepositedNoteEntry` prevents an
+`DepositedNoteEntry` prevents an
 exact commitment from being deposited twice, `ConsumedNoteEntry` is the shared
 withdraw/settle/merge consume-once guard, and `NoteLock` pins an input between
 match and settlement. **The `init` constraint is the replay guard — don't
@@ -1182,6 +1182,5 @@ matcher/settler (`crates/darknyx-tee`) on Phala, validated end-to-end on devnet
 (`cvm-settle-e2e` real settle + loadgen). Note model is v2 `inner_hash`;
 canonical orders sign the viewing key, boot session, and a strictly increasing
 per-trading-key nonce. Output inners derive from consumed input inners, with no
-continuation anchor pool. `WalletEntry` is seeded by (commitment, owner) since
-`audit_9` TR-14; the shared settle helpers live in `settlement_shared.rs`
+continuation anchor pool. The shared settle helpers live in `settlement_shared.rs`
 (renamed from `tee_forced_settle.rs` — there is no per-match settle ix).*

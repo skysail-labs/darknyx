@@ -45,7 +45,6 @@ const receipt = await deposit({
   tokenMint,
   amount: 100_000_000n,      // smallest token units
   depositorTokenAccount,
-  depositIndex: 0n,           // increment for each deposit from this seed
 });
 // receipt includes signature, treeId, leafIndex, noteCommitment, and notePlaintext
 ```
@@ -55,12 +54,14 @@ transaction and reads the emitted tree shard and leaf index so the resulting
 note can immediately back an order, merge, or withdrawal.
 
 {% hint style="warning" %}
-**`depositIndex` must advance, and the chain now enforces it**
+**Fresh deposits and exact retries are separate APIs**
 
-`depositIndex` feeds the note's recovery nonce, which is fully deterministic
-from your seed. Two deposits of the **same mint and amount** at the **same
-index** therefore produce a byte-identical note commitment — and the vault
-rejects the second one outright.
+The ordinary SDK deposit call rejection-samples a fresh canonical BN254
+recovery nonce from the platform CSPRNG. Callers do not maintain a deposit
+counter, so restoring a seed cannot silently restart one and recreate an old
+commitment. If a transaction result is ambiguous, persist the nonce delivered
+by `onRecoveryNonceGenerated` and redrive through the explicitly named
+`getDepositRetryFunction`; that path intentionally recreates the same note.
 
 That rejection is deliberate and it is protecting you. A duplicate commitment
 used to be accepted: both deposits moved tokens in, but only one could ever be
@@ -72,10 +73,9 @@ that guard, the second deposit's tokens would be silently unrecoverable and,
 because the vault was over-collateralised rather than under, no solvency alarm
 would fire.
 
-The realistic way to hit this is not malice but a **seed-only restore**: nothing
-on-chain records how far your `depositIndex` has advanced, so a client rebuilt
-from the seed alone restarts at `0`. Persist the index alongside your note
-store, or scan forward for the first unused one before depositing.
+The vault still rejects duplicate commitments. Client-side randomness is a UX
+and recovery safeguard, not a replacement for consensus-enforced deposit-once
+semantics against retries or malformed clients.
 {% endhint %}
 
 ## Recovery

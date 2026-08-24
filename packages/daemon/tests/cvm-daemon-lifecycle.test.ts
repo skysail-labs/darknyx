@@ -403,9 +403,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
   async function sellerAsk(qty: bigint, price: bigint): Promise<void> {
     const seed = new Uint8Array(64);
     for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 11) & 0xff;
-    const ks = new Keystore(
-      deriveAccountIdentity(seed, sellerPayer.publicKey.toBytes()),
-    );
+    const ks = new Keystore(deriveAccountIdentity(seed));
     const noteAmt = withFee(qty);
     const ata = await associatedTokenAddress(baseMint, sellerPayer.publicKey);
     await sendAndConfirmTransaction(
@@ -425,7 +423,6 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       }),
     })({
       depositor: sellerPayer.publicKey,
-      depositIndex: BigInt(Date.now()),
       tokenMint: baseMint.toBytes(),
       amount: noteAmt,
       depositorTokenAccount: ata,
@@ -657,9 +654,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
 
     const seed = new Uint8Array(64);
     for (let i = 0; i < 64; i++) seed[i] = (Date.now() + i * 7) & 0xff;
-    const keystore = new Keystore(
-      deriveAccountIdentity(seed, buyerPayer.publicKey.toBytes()),
-    );
+    const keystore = new Keystore(deriveAccountIdentity(seed));
     buyerStore = new DaemonStore(":memory:");
 
     const config: DaemonConfig = {

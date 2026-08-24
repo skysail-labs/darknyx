@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 import bs58 from "bs58";
 
 const CIRCUIT_BUILD_DIRECTORIES = Object.freeze({
-  wallet_create: "valid_wallet_create",
   deposit: "valid_deposit",
   input: "valid_input",
   spend: "valid_spend",

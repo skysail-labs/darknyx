@@ -55,7 +55,7 @@ use anchor_lang::prelude::Address as Pubkey;
 use bytemuck::Pod;
 use vault::state::{
     BatchValidityMarker, ConsumedNoteEntry, DepositedNoteEntry, MarketConfig, MerkleTree, NoteLock,
-    OutstandingMint, VaultConfig, WalletEntry, MERKLE_DEPTH, ROOT_HISTORY_SIZE,
+    OutstandingMint, VaultConfig, MERKLE_DEPTH, ROOT_HISTORY_SIZE,
 };
 
 const DISC: usize = 8;
@@ -177,22 +177,14 @@ fn render() -> String {
         f,
     ));
 
-    // ---- The four guard/registry PDAs ----
+    // ---- The three guard/registry PDAs ----
     //
     // Added when the Anchor v2 port needed layout identity asserted for ALL
-    // NINE account structs, not the five that happened to be here. These are
+    // account structs, not only the five that happened to be here. These are
     // the smallest and least glamorous, which is exactly why they were the ones
     // missing: nothing in the settle path reads them field-by-field, so a
     // silent offset shift would surface as a PDA that derives fine and decodes
     // to garbage.
-    let mut f = Vec::new();
-    zc!(WalletEntry, f, commitment: 32, owner: 32, created_slot: 8, bump: 1);
-    accounts.push(account(
-        "WalletEntry",
-        DISC + core::mem::size_of::<WalletEntry>(),
-        f,
-    ));
-
     let mut f = Vec::new();
     zc!(DepositedNoteEntry, f, note_commitment: 32, deposited_slot: 8, bump: 1);
     accounts.push(account(
@@ -266,25 +258,24 @@ fn space_constants_match_the_pod_sizes() {
 
 #[test]
 fn every_account_struct_is_covered() {
-    // The fixture silently covered only 5 of the 9 `#[account]` structs, which
-    // is how WalletEntry / DepositedNoteEntry / ConsumedNoteEntry /
+    // The fixture once covered only 5 account structs, which is how
+    // DepositedNoteEntry / ConsumedNoteEntry /
     // OutstandingMint went unasserted through a layout-changing migration. Pin
     // the count so a new account type cannot be added without a layout entry.
     let rendered = render();
-    // The name loop below proves each of the nine is PRESENT; it cannot prove
+    // The name loop below proves each account is PRESENT; it cannot prove
     // nothing else is. Without this count, a tenth account struct renders into
     // the fixture and this test still passes, which is the exact failure the
     // test exists to prevent.
     assert_eq!(
         rendered.matches("\"account_len\"").count(),
-        9,
+        8,
         "layout fixture account count drifted"
     );
     for name in [
         "VaultConfig",
         "MarketConfig",
         "MerkleTree",
-        "WalletEntry",
         "DepositedNoteEntry",
         "ConsumedNoteEntry",
         "NoteLock",

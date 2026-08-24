@@ -178,11 +178,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
         },
       },
       zkProver: {
-        walletCreate: {
-          prove: async () => {
-            throw new Error("walletCreate prover unused in this test");
-          },
-        },
         deposit: nodeValidDepositProver({
           wasmPath: DEPOSIT_WASM,
           zkeyPath: DEPOSIT_ZKEY,
@@ -247,7 +242,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
         treeId: 0,
         tokenMint: mint.toBytes(),
         amount,
-        depositIndex: BigInt(i),
         depositorTokenAccount: ata,
         tokenProgramId: TOKEN_PROGRAM_ID,
       });

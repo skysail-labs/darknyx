@@ -3,7 +3,6 @@ const SIGNATURE_DOMAIN = new TextEncoder().encode(
 );
 
 export const CLIENT_CIRCUITS = [
-  "wallet_create",
   "deposit",
   "input",
   "spend",
@@ -53,7 +52,6 @@ export interface ManifestTrustPolicy {
 }
 
 const EXPECTED_PUBLIC_INPUTS: Record<ClientCircuitId, number> = {
-  wallet_create: 1,
   deposit: 5,
   input: 4,
   spend: 8,

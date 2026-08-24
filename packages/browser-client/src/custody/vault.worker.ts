@@ -10,13 +10,13 @@ import {
 } from "@darknyx/sdk/browser-recovery";
 import {
   bn254ToBE32,
-  deriveBlindingFactor,
   deriveDepositInnerHash,
   deriveMergeOutputInnerHash,
   deriveNoteSecret,
   deriveNoteUseTag,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
+  generateRecoveryNonce,
   noteCommitmentV2,
   nullifierV2,
   ownerCommitment,
@@ -576,14 +576,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       keypair.secretKey.fill(0);
     }
   },
-  async prepareDeposit({ tokenMint, amount, depositIndex }) {
-    if (
-      !Number.isInteger(depositIndex) ||
-      (depositIndex as number) < 0 ||
-      (depositIndex as number) > 0xffff_ffff
-    ) {
-      throw new Error("deposit index must be a u32");
-    }
+  async prepareDeposit({ tokenMint, amount }) {
     const mint = fromHex(tokenMint, 32, "deposit mint");
     const depositAmount = canonicalU64(amount, "deposit amount");
     if (depositAmount === 0n)
@@ -592,11 +585,8 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const spendingKey = deriveSpendingKey(currentSeed);
     const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const recoveryNonce = deriveBlindingFactor(
-      currentSeed,
-      BigInt(depositIndex as number),
-    );
-    const nonceBytes = bn254ToBE32(recoveryNonce);
+    const nonceBytes = generateRecoveryNonce();
+    const recoveryNonce = be32ToBigInt(nonceBytes);
     const noteSecret = deriveNoteSecret(currentSeed, nonceBytes);
     const innerBytes = await deriveDepositInnerHash(
       bn254ToBE32(owner),

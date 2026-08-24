@@ -2,7 +2,7 @@
 //!
 //! This crate is the single source of truth for Poseidon hashing over BN254, the
 //! note commitment and nullifier formulas, note-use tags, deposit/merge/match inner
-//! hashes, the four-key hierarchy, and the hierarchical viewing-key tree.
+//! hashes and the live client key derivations.
 //!
 //! # The byte-equality contract
 //!
@@ -22,10 +22,8 @@
 //! binary under `examples/` and asserts byte equality against the TypeScript
 //! implementation (`CLAUDE.md` §7.1).
 //!
-//! **[`viewing_keys`] is the exception**: it is Rust-only, has no TypeScript
-//! counterpart, and therefore no parity test. Changing a derivation there breaks
-//! previously issued keys with nothing to catch it — see that module. **The `examples/` directory exists for that purpose**, which
-//! is why `cargo build --examples -p darkpool-crypto` is part of the pre-PR gate:
+//! The `examples/` directory exists for byte-parity testing, which is why
+//! `cargo build --examples -p darkpool-crypto` is part of the pre-PR gate:
 //! without the binaries every one of those assertions silently skips, and
 //! `REQUIRE_PARITY_HELPERS=1` turns that skip into a hard failure.
 //!
@@ -55,10 +53,6 @@ pub mod note;
 pub mod note_use;
 pub mod nullifier;
 pub mod poseidon;
-#[cfg(not(target_os = "solana"))]
-pub mod user_commitment;
-#[cfg(not(target_os = "solana"))]
-pub mod viewing_keys;
 
 pub use deposit::{deposit_inner_hash, DOMAIN_DEPOSIT_INNER};
 pub use errors::CryptoError;
@@ -70,8 +64,8 @@ pub use fill_encryption::{
 };
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
-    darknyx_shake_kdf_v1, derive_blinding_factor, derive_master_viewing_key, derive_note_secret,
-    derive_spending_key, derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
+    darknyx_shake_kdf_v1, derive_blinding_factor, derive_note_secret, derive_spending_key,
+    derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
 };
 pub use match_config::{match_config_digest, DOMAIN_MATCH_CONFIG};
 pub use match_output::{
@@ -83,10 +77,3 @@ pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES}
 pub use note_use::{note_use_tag, DOMAIN_NOTE_USE};
 pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};
-#[cfg(not(target_os = "solana"))]
-pub use user_commitment::{user_commitment_from_keys, UserCommitmentInputs};
-#[cfg(not(target_os = "solana"))]
-pub use viewing_keys::{
-    derive_monthly_viewing_key, derive_scope_aead_key, derive_viewing_key_for_pair,
-    scope_aead_decrypt, scope_aead_encrypt,
-};

@@ -15,7 +15,10 @@ import {
   TransactionInstruction,
 } from "@solana/web3.js";
 
-import { getDepositFunction } from "../src/utxo/deposit.js";
+import {
+  getDepositFunction,
+  getDepositRetryFunction,
+} from "../src/utxo/deposit.js";
 import { DarkPoolError } from "../src/errors.js";
 import type {
   AccountInfoProvider,
@@ -29,7 +32,7 @@ import {
   UnimplementedProverSuite,
   type DepositInputs,
 } from "../src/zk/prover-suite.js";
-import { bn254ToBE32 } from "../src/keys/key-generators.js";
+import { BN254_R, bn254ToBE32 } from "../src/keys/key-generators.js";
 import {
   anchorDiscriminator,
   vaultConfigPda,
@@ -75,6 +78,7 @@ function makeProviders(opts: {
   vaultConfigData?: Buffer | null;
   captureIxs?: TransactionInstruction[];
   forwarderReply?: string;
+  forwarderError?: Error;
 }): {
   accountInfoProvider: AccountInfoProvider;
   transactionForwarder: TransactionForwarder;
@@ -97,6 +101,7 @@ function makeProviders(opts: {
         } else {
           opts.captureIxs?.push(...(txOrIxs as Transaction).instructions);
         }
+        if (opts.forwarderError) throw opts.forwarderError;
         return opts.forwarderReply ?? "deposit_sig_stub";
       },
     },
@@ -173,6 +178,7 @@ describe("getDepositFunction", () => {
     });
     const client = makeClient(providers);
     const stages: string[] = [];
+    let generatedNonce: Uint8Array | undefined;
 
     const deposit = getDepositFunction({ client });
     const mintBytes = new Uint8Array(32);
@@ -182,8 +188,10 @@ describe("getDepositFunction", () => {
       depositor: new PublicKey(mintBytes), // reuse as stub pubkey
       tokenMint: mintBytes,
       amount: 1_000_000n,
-      depositIndex: 3n,
       depositorTokenAccount: new PublicKey(mintBytes),
+      onRecoveryNonceGenerated: (nonce) => {
+        generatedNonce = nonce;
+      },
       callbacks: {
         pre: (s) => {
           stages.push(s);
@@ -195,6 +203,15 @@ describe("getDepositFunction", () => {
     // leafIndex comes from the NoteCreated event, NOT the pre-send leaf_count read.
     expect(receipt.leafIndex).toBe(EVENT_LEAF_INDEX);
     expect(receipt.noteCommitment).toHaveLength(32);
+    expect(generatedNonce).toHaveLength(32);
+    expect(receipt.notePlaintext.recoveryNonce).toBe(
+      [...generatedNonce!].reduce(
+        (value, byte) => (value << 8n) | BigInt(byte),
+        0n,
+      ),
+    );
+    expect(receipt.notePlaintext.recoveryNonce).toBeGreaterThan(0n);
+    expect(receipt.notePlaintext.recoveryNonce).toBeLessThan(BN254_R);
     expect(stages).toEqual([
       "merkle-position-fetch",
       "note-build",
@@ -235,7 +252,6 @@ describe("getDepositFunction", () => {
         depositor: new PublicKey(mint),
         tokenMint: mint,
         amount: 0n,
-        depositIndex: 0n,
         depositorTokenAccount: new PublicKey(mint),
       }),
     ).rejects.toMatchObject({ stage: "parameter" });
@@ -251,9 +267,94 @@ describe("getDepositFunction", () => {
         depositor: new PublicKey(mint),
         tokenMint: mint,
         amount: 1n,
-        depositIndex: 0n,
         depositorTokenAccount: new PublicKey(mint),
       }),
     ).rejects.toBeInstanceOf(DarkPoolError);
+  });
+
+  it("uses a fresh nonce for a fresh deposit and preserves an explicit retry", async () => {
+    const providers = makeProviders({
+      vaultConfigData: fakeMerkleTreeData(0n),
+      forwarderReply: "deposit_sig_abc",
+    });
+    const client = makeClient(providers);
+    const deposit = getDepositFunction({ client });
+    const retry = getDepositRetryFunction({ client });
+    const mint = new Uint8Array(32).fill(7);
+    const base = {
+      depositor: new PublicKey(mint),
+      tokenMint: mint,
+      amount: 12n,
+      depositorTokenAccount: new PublicKey(mint),
+    };
+    let firstNonce: Uint8Array | undefined;
+    const first = await deposit({
+      ...base,
+      onRecoveryNonceGenerated: (nonce) => {
+        firstNonce = nonce;
+      },
+    });
+    const second = await deposit(base);
+    const redriven = await retry({ ...base, recoveryNonce: firstNonce! });
+
+    expect(second.noteCommitment).not.toEqual(first.noteCommitment);
+    expect(redriven.noteCommitment).toEqual(first.noteCommitment);
+    expect(redriven.notePlaintext.innerHash).toBe(
+      first.notePlaintext.innerHash,
+    );
+  });
+
+  it("exposes the nonce before an ambiguous send so the exact note can be redriven", async () => {
+    const firstIxs: TransactionInstruction[] = [];
+    const firstClient = makeClient(
+      makeProviders({
+        vaultConfigData: fakeMerkleTreeData(0n),
+        captureIxs: firstIxs,
+        forwarderError: new Error("confirmation timed out"),
+      }),
+    );
+    const mint = new Uint8Array(32).fill(8);
+    const base = {
+      depositor: new PublicKey(mint),
+      tokenMint: mint,
+      amount: 44n,
+      depositorTokenAccount: new PublicKey(mint),
+    };
+    let nonce: Uint8Array | undefined;
+    await expect(
+      getDepositFunction({ client: firstClient })({
+        ...base,
+        onRecoveryNonceGenerated: (value) => {
+          nonce = value;
+        },
+      }),
+    ).rejects.toThrow(/confirmation timed out/);
+    expect(nonce).toHaveLength(32);
+
+    const retryIxs: TransactionInstruction[] = [];
+    const retryClient = makeClient(
+      makeProviders({
+        vaultConfigData: fakeMerkleTreeData(0n),
+        captureIxs: retryIxs,
+      }),
+    );
+    const retryReceipt = await getDepositRetryFunction({ client: retryClient })(
+      {
+        ...base,
+        recoveryNonce: nonce!,
+      },
+    );
+
+    // The public statement is byte-identical through the recovery nonce.
+    // Proof bytes begin at offset 81 and may differ with a randomized prover.
+    expect(retryIxs[0].data.subarray(0, 81)).toEqual(
+      firstIxs[0].data.subarray(0, 81),
+    );
+    expect(retryReceipt.noteCommitment).toEqual(
+      firstIxs[0].data.subarray(17, 49),
+    );
+    expect(retryIxs[0].keys.map((key) => key.pubkey.toBase58())).toEqual(
+      firstIxs[0].keys.map((key) => key.pubkey.toBase58()),
+    );
   });
 });

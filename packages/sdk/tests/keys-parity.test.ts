@@ -14,14 +14,14 @@ import { existsSync } from "node:fs";
 
 import {
   deriveSpendingKey,
-  deriveMasterViewingKey,
-  deriveRootKey,
   deriveTradingKeyAtOffset,
   deriveBlindingFactor,
   deriveNoteSecret,
+  generateRecoveryNonce,
   darknyxShakeKdfV1,
   bn254ToBE32,
   MASTER_SEED_BYTES,
+  BN254_R,
   __testing,
 } from "../src/keys/key-generators.js";
 
@@ -111,16 +111,6 @@ describe("key derivation parity", () => {
     expect(tsHex).toBe(rustHex);
   });
 
-  it("TS master viewing key matches Rust", () => {
-    if (!helperAvailable) return;
-    const s = fixedSeed();
-    const tsHex = Buffer.from(bn254ToBE32(deriveMasterViewingKey(s))).toString(
-      "hex",
-    );
-    const rustHex = runRustHelper("viewing", [Buffer.from(s).toString("hex")])!;
-    expect(tsHex).toBe(rustHex);
-  });
-
   it("TS trading key (offset 0) matches Rust", () => {
     if (!helperAvailable) return;
     const s = fixedSeed();
@@ -133,14 +123,6 @@ describe("key derivation parity", () => {
     ])!;
     // Rust returns full 32-byte signing-key bytes (seed). TS emits the seed.
     // Both should be 64 hex chars.
-    expect(tsHex).toBe(rustHex);
-  });
-
-  it("TS root key matches Rust", () => {
-    if (!helperAvailable) return;
-    const s = fixedSeed();
-    const tsHex = Buffer.from(deriveRootKey(s).secretKey).toString("hex");
-    const rustHex = runRustHelper("root", [Buffer.from(s).toString("hex")])!;
     expect(tsHex).toBe(rustHex);
   });
 
@@ -177,26 +159,12 @@ describe("key derivation parity", () => {
     expect(tsHex).toBe(rustHex);
   });
 
-  it("spending and viewing keys are independent", () => {
-    const s = fixedSeed();
-    expect(deriveSpendingKey(s)).not.toBe(deriveMasterViewingKey(s));
-  });
-
   it("trading key rotates with offset", () => {
     const s = fixedSeed();
     const k0 = deriveTradingKeyAtOffset(s, 0n);
     const k1 = deriveTradingKeyAtOffset(s, 1n);
     expect(Buffer.from(k0.secretKey).toString("hex")).not.toBe(
       Buffer.from(k1.secretKey).toString("hex"),
-    );
-  });
-
-  it("root key distinct from trading key", () => {
-    const s = fixedSeed();
-    const r = deriveRootKey(s);
-    const t = deriveTradingKeyAtOffset(s, 0n);
-    expect(Buffer.from(r.secretKey).toString("hex")).not.toBe(
-      Buffer.from(t.secretKey).toString("hex"),
     );
   });
 
@@ -214,6 +182,23 @@ describe("key derivation parity", () => {
       const b = deriveBlindingFactor(s, i).toString();
       expect(seen.has(b)).toBe(false);
       seen.add(b);
+    }
+  });
+
+  it("samples unique canonical recovery nonces", () => {
+    const seen = new Set<string>();
+    for (let index = 0; index < 100; index++) {
+      const nonce = generateRecoveryNonce();
+      expect(nonce).toHaveLength(32);
+      const value = [...nonce].reduce(
+        (acc, byte) => (acc << 8n) | BigInt(byte),
+        0n,
+      );
+      expect(value).toBeGreaterThan(0n);
+      expect(value).toBeLessThan(BN254_R);
+      const encoded = Buffer.from(nonce).toString("hex");
+      expect(seen.has(encoded)).toBe(false);
+      seen.add(encoded);
     }
   });
 });

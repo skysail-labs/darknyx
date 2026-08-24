@@ -2,27 +2,8 @@
   "schema_version": 1,
   "protocol": "darknyx",
   "protocol_version": 1,
-  "artifact_set_id": "darknyx-client-groth16-note-use-2026-08-10",
+  "artifact_set_id": "darknyx-client-groth16-phase1-2026-08-25",
   "circuits": {
-    "wallet_create": {
-      "circuit_version": "valid_wallet_create-v3",
-      "public_inputs": 1,
-      "wasm": {
-        "path": "valid_wallet_create/circuit.wasm",
-        "bytes": 2432468,
-        "sha256": "434ee7bcffd8161e118999fc5e88b2ba369993533fc0524fecb75eb4a160fd3f"
-      },
-      "zkey": {
-        "path": "valid_wallet_create/circuit_final.zkey",
-        "bytes": 1511077,
-        "sha256": "64088e70403cb394b0d8c5207a99f7eaa47902dd818eb335607750907439b3ec"
-      },
-      "verification_key": {
-        "path": "valid_wallet_create/verification_key.json",
-        "bytes": 2925,
-        "sha256": "145a3f75078558435c4b7ab209fe0aa7f169b1759db838364242535844d7d048"
-      }
-    },
     "deposit": {
       "circuit_version": "valid_deposit-v1",
       "public_inputs": 5,

@@ -91,11 +91,6 @@ function buildDaemon(
     config: overrides.config ?? config(),
     keystore: new Keystore({
       masterSeed: new Uint8Array(64).fill(7),
-      ownerBlinding: 1n,
-      r0: 2n,
-      r1: 3n,
-      r2: 4n,
-      rootKeyPubkey: new Uint8Array(32).fill(5),
     }),
     store,
     prover: vi.fn() as never,

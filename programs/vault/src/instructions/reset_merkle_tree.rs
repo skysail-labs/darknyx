@@ -13,8 +13,8 @@
 //!   * roots_head     := 0
 //!   * current_root   := empty_root(zero_subtree_roots)
 //!
-//! Wallet registrations, deposit/consume guards, locks, validity markers, and
-//! mint liabilities are NOT wiped; they're separate PDAs. The tree reset only
+//! Deposit/consume guards, locks, validity markers, and mint liabilities are
+//! NOT wiped; they're separate PDAs. The tree reset only
 //! affects the set of accepted inclusion roots going forward. A future
 //! VALID_SPEND whose witness pre-dates the reset simply fails `contains_root`,
 //! which is the correct behaviour.

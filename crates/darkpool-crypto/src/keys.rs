@@ -1,24 +1,11 @@
-//! Four-key hierarchy derivation.
+//! Live client key derivations.
 //!
-//! Reference: Sections 4.2, 20.2, 23.2 of darkpool_protocol_spec_v3_changed.md
-//!
-//! The four keys are:
-//!
-//! 1. **Root / Vault Key**     — Ed25519 (Solana native). Cold wallet.
-//! 2. **Trading Key**          — Ed25519 (Solana native). Hot wallet. Offset-rotatable.
-//! 3. **Shielded Spending Key**— BN254 scalar. Cold / HSM.
-//! 4. **Master Viewing Key**   — BN254 scalar (derived from DarknyxShakeKdfV1). Compliance.
-//!
-//! Derivation contracts (must match the on-chain `create_wallet` verifier):
+//! Derivation contracts shared with the TypeScript SDK:
 //!
 //! ```text
 //! spending_key   = reduce_mod_r( HKDF-SHA256(master_seed, b"darkpool_spend_key_v1", 512) )
-//! viewing_key    = reduce_mod_r( DarknyxShakeKdfV1(master_seed, b"darkpool_viewing_key_v1", 512) )
 //! trading_key(n) = Ed25519::from_seed( HKDF-SHA256(master_seed,
 //!                    b"darkpool_trading_key_v1" || offset_u64_le, 32) )
-//! root_key       = Ed25519::from_seed( HKDF-SHA256(master_seed,
-//!                    b"darkpool_root_key_v1", 32) )
-//!                  [used only when user does not bring their own Solana wallet]
 //! ```
 //!
 //! Blinding factor derivation (versioned Darknyx SHAKE KDF):
@@ -47,9 +34,7 @@ pub const MASTER_SEED_BYTES: usize = 64;
 /// HKDF salt constants for each derived key. Include a `_v1` suffix so we can
 /// migrate in the future without breaking existing wallets.
 const INFO_SPENDING: &[u8] = b"darkpool_spend_key_v1";
-const INFO_VIEWING: &[u8] = b"darkpool_viewing_key_v1";
 const INFO_TRADING: &[u8] = b"darkpool_trading_key_v1";
-const INFO_ROOT: &[u8] = b"darkpool_root_key_v1";
 const INFO_BLINDING: &[u8] = b"note_blinding_v1";
 /// Domain string for the per-note deposit secret. Distinct from every other
 /// `INFO_*` so a note secret can never collide with a key derived for another
@@ -105,34 +90,9 @@ impl Drop for MasterSeed {
     }
 }
 
-/// Convenience: derive all four keys from a master seed in one call.
-pub struct KeyBundle {
-    pub spending_key: Fr,
-    pub viewing_key: Fr,
-    pub trading_key: SigningKey,
-    pub root_key: SigningKey,
-}
-
-impl KeyBundle {
-    pub fn derive(seed: &MasterSeed, trading_offset: u64) -> Result<Self, CryptoError> {
-        Ok(Self {
-            spending_key: derive_spending_key(seed)?,
-            viewing_key: derive_master_viewing_key(seed)?,
-            trading_key: derive_trading_key_at_offset(seed, trading_offset)?,
-            root_key: derive_root_key(seed)?,
-        })
-    }
-}
-
 /// Derive the BN254-scalar Shielded Spending Key.
 pub fn derive_spending_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
     let bytes = hkdf_expand_64(seed.as_bytes(), INFO_SPENDING)?;
-    Ok(fr_from_uniform_bytes(&bytes))
-}
-
-/// Derive the BN254-scalar Master Viewing Key via DarknyxShakeKdfV1.
-pub fn derive_master_viewing_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
-    let bytes = darknyx_shake_kdf_v1(seed.as_bytes(), INFO_VIEWING, &[], 64);
     Ok(fr_from_uniform_bytes(&bytes))
 }
 
@@ -152,17 +112,6 @@ pub fn derive_trading_key_at_offset(
     // Ed25519 accepts any 32-byte secret.
     let secret: SecretKey = okm;
     Ok(SigningKey::from_bytes(&secret))
-}
-
-/// Derive an Ed25519 Root Key (only used when the user does not bring their
-/// own Solana wallet). In institutional flows this is NOT used — the Root Key
-/// is a separate cold Solana wallet.
-pub fn derive_root_key(seed: &MasterSeed) -> Result<SigningKey, CryptoError> {
-    let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
-    let mut okm = [0u8; 32];
-    hk.expand(INFO_ROOT, &mut okm)
-        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
-    Ok(SigningKey::from_bytes(&okm))
 }
 
 /// Derive the blinding factor for the note at a given insertion counter.
@@ -299,14 +248,16 @@ mod tests {
     }
 
     #[test]
-    fn all_key_derivations_deterministic() {
+    fn live_key_derivations_are_deterministic() {
         let s = fixed_seed();
-        let b1 = KeyBundle::derive(&s, 0).unwrap();
-        let b2 = KeyBundle::derive(&s, 0).unwrap();
-        assert_eq!(b1.spending_key, b2.spending_key);
-        assert_eq!(b1.viewing_key, b2.viewing_key);
-        assert_eq!(b1.trading_key.to_bytes(), b2.trading_key.to_bytes());
-        assert_eq!(b1.root_key.to_bytes(), b2.root_key.to_bytes());
+        assert_eq!(
+            derive_spending_key(&s).unwrap(),
+            derive_spending_key(&s).unwrap()
+        );
+        assert_eq!(
+            derive_trading_key_at_offset(&s, 0).unwrap().to_bytes(),
+            derive_trading_key_at_offset(&s, 0).unwrap().to_bytes()
+        );
     }
 
     #[test]
@@ -325,14 +276,6 @@ mod tests {
         // If derivation produced a reduced Fr, it's definitely in field.
         let bytes = sk.into_bigint();
         let _ = bytes; // just exercising the type
-    }
-
-    #[test]
-    fn keys_are_independent() {
-        let s = fixed_seed();
-        let sk = derive_spending_key(&s).unwrap();
-        let vk = derive_master_viewing_key(&s).unwrap();
-        assert_ne!(sk, vk);
     }
 
     #[test]

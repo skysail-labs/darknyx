@@ -25,11 +25,6 @@ function keystore(): Keystore {
   for (let i = 0; i < 64; i++) masterSeed[i] = (i * 13 + 5) & 0xff;
   const id: AccountIdentity = {
     masterSeed,
-    ownerBlinding: 0xabcn,
-    r0: 1n,
-    r1: 2n,
-    r2: 3n,
-    rootKeyPubkey: new Uint8Array(32).fill(4),
   };
   return new Keystore(id);
 }
@@ -47,11 +42,6 @@ function countingKeystore(): CountingKeystore {
   const base = keystore();
   return new CountingKeystore({
     masterSeed: base.masterSeed,
-    ownerBlinding: base.ownerBlinding,
-    r0: 1n,
-    r1: 2n,
-    r2: 3n,
-    rootKeyPubkey: new Uint8Array(32).fill(4),
   });
 }
 

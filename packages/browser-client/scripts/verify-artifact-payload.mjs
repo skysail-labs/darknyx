@@ -6,14 +6,15 @@ import { validateArtifactPayload } from "./artifact-payload-schema.mjs";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(packageRoot, "../..");
-const payload = validateArtifactPayload(JSON.parse(
-  await readFile(
-    resolve(packageRoot, "artifacts/client-artifacts.v1.payload.json"),
-    "utf8",
+const payload = validateArtifactPayload(
+  JSON.parse(
+    await readFile(
+      resolve(packageRoot, "artifacts/client-artifacts.v1.payload.json"),
+      "utf8",
+    ),
   ),
-));
+);
 const builds = {
-  wallet_create: "valid_wallet_create",
   deposit: "valid_deposit",
   input: "valid_input",
   spend: "valid_spend",
@@ -41,5 +42,5 @@ for (const [circuit, build] of Object.entries(builds)) {
   }
 }
 process.stdout.write(
-  `client artifact payload ${payload.artifact_set_id}: all six circuits verified\n`,
+  `client artifact payload ${payload.artifact_set_id}: all five circuits verified\n`,
 );
