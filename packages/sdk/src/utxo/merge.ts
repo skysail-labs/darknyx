@@ -21,6 +21,11 @@ import { buildMergeInstruction } from "../idl/vault-client.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { bn254ToBE32 } from "../keys/key-generators.js";
 import { deriveNoteUseTag } from "./note-use.js";
+import {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+  type NoteUseTag,
+} from "./note-identity.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
 export { deriveMergeOutputInnerHash } from "./merge-inner.js";
@@ -133,7 +138,7 @@ export function getMergeFunction({
     // Both are zero for a dummy slot: the circuit masks the tag by isActive,
     // so `inputUseTags[i] === 0` for a pad, matching the zero here.
     const inputCommitmentBytes: Uint8Array[] = [];
-    const inputUseTagBytes: Uint8Array[] = [];
+    const inputUseTagBytes: NoteUseTag[] = [];
     const zero32 = new Uint8Array(32);
 
     for (let i = 0; i < k; i++) {
@@ -146,7 +151,10 @@ export function getMergeFunction({
         merkleIndices.push(proofs[i].pathIndices);
         inputCommitmentBytes.push(inp.commitment);
         inputUseTagBytes.push(
-          await deriveNoteUseTag(inp.commitment, bn254ToBE32(inp.innerHash)),
+          await deriveNoteUseTag(
+            noteCommitmentFromBytes(inp.commitment),
+            bn254ToBE32(inp.innerHash),
+          ),
         );
       } else {
         isActive.push(0);
@@ -155,7 +163,7 @@ export function getMergeFunction({
         merklePath.push(Array.from({ length: 20 }, () => 0n));
         merkleIndices.push(Array.from({ length: 20 }, () => 0));
         inputCommitmentBytes.push(zero32);
-        inputUseTagBytes.push(zero32);
+        inputUseTagBytes.push(noteUseTagFromBytes(zero32));
       }
     }
 

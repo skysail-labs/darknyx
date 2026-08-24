@@ -19,6 +19,7 @@ import {
   parseNoteLock,
 } from "./idl/vault-client.js";
 import { deriveNoteUseTag } from "./utxo/note-use.js";
+import { noteCommitmentFromBytes } from "./utxo/note-identity.js";
 
 export interface DarkPoolClientConfig {
   programId: PublicKey;
@@ -128,7 +129,10 @@ export class DarkPoolClient {
     innerHash: Uint8Array,
   ): Promise<NoteStatusInfo> {
     try {
-      const noteUseTag = await deriveNoteUseTag(noteCommitment, innerHash);
+      const noteUseTag = await deriveNoteUseTag(
+        noteCommitmentFromBytes(noteCommitment),
+        innerHash,
+      );
       const [consumed] = await consumedNotePda(this.programId, noteUseTag);
       const [locked] = await noteLockPda(this.programId, noteUseTag);
       const consumedInfo =

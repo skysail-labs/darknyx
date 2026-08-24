@@ -17,6 +17,7 @@ import {
 } from "../src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
+import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
 import {
   recoverChangeFromChain,
   recoverFillFromChain,
@@ -118,7 +119,9 @@ async function makeFill(opts: {
     slot: 500,
     inputNoteUseTag: hex(
       await deriveNoteUseTag(
-        Uint8Array.from(Buffer.from(opts.input.commitment, "hex")),
+        noteCommitmentFromBytes(
+          Uint8Array.from(Buffer.from(opts.input.commitment, "hex")),
+        ),
         bn254ToBE32(opts.input.innerHash),
       ),
     ),

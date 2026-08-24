@@ -74,6 +74,6 @@ pub use match_output::{
 };
 pub use merge::{merge_output_inner_hash, DOMAIN_MERGE_INNER};
 pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES};
-pub use note_use::{note_use_tag, DOMAIN_NOTE_USE};
+pub use note_use::{note_use_tag, NoteUseTag, DOMAIN_NOTE_USE};
 pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};

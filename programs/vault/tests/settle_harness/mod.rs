@@ -46,6 +46,7 @@ pub const E_INVALID_PROOF: u32 = 6000;
 pub const E_NOTE_ALREADY_LOCKED: u32 = 6005;
 pub const E_NOTE_ALREADY_CONSUMED: u32 = 6006;
 pub const E_LOCK_NOT_EXPIRED: u32 = 6009;
+pub const E_INVALID_ACCOUNT_LAYOUT: u32 = 6048;
 
 pub fn repo_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -476,24 +477,50 @@ pub fn build_ed25519_verify_ix(
 /// it via `close = tee_authority`.
 pub fn seed_note_lock(
     h: &mut Harness,
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
     order_id: &[u8; 16],
     expiry_slot: u64,
-    // Amount-privacy: NoteLock.amount was removed. The param is kept so
-    // the many call sites stay untouched, but it's no longer written anywhere.
+    // The amount is part of the match fixture but deliberately absent from the
+    // privacy-preserving lock account.
     _amount: u64,
 ) {
     use solana_account::Account as SolAccount;
-    let (pda, bump) = note_lock_pda(&h.vault_id, note_commitment);
-    // Layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
-    //          + 32 locked_by + 1 bump + 7 pad = 136 bytes (was 144 with the
-    // now-removed 8-byte amount). token_mint sits between note_commitment and
-    // order_id (matches `vault::state::NoteLock` exactly; keep in sync if
-    // NoteLock ever moves fields). Uses `h.test_mint` so the marker / settle ix
-    // compute a consistent binding hash from the same mint.
+    let (pda, bump) = note_lock_pda(&h.vault_id, note_use_tag);
+    // Lean layout: 8 disc + 32 token_mint + 16 order_id + 8 expiry + 1 bump
+    // + 7 pad = 72 bytes. The use tag is already the PDA seed and is not
+    // duplicated in account data. Uses `h.test_mint` so the marker / settle ix
+    // computes a consistent binding hash from the same mint.
+    let mut data = vec![0u8; 72];
+    data[0..8].copy_from_slice(&anchor_acct_disc("NoteLock"));
+    data[8..40].copy_from_slice(&h.test_mint.to_bytes());
+    data[40..56].copy_from_slice(order_id);
+    data[56..64].copy_from_slice(&expiry_slot.to_le_bytes());
+    data[64] = bump;
+    let acct = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Seed the 136-byte compatibility layout. Current handlers must never
+/// reinterpret it as the lean layout: raw spend checks fail closed, and typed
+/// release/settle paths reject it until the mandatory development reset.
+pub fn seed_legacy_note_lock(
+    h: &mut Harness,
+    note_use_tag: &[u8; 32],
+    order_id: &[u8; 16],
+    expiry_slot: u64,
+) {
+    use solana_account::Account as SolAccount;
+
+    let (pda, bump) = note_lock_pda(&h.vault_id, note_use_tag);
     let mut data = vec![0u8; 136];
     data[0..8].copy_from_slice(&anchor_acct_disc("NoteLock"));
-    data[8..40].copy_from_slice(note_commitment);
+    data[8..40].copy_from_slice(note_use_tag);
     data[40..72].copy_from_slice(&h.test_mint.to_bytes());
     data[72..88].copy_from_slice(order_id);
     data[88..96].copy_from_slice(&expiry_slot.to_le_bytes());
@@ -513,11 +540,11 @@ pub fn seed_note_lock(
 /// the on-chain handler's `lock_a_mint = lock_a.token_mint` access so the
 /// VALID_CREATE binding-hash recomputation in `build_settle_ix` sees the
 /// same bytes the program will.
-pub fn read_note_lock_mint(h: &Harness, note_commitment: &[u8; 32]) -> Pubkey {
-    let (pda, _) = note_lock_pda(&h.vault_id, note_commitment);
+pub fn read_note_lock_mint(h: &Harness, note_use_tag: &[u8; 32]) -> Pubkey {
+    let (pda, _) = note_lock_pda(&h.vault_id, note_use_tag);
     let acct = h.svm.get_account(&pda).expect("note_lock not seeded");
     let mut mint = [0u8; 32];
-    mint.copy_from_slice(&acct.data[40..72]);
+    mint.copy_from_slice(&acct.data[8..40]);
     Pubkey::from(mint)
 }
 
@@ -588,19 +615,16 @@ pub fn set_vault_fee_config(h: &mut Harness, owner_commitment: [u8; 32], fee_rat
     h.svm.set_account(pda, acct).unwrap();
 }
 
-/// Directly seed a `ConsumedNoteEntry` PDA for `note_commitment` (bypasses the
+/// Directly seed a `ConsumedNoteEntry` PDA for `note_use_tag` (bypasses the
 /// real settle/withdraw path). Mimics a note that has already been consumed so
 /// tests can assert the U-02 `lock_note` re-lock guard. Layout mirrors
-/// `vault::state::ConsumedNoteEntry`: 8 disc + 32 commitment + 16 match_id
-/// + 8 consumed_slot + 1 bump + 7 pad = 72 bytes.
-pub fn seed_consumed_note(h: &mut Harness, note_commitment: &[u8; 32]) {
+/// `vault::state::ConsumedNoteEntry`: discriminator only. The use tag is the
+/// PDA seed, and existence is the complete consume-once state.
+pub fn seed_consumed_note(h: &mut Harness, note_use_tag: &[u8; 32]) {
     use solana_account::Account as SolAccount;
-    let (pda, bump) = consumed_note_pda(&h.vault_id, note_commitment);
-    let mut data = vec![0u8; 72];
+    let (pda, _) = consumed_note_pda(&h.vault_id, note_use_tag);
+    let mut data = vec![0u8; 8];
     data[0..8].copy_from_slice(&anchor_acct_disc("ConsumedNoteEntry"));
-    data[8..40].copy_from_slice(note_commitment);
-    // match_id (16) + consumed_slot (8) left zero — the sentinel a withdraw uses.
-    data[64] = bump;
     let acct = SolAccount {
         lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
         data,
@@ -611,18 +635,18 @@ pub fn seed_consumed_note(h: &mut Harness, note_commitment: &[u8; 32]) {
     h.svm.set_account(pda, acct).unwrap();
 }
 
-/// True if the `consumed_note` PDA for `note_commitment` has been initialised.
-pub fn consumed_note_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
-    let (pda, _) = consumed_note_pda(&h.vault_id, note_commitment);
+/// True if the `consumed_note` PDA for `note_use_tag` has been initialised.
+pub fn consumed_note_exists(h: &Harness, note_use_tag: &[u8; 32]) -> bool {
+    let (pda, _) = consumed_note_pda(&h.vault_id, note_use_tag);
     h.svm
         .get_account(&pda)
         .map(|a| !a.data.is_empty() && a.lamports > 0)
         .unwrap_or(false)
 }
 
-/// True if a `note_lock` PDA exists for the commitment (unclosed lock).
-pub fn note_lock_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
-    let (pda, _) = note_lock_pda(&h.vault_id, note_commitment);
+/// True if a `note_lock` PDA exists for the use tag (unclosed lock).
+pub fn note_lock_exists(h: &Harness, note_use_tag: &[u8; 32]) -> bool {
+    let (pda, _) = note_lock_pda(&h.vault_id, note_use_tag);
     h.svm
         .get_account(&pda)
         .map(|a| !a.data.is_empty() && a.lamports > 0)
@@ -1300,6 +1324,7 @@ pub fn deposit_note(
         &inner_hash_bytes,
     )
     .expect("note fields are Fr-safe (Poseidon outputs)");
+    let commitment_bytes = commitment.into_bytes();
     // nullifier = Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)
     let nullifier = fr_to_be_bytes(
         &poseidon_hash(&[Fr::from(3u64), secret.spending_key, secret.inner_hash]).unwrap(),
@@ -1318,13 +1343,13 @@ pub fn deposit_note(
     let (vault_token, _) = vault_token_pda(h, mint);
     let (outstanding, _) = outstanding_mint_pda(h, mint);
 
-    let proof = build_valid_deposit_proof(&secret, mint, amount, &commitment);
+    let proof = build_valid_deposit_proof(&secret, mint, amount, &commitment_bytes);
 
     // deposit(tree_id, amount, note_commitment, recovery_nonce, proof)
     let mut data = anchor_disc("deposit").to_vec();
     data.push(tree_id);
     data.extend_from_slice(&amount.to_le_bytes());
-    data.extend_from_slice(&commitment);
+    data.extend_from_slice(&commitment_bytes);
     data.extend_from_slice(&fr_to_be_bytes(&secret.recovery_nonce));
     // v2: types derive wincode SchemaWrite, not AnchorSerialize.
     data.extend_from_slice(
@@ -1341,7 +1366,7 @@ pub fn deposit_note(
             AccountMeta::new(depositor_ta, false),
             AccountMeta::new(vault_token, false),
             AccountMeta::new(outstanding, false),
-            AccountMeta::new(deposited_note_pda(&h.vault_id, &commitment).0, false),
+            AccountMeta::new(deposited_note_pda(&h.vault_id, &commitment_bytes).0, false),
             AccountMeta::new_readonly(spl_token_id(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(rent_sysvar_id(), false),
@@ -1356,7 +1381,7 @@ pub fn deposit_note(
     h.svm.send_transaction(tx).expect("deposit failed");
 
     // Single-leaf inclusion witness (index 0) → root matches the on-chain append.
-    let (siblings, path_indices, root) = merkle_witness(&[commitment], 0);
+    let (siblings, path_indices, root) = merkle_witness(&[commitment_bytes], 0);
     assert_eq!(
         root,
         tree_current_root(h, tree_id),
@@ -1367,10 +1392,11 @@ pub fn deposit_note(
         &commitment,
         &darkpool_crypto::fr_to_be_bytes(&secret.inner_hash),
     )
-    .expect("note-use tag is field-safe");
+    .expect("note-use tag is field-safe")
+    .into_bytes();
 
     DepositedNote {
-        commitment,
+        commitment: commitment_bytes,
         use_tag,
         nullifier,
         amount,

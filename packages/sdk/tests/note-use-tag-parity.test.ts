@@ -17,6 +17,11 @@ import { describe, expect, it } from "vitest";
 
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
+import {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+  type NoteCommitment,
+} from "../src/utxo/note-identity.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -28,24 +33,26 @@ const scalar = (value: number): Uint8Array => {
   return out;
 };
 const hex = (value: Uint8Array): string => Buffer.from(value).toString("hex");
+const commitment = (value: number): NoteCommitment =>
+  noteCommitmentFromBytes(scalar(value));
 
 describe("note-use tag", () => {
   it("is deterministic and input separated", async () => {
-    const first = await deriveNoteUseTag(scalar(7), scalar(9));
-    expect(await deriveNoteUseTag(scalar(7), scalar(9))).toEqual(first);
-    expect(await deriveNoteUseTag(scalar(7), scalar(10))).not.toEqual(first);
-    expect(await deriveNoteUseTag(scalar(8), scalar(9))).not.toEqual(first);
+    const first = await deriveNoteUseTag(commitment(7), scalar(9));
+    expect(await deriveNoteUseTag(commitment(7), scalar(9))).toEqual(first);
+    expect(await deriveNoteUseTag(commitment(7), scalar(10))).not.toEqual(first);
+    expect(await deriveNoteUseTag(commitment(8), scalar(9))).not.toEqual(first);
   });
 
   it("does not treat its two inputs as interchangeable", async () => {
     // A tag that ignored argument order would collide across unrelated notes.
-    expect(await deriveNoteUseTag(scalar(7), scalar(9))).not.toEqual(
-      await deriveNoteUseTag(scalar(9), scalar(7)),
+    expect(await deriveNoteUseTag(commitment(7), scalar(9))).not.toEqual(
+      await deriveNoteUseTag(commitment(9), scalar(7)),
     );
   });
 
   it.skipIf(!existsSync(rustHelper))("matches Rust byte-for-byte", async () => {
-    const commitment = scalar(7);
+    const commitment = noteCommitmentFromBytes(scalar(7));
     const inner = scalar(9);
     const rust = spawnSync(rustHelper, [hex(commitment), hex(inner)], {
       encoding: "utf8",
@@ -76,7 +83,7 @@ describe("note-use tag", () => {
       a: bigint,
       o: bigint,
       i: bigint,
-    ): Promise<Uint8Array> =>
+    ): ReturnType<typeof noteCommitmentV2> =>
       noteCommitmentV2({
         tokenMint: m,
         amount: a,
@@ -122,18 +129,22 @@ describe("note-use tag", () => {
    * the private input is load-bearing.
    */
   it("is not determined by the public commitment alone", async () => {
-    const c = scalar(0x55);
+    const c = commitment(0x55);
     expect(await deriveNoteUseTag(c, scalar(1))).not.toEqual(
       await deriveNoteUseTag(c, scalar(2)),
     );
   });
 
-  it("rejects malformed byte inputs", () => {
-    expect(() => deriveNoteUseTag(new Uint8Array(31), scalar(1))).toThrow(
-      /noteCommitment/,
+  it("rejects malformed or non-canonical identity bytes", async () => {
+    expect(() => noteCommitmentFromBytes(new Uint8Array(31))).toThrow(
+      /32 bytes/,
     );
-    expect(() => deriveNoteUseTag(scalar(1), new Uint8Array(33))).toThrow(
-      /innerHash/,
+    expect(() => noteCommitmentFromBytes(new Uint8Array(32).fill(0xff))).toThrow(
+      /canonical BN254/,
     );
+    expect(() => noteUseTagFromBytes(new Uint8Array(31))).toThrow(/32 bytes/);
+    await expect(
+      deriveNoteUseTag(commitment(1), new Uint8Array(33)),
+    ).rejects.toThrow(/innerHash/);
   });
 });

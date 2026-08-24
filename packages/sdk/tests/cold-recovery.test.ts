@@ -30,6 +30,7 @@ import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { deriveMergeOutputInnerHash } from "../src/utxo/merge.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
+import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
 import {
   exactFillPayload,
   serializePayload,
@@ -191,7 +192,7 @@ describe("recoverNotesFromChain", () => {
             depositorTokenAccount: PAYER,
             tokenProgramId: PROGRAM_ID,
             amount,
-            noteCommitment: commitment,
+            noteCommitment: noteCommitmentFromBytes(commitment),
             recoveryNonce: bn254ToBE32(recoveryNonce),
             proof: {
               piA: bytes(64, 1),

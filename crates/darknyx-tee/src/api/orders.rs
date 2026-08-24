@@ -586,8 +586,11 @@ async fn prepare_order(
     // re-derives tags from each opening it resolves, and the `OpeningStore`
     // stays commitment-keyed because it never leaves the enclave. Storing a
     // second copy of a derived value is how the two drift.
-    let note_use_tag = darkpool_crypto::note_use_tag(&note_commitment, &note_inner_hash)
-        .map_err(|e| ApiError::bad_opening(format!("note-use tag not field-safe: {e}")))?;
+    let typed_commitment = darkpool_crypto::NoteCommitment::from_bytes(note_commitment)
+        .map_err(|e| ApiError::bad_opening(format!("note commitment not field-safe: {e}")))?;
+    let note_use_tag = darkpool_crypto::note_use_tag(&typed_commitment, &note_inner_hash)
+        .map_err(|e| ApiError::bad_opening(format!("note-use tag not field-safe: {e}")))?
+        .into_bytes();
 
     // 4d. Verify the RELAYED VALID_INPUT proof (audit 2026-07-25, S-02).
     //

@@ -22,6 +22,7 @@ import {
   noteLockPda,
   parseNoteLock,
 } from "../src/idl/vault-client.js";
+import { noteUseTagFromBytes } from "../src/utxo/note-identity.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -31,15 +32,15 @@ const RENT_RECEIVER = new PublicKey(
   "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
 );
 
-function commitment(fill: number): Uint8Array {
+function useTag(fill: number) {
   const v = new Uint8Array(32).fill(fill);
   v[0] = 0; // Fr-safe, matching how real commitments look
-  return v;
+  return noteUseTagFromBytes(v);
 }
 
 describe("buildReleaseLockInstruction", () => {
   it("emits disc(8) || note_commitment(32) with no other args", async () => {
-    const noteUseTag = commitment(0x42);
+    const noteUseTag = useTag(0x42);
     const ix = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
@@ -55,7 +56,7 @@ describe("buildReleaseLockInstruction", () => {
   });
 
   it("passes exactly [rent_receiver(signer,mut), note_lock(mut)]", async () => {
-    const noteUseTag = commitment(0x07);
+    const noteUseTag = useTag(0x07);
     const ix = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
@@ -80,12 +81,12 @@ describe("buildReleaseLockInstruction", () => {
     const a = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteUseTag: commitment(1),
+      noteUseTag: useTag(1),
     });
     const b = await buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteUseTag: commitment(2),
+      noteUseTag: useTag(2),
     });
     expect(a.keys[1].pubkey.equals(b.keys[1].pubkey)).toBe(false);
   });
@@ -94,13 +95,11 @@ describe("buildReleaseLockInstruction", () => {
 describe("parseNoteLock", () => {
   /** Build a NoteLock account buffer in the on-chain layout. */
   function encodeNoteLock(expirySlot: bigint): Uint8Array {
-    const LEN = 8 + 32 + 32 + 16 + 8 + 32 + 1 + 7;
+    const LEN = 8 + 32 + 16 + 8 + 1 + 7;
     const buf = new Uint8Array(LEN);
-    buf.set(commitment(0xaa), 8); // note_commitment
-    buf.set(new Uint8Array(32).fill(0xbb), 40); // token_mint
-    buf.set(new Uint8Array(16).fill(0xcc), 72); // order_id
-    new DataView(buf.buffer).setBigUint64(88, expirySlot, true);
-    buf.set(new Uint8Array(32).fill(0xdd), 96); // locked_by
+    buf.set(new Uint8Array(32).fill(0xbb), 8); // token_mint
+    buf.set(new Uint8Array(16).fill(0xcc), 40); // order_id
+    new DataView(buf.buffer).setBigUint64(56, expirySlot, true);
     return buf;
   }
 
@@ -108,15 +107,15 @@ describe("parseNoteLock", () => {
     const parsed = parseNoteLock(encodeNoteLock(123_456_789n));
     expect(parsed).not.toBeNull();
     expect(parsed!.expirySlot).toBe(123_456_789n);
-    expect(parsed!.noteUseTag).toEqual(commitment(0xaa));
     expect(parsed!.orderId).toEqual(new Uint8Array(16).fill(0xcc));
   });
 
   it("fails closed on a short buffer instead of misreading an offset", () => {
     // Reading a truncated / unexpected account must not yield a bogus expiry
     // that a caller could act on.
-    expect(parseNoteLock(new Uint8Array(87))).toBeNull();
+    expect(parseNoteLock(new Uint8Array(71))).toBeNull();
     expect(parseNoteLock(new Uint8Array(0))).toBeNull();
+    expect(parseNoteLock(new Uint8Array(136))).toBeNull();
   });
 
   it("round-trips a zero expiry without treating it as absent", () => {

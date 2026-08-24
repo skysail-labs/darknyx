@@ -138,4 +138,6 @@ pub enum VaultError {
     EmptyMerge,
     #[msg("Merge inputs must be pairwise distinct")]
     DuplicateMergeInput,
+    #[msg("Account uses a retired or otherwise invalid data layout")]
+    InvalidAccountLayout,
 }

@@ -138,6 +138,18 @@ fn commit(
     inner: &[u8; 32],
 ) -> Result<[u8; 32], AssembleError> {
     commitment_from_fields_v2(mint, amount, owner, inner)
+        .map(|commitment| commitment.into_bytes())
+        .map_err(|e| AssembleError::Crypto(e.to_string()))
+}
+
+/// Cross the raw witness/wire boundary explicitly before deriving a use tag.
+/// Keeping this conversion named prevents a commitment and a tag from being
+/// silently interchanged merely because both occupy 32 bytes on the wire.
+fn use_tag(commitment: &[u8; 32], inner: &[u8; 32]) -> Result<[u8; 32], AssembleError> {
+    let commitment = darkpool_crypto::NoteCommitment::from_bytes(*commitment)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    note_use_tag(&commitment, inner)
+        .map(|tag| tag.into_bytes())
         .map_err(|e| AssembleError::Crypto(e.to_string()))
 }
 
@@ -332,22 +344,20 @@ pub fn assemble_match(
     // pair the enclave already holds, so the enclave needs no new input — and
     // the same derivation runs in-circuit, so a mismatch fails the leaf binding
     // rather than settling something the proof did not authorise.
-    let note_a_use_tag = note_use_tag(&m.note_buyer, &inp.buyer_opening.inner_hash)
-        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
-    let note_b_use_tag = note_use_tag(&m.note_seller, &inp.seller_opening.inner_hash)
-        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let note_a_use_tag = use_tag(&m.note_buyer, &inp.buyer_opening.inner_hash)?;
+    let note_b_use_tag = use_tag(&m.note_seller, &inp.seller_opening.inner_hash)?;
     // Change-note tags, masked to zero exactly like their commitments: a side
     // with no change has no note, so it must publish no tag — otherwise the
     // settle would derive a relock PDA for a note that does not exist.
     let note_e_use_tag = if note_e == ZERO32 {
         ZERO32
     } else {
-        note_use_tag(&note_e, &e_inner).map_err(|e| AssembleError::Crypto(e.to_string()))?
+        use_tag(&note_e, &e_inner)?
     };
     let note_f_use_tag = if note_f == ZERO32 {
         ZERO32
     } else {
-        note_use_tag(&note_f, &f_inner).map_err(|e| AssembleError::Crypto(e.to_string()))?
+        use_tag(&note_f, &f_inner)?
     };
 
     let payload = MatchResultPayload {
@@ -472,10 +482,8 @@ pub fn assemble_batch(
         // (commitment, inner) — the same derivation the payload and the circuit
         // use. Passing the commitment here would lock at an address the settle
         // then fails to find.
-        let buyer_tag = note_use_tag(&m.note_buyer, &buyer.opening.inner_hash)
-            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
-        let seller_tag = note_use_tag(&m.note_seller, &seller.opening.inner_hash)
-            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+        let buyer_tag = use_tag(&m.note_buyer, &buyer.opening.inner_hash)?;
+        let seller_tag = use_tag(&m.note_seller, &seller.opening.inner_hash)?;
         let buyer_lock = lock_inputs(buyer_tag, &buyer);
         let seller_lock = lock_inputs(seller_tag, &seller);
 
@@ -727,8 +735,9 @@ mod tests {
 
         // note_c: buyer receives BASE, owner = buyer's note owner,
         let ci = match_output_inner_hash(&buyer.inner_hash, TRADE_ROLE_BUYER).unwrap();
-        let expected_c =
-            commitment_from_fields_v2(&base_mint(), 10, &buyer.owner_commitment, &ci).unwrap();
+        let expected_c = commitment_from_fields_v2(&base_mint(), 10, &buyer.owner_commitment, &ci)
+            .unwrap()
+            .into_bytes();
         assert_eq!(w.note_c_commitment, expected_c);
         assert_eq!(p.note_c_commitment, expected_c);
         assert_eq!(w.c_inner, ci);
@@ -736,7 +745,9 @@ mod tests {
         // note_d: seller receives QUOTE, owner = seller's note owner.
         let di = match_output_inner_hash(&seller.inner_hash, TRADE_ROLE_SELLER).unwrap();
         let expected_d =
-            commitment_from_fields_v2(&quote_mint(), 1000, &seller.owner_commitment, &di).unwrap();
+            commitment_from_fields_v2(&quote_mint(), 1000, &seller.owner_commitment, &di)
+                .unwrap()
+                .into_bytes();
         assert_eq!(w.note_d_commitment, expected_d);
     }
 
@@ -749,7 +760,9 @@ mod tests {
 
         let ei = match_output_inner_hash(&buyer.inner_hash, CHANGE_ROLE_BUYER).unwrap();
         let expected_e =
-            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &ei).unwrap();
+            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &ei)
+                .unwrap()
+                .into_bytes();
         assert_eq!(w.note_e_commitment, expected_e);
         assert_eq!(w.e_inner, ei);
         assert_eq!(w.buyer_change_amt, 150);
@@ -784,7 +797,7 @@ mod tests {
         // And the value that must NOT appear: had the mask been dropped, this
         // is what would have been published.
         assert_ne!(
-            note_use_tag(&ZERO32, &ZERO32).unwrap(),
+            use_tag(&ZERO32, &ZERO32).unwrap(),
             ZERO32,
             "the unmasked derivation is non-zero, which is why the mask matters"
         );
@@ -800,7 +813,7 @@ mod tests {
 
         assert_eq!(
             p.note_e_use_tag,
-            note_use_tag(&p.note_e_commitment, &w.e_inner).unwrap(),
+            use_tag(&p.note_e_commitment, &w.e_inner).unwrap(),
         );
         assert_ne!(p.note_e_use_tag, ZERO32);
         // Distinct from the commitment it is derived from — otherwise the whole
@@ -831,7 +844,7 @@ mod tests {
             "the attack keeps the inner and moves only the amount"
         );
 
-        let forged = note_use_tag(&inflated.commitment().unwrap(), &inflated.inner_hash).unwrap();
+        let forged = use_tag(&inflated.commitment().unwrap(), &inflated.inner_hash).unwrap();
         assert_ne!(
             forged, honest.note_a_use_tag,
             "an inflated amount must NOT reproduce the locked note's handle"
@@ -968,7 +981,8 @@ mod tests {
 
         let expected_e =
             commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &derived)
-                .unwrap();
+                .unwrap()
+                .into_bytes();
         assert_eq!(w.note_e_commitment, expected_e);
         assert_eq!(w.e_inner, derived);
     }
@@ -1145,8 +1159,8 @@ mod tests {
         // TAG, not the commitment — asserting the commitment here would pass
         // against a build that locked at the wrong address, which is the whole
         // failure mode the tag migration has to avoid.
-        let expect_buyer_tag = note_use_tag(&m.note_buyer, &buyer_inner).unwrap();
-        let expect_seller_tag = note_use_tag(&m.note_seller, &seller_inner).unwrap();
+        let expect_buyer_tag = use_tag(&m.note_buyer, &buyer_inner).unwrap();
+        let expect_seller_tag = use_tag(&m.note_seller, &seller_inner).unwrap();
         assert_ne!(
             expect_buyer_tag, m.note_buyer,
             "the tag must differ from the commitment, or this test proves nothing"
@@ -1174,9 +1188,13 @@ mod tests {
         let base_inner = match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE).unwrap();
         let quote_inner = match_fee_inner_hash(&m.note_buyer, FEE_ROLE_QUOTE).unwrap();
         let base_fee_commitment =
-            commitment_from_fields_v2(&base_mint(), 3, &protocol_owner, &base_inner).unwrap();
+            commitment_from_fields_v2(&base_mint(), 3, &protocol_owner, &base_inner)
+                .unwrap()
+                .into_bytes();
         let quote_fee_commitment =
-            commitment_from_fields_v2(&quote_mint(), 300, &protocol_owner, &quote_inner).unwrap();
+            commitment_from_fields_v2(&quote_mint(), 300, &protocol_owner, &quote_inner)
+                .unwrap()
+                .into_bytes();
 
         let mut output = RunBatchOutput::empty(recorded, 100, 0);
         output.matches = vec![m];

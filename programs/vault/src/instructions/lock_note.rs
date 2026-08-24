@@ -2,7 +2,6 @@ use crate::errors::VaultError;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_input::*, Groth16Proof};
 use anchor_lang::prelude::*;
-use core::mem::size_of;
 
 /// Split a 32-byte Solana pubkey into [lo_u128_be32, hi_u128_be32] — each
 /// encoded as 32 BE bytes (left-padded). Matches `darkpool-crypto`'s
@@ -57,7 +56,7 @@ pub struct LockNote {
     #[account(
         init,
         payer = tee_authority,
-        space = 8 + size_of::<NoteLock>(),
+        space = NoteLock::SPACE,
         seeds = [NoteLock::SEED, note_use_tag.as_ref()],
         bump,
     )]
@@ -121,9 +120,9 @@ pub fn lock_note_handler(
     );
 
     require!(expiry_slot > clock.slot, VaultError::InvalidExpirySlot);
-    // v2 hardening: cap how far in the future the lock can sit. The vault's
-    // `withdraw` rejects while a NoteLock exists, even an expired one, so the
-    // lock window is also the censorship window. See `MAX_LOCK_TTL_SLOTS`.
+    // v2 hardening: cap how far in the future the lock can sit. Withdraw and
+    // merge reject while a NoteLock is live, so this bounds the censorship
+    // window even if no sweeper closes it promptly. See `MAX_LOCK_TTL_SLOTS`.
     require!(
         expiry_slot <= clock.slot.saturating_add(MAX_LOCK_TTL_SLOTS),
         VaultError::InvalidExpirySlot
@@ -148,11 +147,9 @@ pub fn lock_note_handler(
     // Proof verified — every field of the lock is now cryptographically bound
     // to a real Merkle leaf owned by the proof generator. Write the lock.
     let lock = &mut ctx.accounts.note_lock;
-    lock.note_use_tag = note_use_tag;
     lock.token_mint = token_mint;
     lock.order_id = order_id;
     lock.expiry_slot = (expiry_slot).into();
-    lock.locked_by = *ctx.accounts.tee_authority.address();
     lock.bump = ctx.bumps.note_lock;
     lock._padding = [0u8; 7];
 

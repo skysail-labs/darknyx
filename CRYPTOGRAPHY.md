@@ -1332,18 +1332,17 @@ Handler steps (v3):
    privately recomputes the Merkle-leaf commitment, enforces
    `amount ∈ [1, 2^64-1]`, and derives `note_use_tag` from that commitment and
    the private inner hash.
-6. Write the lock:
+6. Write the lock. The use tag is already bound by the PDA seed and is not
+   duplicated in account data:
    ```rust
-   lock.note_use_tag = note_use_tag;
-   lock.token_mint      = token_mint;          // v2 NEW
-   lock.order_id        = order_id;
-   lock.expiry_slot     = expiry_slot;
-   lock.locked_by       = tee_authority.key();
-   lock.bump            = ctx.bumps.note_lock;
+   lock.token_mint  = token_mint;
+   lock.order_id    = order_id;
+   lock.expiry_slot = expiry_slot;
+   lock.bump        = ctx.bumps.note_lock;
    ```
 
 The `init` constraint on the PDA prevents double-locking the same
-commitment — the second `lock_note` for note_a would collide at account
+note-use tag — the second `lock_note` for note_a would collide at account
 allocation. This is layer-1 of the multi-layered replay protection (§11).
 
 **Cryptographic primitives**:

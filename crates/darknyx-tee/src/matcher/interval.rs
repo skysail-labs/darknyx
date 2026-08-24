@@ -242,6 +242,7 @@ fn prepare_derived_continuations(state: &MatcherState, output: &mut RunBatchOutp
                             &owner,
                             &inner,
                         ) {
+                            let note_e = note_e.into_bytes();
                             m.note_e_commitment = note_e;
                             if relock_oid != RELOCK_ORDER_ID_NONE {
                                 update_edits.push((relock_oid, Some(note_e)));
@@ -280,6 +281,7 @@ fn prepare_derived_continuations(state: &MatcherState, output: &mut RunBatchOutp
                             &owner,
                             &inner,
                         ) {
+                            let note_f = note_f.into_bytes();
                             m.note_f_commitment = note_f;
                             if relock_oid != RELOCK_ORDER_ID_NONE {
                                 update_edits.push((relock_oid, Some(note_f)));

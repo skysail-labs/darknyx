@@ -169,9 +169,12 @@ fn prove_merge(
             amount_s.push(amounts[i].to_string());
             inner_s.push(fr_to_dec(&inners[i]));
             input_commitments.push(commitments[i]);
+            let typed_commitment =
+                darkpool_crypto::NoteCommitment::from_bytes(commitments[i]).unwrap();
             input_use_tags.push(
-                darkpool_crypto::note_use_tag(&commitments[i], &fr_to_be_bytes(&inners[i]))
-                    .unwrap(),
+                darkpool_crypto::note_use_tag(&typed_commitment, &fr_to_be_bytes(&inners[i]))
+                    .unwrap()
+                    .into_bytes(),
             );
             paths.push(
                 sib.iter()

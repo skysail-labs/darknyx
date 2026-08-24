@@ -9,6 +9,10 @@ import {
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
 import { dummyAddress } from "./helpers/e2e-helpers.js";
+import {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+} from "../src/utxo/note-identity.js";
 
 const filled = (length: number, byte: number): Uint8Array =>
   new Uint8Array(length).fill(byte);
@@ -22,15 +26,15 @@ describe("merge transport lifecycle accounts", () => {
     const payer = dummyAddress();
     const mint = dummyAddress();
     // Handles, not leaves: the merge ix carries note-use tags.
-    const t0 = filled(32, 0x11);
-    const t1 = filled(32, 0x12);
-    const zero = new Uint8Array(32);
+    const t0 = noteUseTagFromBytes(filled(32, 0x11));
+    const t1 = noteUseTagFromBytes(filled(32, 0x12));
+    const zero = noteUseTagFromBytes(new Uint8Array(32));
     const ix = await buildMergeInstruction({
       programId: PROGRAM_ID,
       treeId: 3,
       payer,
       inputUseTags: [t0, t1, zero, zero],
-      outputCommitment: filled(32, 0x21),
+      outputCommitment: noteCommitmentFromBytes(filled(32, 0x21)),
       tokenMint: mint,
       merkleRoot: filled(32, 0x31),
       k: 4,
@@ -82,8 +86,11 @@ describe("merge transport lifecycle accounts", () => {
         programId: PROGRAM_ID,
         treeId: 0,
         payer: dummyAddress(),
-        inputUseTags: [new Uint8Array(32), new Uint8Array(32)],
-        outputCommitment: filled(32, 0x21),
+        inputUseTags: [
+          noteUseTagFromBytes(new Uint8Array(32)),
+          noteUseTagFromBytes(new Uint8Array(32)),
+        ],
+        outputCommitment: noteCommitmentFromBytes(filled(32, 0x21)),
         tokenMint: dummyAddress(),
         merkleRoot: filled(32, 0x31),
         k: 2,

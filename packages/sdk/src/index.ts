@@ -6,6 +6,7 @@ export * from "./keys/key-generators.js";
 export * from "./keys/master-seed-backup.js";
 export * from "./keys/fill-encryption.js";
 export * from "./utxo/note.js";
+export * from "./utxo/note-identity.js";
 export * from "./utxo/deposit.js";
 export * from "./utxo/deposit-inner.js";
 export * from "./utxo/note-use.js";

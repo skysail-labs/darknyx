@@ -114,9 +114,11 @@ note_use_tag = Poseidon3(DOMAIN_NOTE_USE = 29, commitment, inner_hash)
 The commitment reaches the chain exactly once — as a Merkle leaf. `lock_note`,
 `withdraw`, `merge`, and the settle payload's consumed inputs all key on the
 tag, so a chain observer can no longer follow a note from deposit to withdrawal
-by string-matching 32 bytes. **Both are `[u8; 32]`, so confusing them compiles,
-derives a plausible-looking PDA, and fails only on-chain as `AccountNotFound` /
-`ConstraintSeeds` — check which namespace a value is in before passing it.**
+by string-matching 32 bytes. Both remain raw `[u8; 32]` at Borsh/JSON wire
+boundaries, but Rust `NoteCommitment`/`NoteUseTag` newtypes and TypeScript brands
+separate internal APIs. Convert raw bytes through their checked constructors;
+an explicit wrong conversion otherwise derives a plausible-looking PDA and
+fails on-chain as `AccountNotFound` / `ConstraintSeeds`.
 Deposit inners gained a seed-derived `note_secret`
 (`Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`) so one leaked
 wallet-wide owner commitment cannot recompute a user's whole tag history.

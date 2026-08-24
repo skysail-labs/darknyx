@@ -60,6 +60,7 @@ import {
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
+import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -314,7 +315,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
 
     const balBefore = (await getTokenAccount(conn, ata)).amount;
     const mergedUseTag = await deriveNoteUseTag(
-      mergeRes.outputCommitmentBE,
+      noteCommitmentFromBytes(mergeRes.outputCommitmentBE),
       bn254ToBE32(mergeRes.outputInnerHash),
     );
     await t.step("withdraw ix submit + confirm", async () =>

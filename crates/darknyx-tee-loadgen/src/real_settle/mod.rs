@@ -484,7 +484,7 @@ impl ValidDepositProver {
 
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
         let input_json = serde_json::to_string(&serde_json::json!({
-            "noteCommitment": decimal_be32(&note_commitment),
+            "noteCommitment": decimal_be32(note_commitment.as_bytes()),
             "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
             "amount": decimal_u64(amount),
             "recoveryNonce": decimal_be32(recovery_nonce),
@@ -501,7 +501,7 @@ impl ValidDepositProver {
         )?;
         Ok(GeneratedDepositProof {
             proof,
-            note_commitment,
+            note_commitment: note_commitment.into_bytes(),
             inner_hash,
         })
     }
@@ -592,16 +592,15 @@ impl ValidInputProver {
     ) -> Result<(Proof<Bn254>, [u8; 32], [u8; 32]), RealSettleError> {
         let owner = owner_commitment(spending_key, owner_blinding)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
-        let note_commitment: [u8; 32] =
-            commitment_from_fields_v2(token_mint, amount, &owner, inner_hash)
-                .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, inner_hash)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let note_use_tag = note_use_tag(&note_commitment, inner_hash)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
 
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
         let input_json = serde_json::to_string(&serde_json::json!({
             "merkleRoot": decimal_be32(&witness.root),
-            "noteUseTag": decimal_be32(&note_use_tag),
+            "noteUseTag": decimal_be32(note_use_tag.as_bytes()),
             "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
             "amount": decimal_u64(amount),
             "spendingKey": decimal_fr(spending_key),
@@ -620,7 +619,11 @@ impl ValidInputProver {
             &input_json,
         )?;
 
-        Ok((proof, note_commitment, note_use_tag))
+        Ok((
+            proof,
+            note_commitment.into_bytes(),
+            note_use_tag.into_bytes(),
+        ))
     }
 
     /// The proving key's verifying key — for a post-prove self-check.
@@ -771,22 +774,27 @@ impl MergeProver {
         let mut input_commitments = [[0u8; 32]; 4];
         for (slot, input) in input_commitments.iter_mut().zip(inputs) {
             *slot = commitment_from_fields_v2(token_mint, input.amount, &owner, &input.inner_hash)
-                .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+                .map_err(|e| RealSettleError::Crypto(e.to_string()))?
+                .into_bytes();
         }
         let mut input_use_tags = vec![[0u8; 32]; self.k];
         for (slot, (commitment, input)) in input_use_tags
             .iter_mut()
             .zip(input_commitments.iter().zip(inputs))
         {
-            *slot = note_use_tag(commitment, &input.inner_hash)
+            let commitment = darkpool_crypto::NoteCommitment::from_bytes(*commitment)
                 .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+            *slot = note_use_tag(&commitment, &input.inner_hash)
+                .map_err(|e| RealSettleError::Crypto(e.to_string()))?
+                .into_bytes();
         }
         let active_bitmap = (1u8 << inputs.len()) - 1;
         let output_inner_hash = merge_output_inner_hash(&input_commitments, active_bitmap)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let output_commitment =
             commitment_from_fields_v2(token_mint, sum, &owner, &output_inner_hash)
-                .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+                .map_err(|e| RealSettleError::Crypto(e.to_string()))?
+                .into_bytes();
 
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
         let is_active = (0..self.k).map(|i| BigInt::from(inputs.get(i).is_some() as u8));

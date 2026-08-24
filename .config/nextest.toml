@@ -39,7 +39,7 @@ slow-timeout = { period = "30s", terminate-after = 8 }
 # pattern, which matches test NAMES — so both matched nothing and the two
 # heaviest proving binaries silently got no cap. Verified with
 # `cargo nextest list -E '<filter>'`, not assumed.
-filter = 'binary(prover_roundtrip) + binary(n16_assemble_prove_verify) + binary(prove_throughput_bench) + binary(valid_input_intake_verify) + binary(rapidsnark_roundtrip) + binary(match_batch_verify) + binary(zk_roundtrip) + binary(zk_spend_roundtrip) + binary(deposit_with_proof) + binary(merge_verify) + binary(user_commitment_registration)'
+filter = 'binary(prover_roundtrip) + binary(n16_assemble_prove_verify) + binary(prove_throughput_bench) + binary(valid_input_intake_verify) + binary(match_batch_verify) + binary(zk_spend_roundtrip) + binary(deposit_with_proof) + binary(merge_verify)'
 threads-required = 4
 slow-timeout = { period = "120s", terminate-after = 4 }
 

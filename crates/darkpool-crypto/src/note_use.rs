@@ -58,6 +58,7 @@
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};
+use crate::note::NoteCommitment;
 use crate::poseidon::poseidon_hash;
 
 /// Domain tag for the note-use handle.
@@ -66,6 +67,29 @@ use crate::poseidon::poseidon_hash;
 /// 22..28. Retired: 20, 21.
 pub const DOMAIN_NOTE_USE: u64 = 29;
 
+/// Circuit-derived public consumption handle. It is intentionally not
+/// interchangeable with [`NoteCommitment`] even though both serialize as 32
+/// bytes.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct NoteUseTag([u8; 32]);
+
+impl NoteUseTag {
+    /// Check and wrap raw wire bytes at an instruction/API boundary.
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, CryptoError> {
+        fr_from_be_bytes(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    pub const fn into_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
 /// Derive the public consumption handle for a note.
 ///
 /// Both inputs must be BN254 field elements. `note_commitment` is a Poseidon
@@ -73,13 +97,13 @@ pub const DOMAIN_NOTE_USE: u64 = 29;
 /// inner, so both are Fr-safe by construction; a non-canonical value here means
 /// a caller built one by hand and is a bug worth surfacing rather than reducing.
 pub fn note_use_tag(
-    note_commitment: &[u8; 32],
+    note_commitment: &NoteCommitment,
     inner_hash: &[u8; 32],
-) -> Result<[u8; 32], CryptoError> {
-    let commitment = fr_from_be_bytes(note_commitment)?;
+) -> Result<NoteUseTag, CryptoError> {
+    let commitment = fr_from_be_bytes(note_commitment.as_bytes())?;
     let inner = fr_from_be_bytes(inner_hash)?;
     let hash = poseidon_hash(&[Fr::from(DOMAIN_NOTE_USE), commitment, inner])?;
-    Ok(fr_to_be_bytes(&hash))
+    Ok(NoteUseTag(fr_to_be_bytes(&hash)))
 }
 
 #[cfg(test)]
@@ -95,19 +119,23 @@ mod tests {
 
     #[test]
     fn deterministic_and_domain_separated() {
-        let tag = note_use_tag(&scalar(7), &scalar(9)).unwrap();
-        assert_eq!(tag, note_use_tag(&scalar(7), &scalar(9)).unwrap());
-        assert_ne!(tag, note_use_tag(&scalar(7), &scalar(10)).unwrap());
-        assert_ne!(tag, note_use_tag(&scalar(8), &scalar(9)).unwrap());
+        let c7 = NoteCommitment::from_bytes(scalar(7)).unwrap();
+        let c8 = NoteCommitment::from_bytes(scalar(8)).unwrap();
+        let tag = note_use_tag(&c7, &scalar(9)).unwrap();
+        assert_eq!(tag, note_use_tag(&c7, &scalar(9)).unwrap());
+        assert_ne!(tag, note_use_tag(&c7, &scalar(10)).unwrap());
+        assert_ne!(tag, note_use_tag(&c8, &scalar(9)).unwrap());
     }
 
     /// The two inputs must not be interchangeable — a tag that ignored argument
     /// order would collide across unrelated notes.
     #[test]
     fn argument_order_matters() {
+        let c7 = NoteCommitment::from_bytes(scalar(7)).unwrap();
+        let c9 = NoteCommitment::from_bytes(scalar(9)).unwrap();
         assert_ne!(
-            note_use_tag(&scalar(7), &scalar(9)).unwrap(),
-            note_use_tag(&scalar(9), &scalar(7)).unwrap()
+            note_use_tag(&c7, &scalar(9)).unwrap(),
+            note_use_tag(&c9, &scalar(7)).unwrap()
         );
     }
 
@@ -160,7 +188,7 @@ mod tests {
     /// different inners.
     #[test]
     fn the_commitment_alone_does_not_determine_the_tag() {
-        let c = scalar(0x55);
+        let c = NoteCommitment::from_bytes(scalar(0x55)).unwrap();
         assert_ne!(
             note_use_tag(&c, &scalar(1)).unwrap(),
             note_use_tag(&c, &scalar(2)).unwrap(),
@@ -170,7 +198,9 @@ mod tests {
 
     #[test]
     fn rejects_non_field_inputs() {
-        assert!(note_use_tag(&[0xff; 32], &scalar(1)).is_err());
-        assert!(note_use_tag(&scalar(1), &[0xff; 32]).is_err());
+        assert!(NoteCommitment::from_bytes([0xff; 32]).is_err());
+        let c = NoteCommitment::from_bytes(scalar(1)).unwrap();
+        assert!(note_use_tag(&c, &[0xff; 32]).is_err());
+        assert!(NoteUseTag::from_bytes([0xff; 32]).is_err());
     }
 }

@@ -35,7 +35,6 @@ use crate::instructions::settlement_shared::{
 use crate::merkle::append_leaves;
 use crate::state::*;
 use anchor_lang::prelude::*;
-use core::mem::size_of;
 
 // Target-gated Poseidon imports — `programs/vault/Cargo.toml` makes
 // `light-poseidon` available only on host builds and `solana-poseidon`
@@ -224,7 +223,7 @@ pub struct TeeForcedSettleBatched {
     #[account(
         init,
         payer = tee_authority,
-        space = 8 + size_of::<ConsumedNoteEntry>(),
+        space = ConsumedNoteEntry::SPACE,
         seeds = [ConsumedNoteEntry::SEED, payload.note_a_use_tag.as_ref()],
         bump,
     )]
@@ -233,7 +232,7 @@ pub struct TeeForcedSettleBatched {
     #[account(
         init,
         payer = tee_authority,
-        space = 8 + size_of::<ConsumedNoteEntry>(),
+        space = ConsumedNoteEntry::SPACE,
         seeds = [ConsumedNoteEntry::SEED, payload.note_b_use_tag.as_ref()],
         bump,
     )]
@@ -354,6 +353,11 @@ pub fn tee_forced_settle_batched_handler(
     // CU-2: read every field we need off lock_a/lock_b in ONE load each (the
     // mints for the leaf binding + relock stamping, AND the order_ids for the
     // lock-binding check below), instead of re-loading the locks twice.
+    require!(
+        ctx.accounts.note_lock_a.account().data_len() == NoteLock::SPACE
+            && ctx.accounts.note_lock_b.account().data_len() == NoteLock::SPACE,
+        VaultError::InvalidAccountLayout
+    );
     let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id, lock_a_expiry, lock_b_expiry) = {
         let la = &ctx.accounts.note_lock_a;
         let lb = &ctx.accounts.note_lock_b;
@@ -475,20 +479,8 @@ pub fn tee_forced_settle_batched_handler(
         }
     }
 
-    // Mark consumed notes.
-    let ca = &mut ctx.accounts.consumed_a;
-    ca.note_use_tag = payload.note_a_use_tag;
-    ca.match_id = payload.match_id;
-    ca.consumed_slot = (clock.slot).into();
-    ca.bump = ctx.bumps.consumed_a;
-    ca._padding = [0u8; 7];
-
-    let cb = &mut ctx.accounts.consumed_b;
-    cb.note_use_tag = payload.note_b_use_tag;
-    cb.match_id = payload.match_id;
-    cb.consumed_slot = (clock.slot).into();
-    cb.bump = ctx.bumps.consumed_b;
-    cb._padding = [0u8; 7];
+    // Anchor `init` already wrote both typed discriminators. Their tag-keyed
+    // PDA existence is the complete consume-once state.
 
     // (Nullifier writes removed — see the account-struct note above. The
     // tag-keyed `consumed_a/b` are the consume-once guard.)

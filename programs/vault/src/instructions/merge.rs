@@ -25,7 +25,6 @@ use crate::zk::{
 };
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use core::mem::size_of;
 
 /// Split a 32-byte pubkey into [lo_u128_be32, hi_u128_be32] — matches
 /// `darkpool-crypto::pubkey_to_fr_pair` (what the circuit's `tokenMint[2]` is).
@@ -191,14 +190,12 @@ pub fn merge_handler(
     // input commitment, in order.
     // Reuse the slot already read for the lock-liveness check — same
     // transaction, therefore the same slot, and one fewer sysvar read.
-    let spent_slot = now_slot;
     for (commitment, ai) in active_tags.iter().zip(consumed_accounts.iter_mut()) {
         create_consumed_note_pda(
             ai,
             &mut ctx.accounts.payer,
             &ctx.accounts.system_program,
             commitment,
-            spent_slot,
         )?;
     }
 
@@ -228,18 +225,17 @@ pub fn merge_handler(
     Ok(())
 }
 
-/// Manually create + populate a `ConsumedNoteEntry` PDA (zero-copy), keyed on
-/// the note COMMITMENT — the SAME consume-once guard `withdraw` inits and TEE
+/// Manually create a discriminator-only `ConsumedNoteEntry` PDA, keyed on
+/// the note-use TAG — the SAME consume-once guard `withdraw` inits and TEE
 /// settle inits (`consumed_a/b`). Mirrors `settlement_shared::create_relock_pda`.
 /// Fails if the PDA already exists (a prior withdraw / settle / merge already
-/// consumed this note → double-spend). `match_id` is the all-zero sentinel
-/// (merge is not a match), matching `withdraw`'s `ConsumedNoteEntry`.
+/// consumed this note → double-spend). The typed discriminator plus existence
+/// is the complete state; the seed already commits to the tag.
 fn create_consumed_note_pda(
     ai: &mut AccountView,
     payer: &mut Signer,
     system_program: &Program<System>,
     note_use_tag: &[u8; 32],
-    consumed_slot: u64,
 ) -> Result<()> {
     let (expected, bump) = Address::find_program_address(
         &[ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
@@ -251,7 +247,7 @@ fn create_consumed_note_pda(
         VaultError::NoteAlreadyConsumed
     );
 
-    let space = 8 + size_of::<ConsumedNoteEntry>();
+    let space = ConsumedNoteEntry::SPACE;
     // v2: `minimum_balance` is deprecated (it panics past MAX_PERMITTED_DATA_LENGTH);
     // the fallible form returns InvalidArgument instead.
     let lamports = Rent::get()?.try_minimum_balance(space)?;
@@ -275,13 +271,6 @@ fn create_consumed_note_pda(
 
     let mut data = ai.try_borrow_mut()?;
     data[..8].copy_from_slice(ConsumedNoteEntry::DISCRIMINATOR);
-    let (_head, body) = data.split_at_mut(8);
-    let c: &mut ConsumedNoteEntry = bytemuck::from_bytes_mut(body);
-    c.note_use_tag = *note_use_tag;
-    c.match_id = [0u8; 16];
-    c.consumed_slot = (consumed_slot).into();
-    c.bump = bump;
-    c._padding = [0u8; 7];
     Ok(())
 }
 

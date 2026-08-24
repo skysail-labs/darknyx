@@ -41,6 +41,11 @@ import {
   OUTSTANDING_MINT_SEED,
   BATCH_VALIDITY_MARKER_SEED,
 } from "./seeds.js";
+import type {
+  NoteCommitment,
+  NoteUseTag,
+} from "../utxo/note-identity.js";
+import { noteUseTagFromBytes } from "../utxo/note-identity.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -155,7 +160,7 @@ export async function staticSettleAltAddresses(
  */
 export async function noteLockPda(
   programId: PublicKey,
-  noteUseTag: Uint8Array,
+  noteUseTag: NoteUseTag,
 ): Promise<[PublicKey, number]> {
   return PublicKey.findProgramAddress(
     [NOTE_LOCK_SEED, fixed32(noteUseTag)],
@@ -170,7 +175,7 @@ export async function noteLockPda(
  */
 export async function depositedNotePda(
   programId: PublicKey,
-  noteCommitment: Uint8Array,
+  noteCommitment: NoteCommitment,
 ): Promise<[PublicKey, number]> {
   return PublicKey.findProgramAddress(
     [DEPOSITED_NOTE_SEED, fixed32(noteCommitment)],
@@ -181,7 +186,7 @@ export async function depositedNotePda(
 /** Consume-once guard, shared by withdraw / settle / merge — tag-keyed. */
 export async function consumedNotePda(
   programId: PublicKey,
-  noteUseTag: Uint8Array,
+  noteUseTag: NoteUseTag,
 ): Promise<[PublicKey, number]> {
   return PublicKey.findProgramAddress(
     [CONSUMED_NOTE_SEED, fixed32(noteUseTag)],
@@ -621,7 +626,7 @@ export interface BuildDepositParams {
   depositorTokenAccount: PublicKey;
   tokenProgramId: PublicKey;
   amount: bigint;
-  noteCommitment: Uint8Array;
+  noteCommitment: NoteCommitment;
   /** Public pseudorandom Fr used to recover the hidden deposit inner hash. */
   recoveryNonce: Uint8Array;
   proof: Groth16OnChainProof;
@@ -685,7 +690,7 @@ export interface BuildWithdrawParams {
    * The note-use tag, which is VALID_SPEND's public output at wire 0 — NOT
    * the commitment. Derive it with `deriveNoteUseTag(commitment, innerHash)`.
    */
-  noteUseTag: Uint8Array;
+  noteUseTag: NoteUseTag;
   nullifier: Uint8Array;
   merkleRoot: Uint8Array;
   amount: bigint;
@@ -706,7 +711,7 @@ export interface BuildLockNoteParams {
   /** Must be one of `vault_config.tee_pubkeys`. Pays the rent for the new PDA. */
   teeAuthority: PublicKey;
   /** VALID_INPUT's public input 1. The commitment stays inside the proof. */
-  noteUseTag: Uint8Array;
+  noteUseTag: NoteUseTag;
   /** 16-byte order id used for `tee_forced_settle` cross-check. */
   orderId: Uint8Array;
   expirySlot: bigint;
@@ -727,7 +732,6 @@ export interface BuildLockNoteParams {
 
 /** Decoded `NoteLock` account (`programs/vault/src/state.rs::NoteLock`). */
 export interface NoteLockAccount {
-  noteUseTag: Uint8Array;
   tokenMint: PublicKey;
   orderId: Uint8Array;
   /**
@@ -736,7 +740,6 @@ export interface NoteLockAccount {
    * this slot — settlement must land strictly before it (CS-09).
    */
   expirySlot: bigint;
-  lockedBy: PublicKey;
 }
 
 /**
@@ -745,23 +748,23 @@ export interface NoteLockAccount {
  * Layout is hand-mirrored from the Rust struct, like every other decoder in
  * this file (there is no Anchor IDL at runtime):
  *
- *   disc(8) | note_use_tag(32) | token_mint(32) | order_id(16)
- *          | expiry_slot(u64 LE) | locked_by(32) | bump(1) | _padding(7)
+ *   disc(8) | token_mint(32) | order_id(16) | expiry_slot(u64 LE)
+ *          | bump(1) | _padding(7)
  *
  * Returns `null` when the buffer is too short to be a `NoteLock`, so a caller
  * that reads an unexpected account fails closed rather than misreading an
  * offset as an expiry.
  */
 export function parseNoteLock(data: Uint8Array): NoteLockAccount | null {
-  const LEN = 8 + 32 + 32 + 16 + 8 + 32 + 1 + 7;
-  if (data.length < LEN) return null;
+  const LEN = 8 + 32 + 16 + 8 + 1 + 7;
+  // Exact length is deliberate: the retired 136-byte layout starts with the
+  // seed tag, so accepting it as this layout would misread that tag as a mint.
+  if (data.length !== LEN) return null;
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   return {
-    noteUseTag: data.slice(8, 40),
-    tokenMint: new PublicKey(data.slice(40, 72)),
-    orderId: data.slice(72, 88),
-    expirySlot: dv.getBigUint64(88, true),
-    lockedBy: new PublicKey(data.slice(96, 128)),
+    tokenMint: new PublicKey(data.slice(8, 40)),
+    orderId: data.slice(40, 56),
+    expirySlot: dv.getBigUint64(56, true),
   };
 }
 
@@ -774,7 +777,7 @@ export interface BuildReleaseLockParams {
    */
   rentReceiver: PublicKey;
   /** 32-byte note-use tag the lock is seeded on. */
-  noteUseTag: Uint8Array;
+  noteUseTag: NoteUseTag;
 }
 
 /**
@@ -987,8 +990,8 @@ export interface BuildMergeParams {
    * The circuit still derives the output inner from the input COMMITMENTS,
    * but those stay private witnesses; only the tags surface on the wire.
    */
-  inputUseTags: Uint8Array[];
-  outputCommitment: Uint8Array;
+  inputUseTags: NoteUseTag[];
+  outputCommitment: NoteCommitment;
   tokenMint: PublicKey;
   merkleRoot: Uint8Array;
   k: number; // 2 | 4
@@ -1025,10 +1028,14 @@ export async function buildMergeInstruction(
     throw new Error("merge must contain at least one active input");
   }
   const consumedPdas = await Promise.all(
-    activeTags.map(async (t) => (await consumedNotePda(p.programId, t))[0]),
+    activeTags.map(async (t) =>
+      (await consumedNotePda(p.programId, noteUseTagFromBytes(t)))[0]
+    ),
   );
   const noteLockPdas = await Promise.all(
-    activeTags.map(async (t) => (await noteLockPda(p.programId, t))[0]),
+    activeTags.map(async (t) =>
+      (await noteLockPda(p.programId, noteUseTagFromBytes(t)))[0]
+    ),
   );
 
   const lenLE = new Uint8Array(4);

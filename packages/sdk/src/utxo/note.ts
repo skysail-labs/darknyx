@@ -23,6 +23,10 @@
 
 import { buildPoseidon } from "circomlibjs";
 import { BN254_R, bn254ToBE32 } from "../keys/key-generators.js";
+import {
+  noteCommitmentFromBytes,
+  type NoteCommitment,
+} from "./note-identity.js";
 
 type PoseidonFn = ((inputs: bigint[]) => Uint8Array) & {
   F: { toObject: (x: Uint8Array) => bigint };
@@ -151,16 +155,18 @@ export interface NoteV2 {
  * ownerCommitment, innerHash). Mirrors
  * `darkpool_crypto::note::commitment_from_fields_v2`.
  */
-export async function noteCommitmentV2(note: NoteV2): Promise<Uint8Array> {
+export async function noteCommitmentV2(note: NoteV2): Promise<NoteCommitment> {
   const [lo, hi] = pubkeyToFrPair(note.tokenMint);
-  return poseidonHashBytesBE([
-    DOMAIN_NOTE,
-    lo,
-    hi,
-    note.amount,
-    note.ownerCommitment,
-    note.innerHash,
-  ]);
+  return noteCommitmentFromBytes(
+    await poseidonHashBytesBE([
+      DOMAIN_NOTE,
+      lo,
+      hi,
+      note.amount,
+      note.ownerCommitment,
+      note.innerHash,
+    ]),
+  );
 }
 
 /**

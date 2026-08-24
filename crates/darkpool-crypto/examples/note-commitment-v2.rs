@@ -36,5 +36,5 @@ fn main() {
 
     let c = commitment_from_fields_v2(&mint, amount, &owner, &inner)
         .expect("commitment compute failed");
-    println!("{}", hex::encode(c));
+    println!("{}", hex::encode(c.into_bytes()));
 }

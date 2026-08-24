@@ -111,6 +111,7 @@ fn prove_fixture() -> Option<Fixture> {
         &inner_hash,
     )
     .expect("note commitment");
+    let note_commitment_bytes = note_commitment.into_bytes();
 
     // ----- Put it in a tree, with some neighbours so the path is non-trivial -----
     let mut mirror = MerkleMirror::new();
@@ -120,7 +121,9 @@ fn prove_fixture() -> Option<Fixture> {
         filler[1] = 0x5A; // keep the top byte zero => Fr-safe
         mirror.append_leaf(filler).expect("filler append");
     }
-    mirror.append_leaf(note_commitment).expect("note append");
+    mirror
+        .append_leaf(note_commitment_bytes)
+        .expect("note append");
     for i in 0u8..2 {
         let mut filler = [0u8; 32];
         filler[31] = i + 200;
@@ -130,7 +133,7 @@ fn prove_fixture() -> Option<Fixture> {
 
     let merkle_root = mirror.root();
     let incl = mirror
-        .inclusion_proof(&note_commitment)
+        .inclusion_proof(&note_commitment_bytes)
         .expect("inclusion proof computes")
         .expect("note is in the mirror");
     assert_eq!(incl.merkle_root, merkle_root);
@@ -143,7 +146,8 @@ fn prove_fixture() -> Option<Fixture> {
     builder.push_input("merkleRoot", be32_to_bigint(&merkle_root));
     let note_use_tag =
         darkpool_crypto::note_use_tag(&note_commitment, &inner_hash).expect("note-use tag");
-    builder.push_input("noteUseTag", be32_to_bigint(&note_use_tag));
+    let note_use_tag_bytes = note_use_tag.into_bytes();
+    builder.push_input("noteUseTag", be32_to_bigint(&note_use_tag_bytes));
     builder.push_input(
         "tokenMint",
         be32_to_bigint(&darkpool_crypto::field::fr_to_be_bytes(&mint_lo)),
@@ -185,7 +189,7 @@ fn prove_fixture() -> Option<Fixture> {
         .expect("circuit has public inputs");
     let expected_publics: Vec<Fr> = vec![
         darkpool_crypto::field::fr_from_be_bytes(&merkle_root).unwrap(),
-        darkpool_crypto::field::fr_from_be_bytes(&note_use_tag).unwrap(),
+        darkpool_crypto::field::fr_from_be_bytes(&note_use_tag_bytes).unwrap(),
         mint_lo,
         mint_hi,
     ];
@@ -219,8 +223,8 @@ fn prove_fixture() -> Option<Fixture> {
     Some(Fixture {
         proof_bytes: proof_to_onchain_bytes(&proof),
         merkle_root,
-        note_commitment,
-        note_use_tag,
+        note_commitment: note_commitment_bytes,
+        note_use_tag: note_use_tag_bytes,
         token_mint,
     })
 }

@@ -13,8 +13,8 @@
 **Frozen formula vectors:**
 [`phase0-vectors.json`](phase0-vectors.json)
 
-**Current phase:** Phase 1 implementation complete; review and hosted CI are
-pending
+**Current phase:** Phase 2 implementation and local evidence complete; hosted
+CI, review, and devnet reset/lifecycle evidence are pending
 
 **Mainnet status:** blocked on mandatory implementation, devnet/CVM evidence,
 independent circuit/privacy review, and Phase-2 ceremony
@@ -49,15 +49,15 @@ review, and ceremony.
 |---|---|---|---:|---|---|---|
 | PA-01 | High privacy | **Validated** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Implement v2 circuit/config/recovery bundle atomically in Phase 3. |
 | PA-02 | High privacy | **Validated** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Replace public commitments with private input inners in Phase 3. |
-| PA-03 | Medium privacy/architecture | **Validated** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Review Phase 1 PR and complete hosted CI before moving to Code complete. |
-| PA-04 | Low security / High volume cost | **Validated** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Implement discriminator-only accounts and compatibility tests in Phase 2. |
-| PA-05 | Low security / Medium transient cost | **Validated** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Remove fields and regenerate layout contracts in Phase 2. |
-| PA-06 | Medium recoverability | **Design frozen** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Review Phase 1 PR; then collect the required devnet exact-retry evidence. |
+| PA-03 | Medium privacy/architecture | **Code complete** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Retain as code complete pending final external/release assurance. |
+| PA-04 | Low security / High volume cost | **Code complete** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Run the mandatory clean devnet reset and replay smoke after merge. |
+| PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Run proof-backed devnet lock/release/expiry/settle lifecycle after merge. |
+| PA-06 | Medium recoverability | **Code complete** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Collect the required devnet exact-retry evidence. |
 | PA-07 | Low privacy/complexity | **Validated** | 3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier. | VALID_SPEND public inputs/instruction/event shrink | Remove in atomic Phase 3 proof cutover. |
 | PA-08 | Design simplification | **Design frozen** | 3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent. | All note circuits/formulas change under domain 32 | Implement `Poseidon2(32, spending_key)` in Phase 3. |
 | PA-09 | Design/documentation | **Design frozen** | 3 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner. | VALID_DEPOSIT/formula change under domain 33 | Implement in Phase 3 and prove canonical-client recovery. |
-| PA-10 | Low product coherence | **Design frozen** | 1 | Active key documentation/code contains the live X25519 recovery key only; unwired BN254 compliance hierarchy is deferred as a fresh future design. | Keystore/SDK/Rust deletion; no live fill wire change | Review Phase 1 PR and complete hosted CI before moving to Code complete. |
-| PA-11 | Medium correctness | **Validated** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment. | Internal newtypes/brands; no wire change; CI registry becomes authoritative in Phase 3 | Phase 1 clean-output guard is implemented; newtypes remain Phase 2 and registry CI remains Phase 3. |
+| PA-10 | Low product coherence | **Code complete** | 1 | Active key documentation/code contains the live X25519 recovery key only; unwired BN254 compliance hierarchy is deferred as a fresh future design. | Keystore/SDK/Rust deletion; no live fill wire change | Retain as code complete pending final external/release assurance. |
+| PA-11 | Medium correctness | **Validated** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment. | Internal newtypes/brands; no wire change; CI registry becomes authoritative in Phase 3 | Clean builds and semantic types are complete; implement the authoritative domain registry in Phase 3. |
 | PA-12 | Medium review/documentation | **Validated** | 3 | Every descendant note identifies its observer-secret inner input, recovery owner, and constraining circuit accurately. | Documentation/comments only after formulas change | Update with Phase 3 implementation, not before. |
 
 ---
@@ -67,8 +67,8 @@ review, and ceremony.
 | Phase | Branch | Scope | Status | PR/commit | Required evidence before advancing |
 |---:|---|---|---|---|---|
 | 0 | `privacy/coherence-measurements` | PoCs, benchmark, reader inventory, design/domain freeze | **Merged** | PR #202 / `ef111b1b` | Complete; no production behavior changed |
-| 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Implementation complete; targeted local gates passed; hosted CI pending** | PR pending | hosted full clippy/SBF/workspace gate, review, merge; PA-06 devnet retry remains after merge |
-| 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | Not started | — | litesvm lifecycle/replay tests, layout parity, rent/CU/Tx measurements |
+| 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI passed** | PR #203 / `b11e1fc0` | complete except PA-06's explicit devnet retry evidence |
+| 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Implementation and local evidence complete; PR pending** | branch based on `b11e1fc0` | hosted CI/review, then clean devnet reset and lifecycle smoke |
 | 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | Not started | — | all artifacts/vectors/parity, SBF, serializer sizes, negative mutation tests |
 | 4 | `privacy/fee-recovery-v2` | protocol/user recovery operations if not wire-coupled into Phase 3 | Not started | — | journal-loss and epoch-rotation recovery drills |
 | 5 | `privacy/release-assurance` | devnet/CVM evidence, docs, external gates | Not started | — | final evidence table, independent review, ceremony, mainnet build/deploy checks |
@@ -164,7 +164,7 @@ instructions as implementation proceeds.
 ### PA-03 / PA-06 / PA-10 — Phase 1 client/identity cleanup
 
 - **Owner:** Phase 1 implementation agent
-- **PR/commit:** branch `privacy/remove-wallet-identity`; PR pending
+- **PR/commit:** PR #203; merge `b11e1fc0`
 - **Invariant:** launch code has no unused wallet-registration identity or BN254
   disclosure hierarchy; deposit construction is random-nonce and recoverable.
 - **Implementation:** deleted VALID_WALLET_CREATE source/zkey/VK, its vault
@@ -188,10 +188,8 @@ instructions as implementation proceeds.
   fixed stale `tsconfig.tsbuildinfo` retention. Repository guards for image
   digests, CUDA env, namespace, debug endpoints, process markers, doctests, and
   script awaits passed. `cargo fmt --check` and `git diff --check` passed.
-- **Pending local/hosted gate:** workspace clippy was stopped without a code
-  diagnostic when only 317 MB of disk remained while Cargo materialized a new
-  target graph; the disposable target was then cleaned. Hosted CI must supply
-  the full clippy/SBF/workspace result before these rows move to Code complete.
+- **Hosted gate:** PR #203 passed hosted CI before merge. PA-06 remains short of
+  hosted validation until the explicit devnet exact-retry scenario is recorded.
 - **Local evidence required:** deletion reference sweep, keystore migration,
   backup round-trip, exact-retry/ambiguous-submit tests, seed-plus-chain deposit
   recovery, full local gate.
@@ -202,13 +200,51 @@ instructions as implementation proceeds.
 
 ### PA-04 / PA-05 — Phase 2 account compaction
 
-- **Owner:** unassigned
-- **PR/commit:** pending
+- **Owner:** Phase 2 implementation agent
+- **PR/commit:** branch `privacy/compact-note-state`; PR pending; base
+  `b11e1fc0`
 - **Invariant:** replay sets remain exact and eternal; lock mint/order/expiry
   semantics remain unchanged under lean layouts.
+- **Implementation:** `DepositedNoteEntry` and `ConsumedNoteEntry` are
+  discriminator-only 8-byte accounts; `NoteLock` is 72 bytes containing only
+  mint, order ID, expiry, bump, and alignment padding. Every on-chain creator,
+  manual settle/merge allocation, SDK decoder, TEE lock sweeper, fixture, and
+  raw expiry offset uses the generated layout. A 136-byte lock fails closed and
+  requires the planned development reset; 56/72-byte replay markers remain
+  occupied guards because no payload field is read.
+- **Semantic boundary:** Rust `NoteCommitment` and `NoteUseTag` transparent
+  newtypes plus TypeScript branded checked constructors separate equal-width
+  identities internally. Borsh/JSON boundaries remain byte-identical, and
+  compile-time `@ts-expect-error` guards reject commitment-to-tag PDA calls.
+- **Rent evidence (lamports):** deposit marker 1,280,640 -> 946,560 (save
+  334,080); consumed marker 1,392,000 -> 946,560 (save 445,440); live lock
+  1,837,440 -> 1,392,000 (save 445,440). The fixture pins canonical Solana
+  rent parameters and exact old/new deltas.
+- **Local CU/size evidence:** proof-backed `lock_note` 101,076 CU versus the
+  last recorded 117,943-CU devnet baseline; deposit 137,168 CU; merge K=2
+  145,711 CU; withdraw 133,774 CU; worst-case six-leaf/two-relock Tx D 58,251
+  CU. Tx D is 1,172 bytes with 60 bytes headroom, so packet headroom does not
+  regress. Hosted devnet measurements remain mandatory because runtime CU can
+  differ from LiteSVM.
+- **Local lifecycle evidence:** real deposit replay rejects before a second
+  token movement; withdraw->settle, settle->withdraw, and settle->merge collide
+  on one tag namespace; live/expired/released locks behave at the exact expiry
+  boundary; mismatched order/mint/expiry and continuation TTL checks pass;
+  layout JSON parity and lock-sweeper offset/dedup tests pass.
+- **Completed local gates:** final `devnet-admin` SBF fingerprint plus 36
+  focused vault lifecycle tests; workspace nextest 892/892; artifact-required
+  TEE nextest 701/701; clippy with warnings denied; all six test-inclusive
+  TypeScript typechecks; SDK 439 non-listener tests plus 42 localhost transport
+  tests; browser 74 tests plus production build; indexer/daemon/client-core/
+  trader-host 305 tests; repository guards and dependency audits. Localhost
+  suites were rerun outside the macOS sandbox after their first attempts were
+  denied permission to bind mock servers.
+- **Gate repair:** removed stale deleted/default-disabled binary names from the
+  nextest heavy-test filter. The obsolete entries made nextest reject its
+  configuration before any test could run after Phase 1's deletions.
 - **Local evidence required:** layout fixtures, SDK parity, litesvm deposit
   replay, cross-consume guard, live/expired/release/settle tests; measured rent,
-  CU, and Tx sizes.
+  CU, and Tx sizes. **Complete.**
 - **Hosted evidence:** devnet reset and lifecycle smoke before reuse.
 - **Rollback:** development state is reset; no dual-layout mainnet path is
   required because no mainnet notes exist.

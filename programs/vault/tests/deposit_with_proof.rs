@@ -78,7 +78,8 @@ fn opening(mint: &Pubkey, amount: u64) -> DepositOpening {
         &fr_to_be_bytes(&owner_commitment),
         &fr_to_be_bytes(&inner_hash),
     )
-    .expect("note commitment");
+    .expect("note commitment")
+    .into_bytes();
     DepositOpening {
         spending_key,
         r_owner,
@@ -361,7 +362,7 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
 ///
 /// Before the `DepositedNoteEntry` guard, both deposits moved tokens in and both
 /// incremented `outstanding`, but only ONE could ever be withdrawn — the second
-/// collides on the commitment-keyed consume-once guard. The vault ends up
+/// has the same note-use tag and collides on the shared consume-once guard. The vault ends up
 /// permanently over-collateralised, so the solvency invariant stays happy and
 /// nothing alarms; the user's second deposit is just silently unrecoverable.
 ///

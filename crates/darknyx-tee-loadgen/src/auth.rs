@@ -157,7 +157,8 @@ pub fn build_signed_place_body(
         &owner_commitment,
         &note_inner_hash,
     )
-    .expect("synthetic opening fields are Fr-safe (top byte zero)");
+    .expect("synthetic opening fields are Fr-safe (top byte zero)")
+    .into_bytes();
     // Opaque-to-intake fields: a deterministic nullifier + an all-zero
     // root + a 256-byte zero VALID_INPUT proof.
     let nullifier = {
