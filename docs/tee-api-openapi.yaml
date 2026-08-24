@@ -355,7 +355,7 @@ components:
         Mirrors what dstack-sdk `client.info()` returns plus a
         couple of Darknyx-specific fields. Used in tandem with
         /attestation by the SDK's verifyTeeAttestation() helper.
-      required: [app_id, instance_id, app_name, device_id, compose_hash, boot_session_id, tcb_info, tee_pubkey, tee_pubkeys, version]
+      required: [app_id, instance_id, app_name, device_id, compose_hash, boot_session_id, transport_mode, tcb_info, tee_pubkey, tee_pubkeys, version]
       properties:
         app_id:
           type: string
@@ -383,6 +383,13 @@ components:
             from `/info` must equal the boot session bound by the
             `/transport-attestation` manifest. It is not part of the separate
             legacy `/attestation` report_data layout.
+        transport_mode:
+          type: string
+          enum: [ra-tls, gateway-terminated]
+          description: |
+            Boot-selected transport policy. Clients pin this operational field
+            to the independently verified transport manifest; it is not a trust
+            root by itself.
         tcb_info:
           type: object
           required: [mrtd]

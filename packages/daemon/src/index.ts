@@ -25,5 +25,6 @@ export * from "./tree-merkle-provider.js";
 export * from "./merge-prover.js";
 export * from "./merge-client.js";
 export * from "./attestation.js";
+export * from "./transport.js";
 export * from "./daemon.js";
 export * from "./control-api.js";

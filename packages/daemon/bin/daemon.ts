@@ -6,8 +6,10 @@
  * prover, wires the Daemon, and serves the local control API. Keys + proving
  * stay on this host.
  *
- *   DARKNYX_DAEMON_GATEWAY_URL=https://<app>-8080.dstack-…  \
+ *   DARKNYX_DAEMON_GATEWAY_URL=https://<app>-8443s.dstack-…  \
  *   DARKNYX_DAEMON_TOKEN=<jwt>  DARKNYX_DAEMON_RPC_URL=$HELIUS   \
+ *   DARKNYX_DAEMON_EXPECT_COMPOSE_HASH=<approved-hex>             \
+ *   DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256=<finalized-set-hash>  \
  *   DARKNYX_DAEMON_API_KEY=<key> DARKNYX_DAEMON_API_SECRET=<secret> \
  *   DARKNYX_DAEMON_API_PASSPHRASE=<passphrase>               \
  *   DARKNYX_DAEMON_KEYSTORE=./darknyx-keystore.json             \
@@ -32,7 +34,10 @@ import {
 } from "@darknyx/sdk";
 
 import { loadConfig } from "../src/config.js";
-import { buildDaemonTransport } from "../src/transport.js";
+import {
+  buildDaemonTransport,
+  DaemonTransportSupervisor,
+} from "../src/transport.js";
 import { parseEventLog } from "@darknyx/sdk";
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
 import WebSocket from "ws";
@@ -221,27 +226,40 @@ async function main(): Promise<void> {
   // deployment must not start and trade over a channel its operator believes
   // is verified. It also refuses to return a transport that verifies HTTP
   // while leaving the stream ungated.
-  const transport = await buildDaemonTransport(config, {
-    verifierDeps: {
-      // The SDK's DCAP verifier takes quote BYTES; the transport contract
-      // carries the wire form, which is hex. Adapt explicitly rather than
-      // loosening either type — a silent mis-decode here would hand the
-      // verifier the wrong bytes and fail in a way that reads as a bad quote.
-      verifyQuote: (quoteHex: string) => {
-        const dcap = createDcapQuoteVerifier({ pccsUrl: config.pccsUrl });
-        const bytes = Uint8Array.from(
-          quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
-        );
-        return dcap(bytes);
+  let transportSupervisor: DaemonTransportSupervisor | undefined;
+  const buildTransport = () =>
+    buildDaemonTransport(config, {
+      verifierDeps: {
+        // The SDK's DCAP verifier takes quote BYTES; the transport contract
+        // carries the wire form, which is hex. Adapt explicitly rather than
+        // loosening either type — a silent mis-decode here would hand the
+        // verifier the wrong bytes and fail in a way that reads as a bad quote.
+        verifyQuote: (quoteHex: string) => {
+          const dcap = createDcapQuoteVerifier({ pccsUrl: config.pccsUrl });
+          const bytes = Uint8Array.from(
+            quoteHex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+          );
+          return dcap(bytes);
+        },
+        parseEventLog,
+        randomNonce: () => new Uint8Array(randomBytes(32)),
       },
-      parseEventLog,
-      randomNonce: () => new Uint8Array(randomBytes(32)),
-    },
-    // `ws` is the daemon's WebSocket implementation; the gate wraps it so no
-    // frame is sent before the upgrade socket has been checked.
-    createWebSocket: (url: string) =>
-      new WebSocket(url) as unknown as NodeWebSocketLike,
-  });
+      // `ws` is the daemon's WebSocket implementation; the gate wraps it so no
+      // frame is sent before the upgrade socket has been checked.
+      createWebSocket: (url: string) =>
+        new WebSocket(url, {
+          // The enclave certificate is self-signed. WebPKI is intentionally
+          // deferred to the quote-bound SPKI gate wrapping this exact socket.
+          rejectUnauthorized: false,
+        }) as unknown as NodeWebSocketLike,
+      onTransportViolation: (error) =>
+        transportSupervisor?.reportViolation(error),
+    });
+  const initialTransport = await buildTransport();
+  transportSupervisor = new DaemonTransportSupervisor(
+    initialTransport,
+    buildTransport,
+  );
 
   const programId = new PublicKey(config.programId);
   const circuitsDir =
@@ -288,7 +306,7 @@ async function main(): Promise<void> {
           token: config.token,
           // `/tree/leaves` is a CVM read. Without this it fell back to global
           // fetch and left the verified transport entirely.
-          fetchImpl: transport.fetch,
+          fetchImpl: transportSupervisor.fetch,
         }),
       });
       const rawMerge = getMergeFunction({ client });
@@ -315,16 +333,17 @@ async function main(): Promise<void> {
   // Otherwise we wire the real Intel-TCB DCAP verifier so strict mode can enforce.
   const skipAttest = process.env.DARKNYX_DAEMON_SKIP_ATTEST === "1";
 
-  if (transport.mode === "ra-tls") {
+  if (initialTransport.mode === "ra-tls") {
     console.log(
       "[daemon] transport: ra-tls — every CVM request and the stream are bound " +
         "to a quote-verified certificate on their own socket",
     );
   } else {
     console.warn(
-      "[daemon] transport: gateway-terminated (legacy). TLS terminates at the " +
-        "dstack gateway and nothing binds the quote to this connection. Set " +
-        "DARKNYX_DAEMON_TRANSPORT_MODE=ra-tls to enable in-enclave TLS.",
+      "[daemon] NON-PRODUCTION LEGACY TRANSPORT: gateway-terminated. TLS " +
+        "terminates at the dstack gateway and nothing binds the quote to this " +
+        "connection. This mode required an explicit development/simulator " +
+        "allow flag and is forbidden in production.",
     );
   }
 
@@ -339,7 +358,7 @@ async function main(): Promise<void> {
     mergeRunner,
     streamTokenProvider: streamTokenProvider(
       config.gatewayUrl,
-      transport.fetch,
+      transportSupervisor.fetch,
     ),
     verifyAttestation: skipAttest ? false : undefined,
     quoteVerifier: skipAttest
@@ -348,11 +367,12 @@ async function main(): Promise<void> {
     // Every CVM request the daemon makes now goes through the selected
     // transport. Under ra-tls that means nothing is sent until the socket
     // carrying it has been verified.
-    fetchImpl: transport.fetch,
-    ...(transport.webSocketFactory
+    fetchImpl: transportSupervisor.fetch,
+    transportSupervisor,
+    ...(initialTransport.webSocketFactory
       ? {
           sendableWebSocketFactory:
-            transport.webSocketFactory as ConstructorParameters<
+            transportSupervisor.webSocketFactory as ConstructorParameters<
               typeof Daemon
             >[0]["sendableWebSocketFactory"],
         }

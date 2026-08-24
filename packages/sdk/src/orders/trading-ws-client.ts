@@ -100,6 +100,7 @@ export class TradingClient {
     Set<ChannelListener>
   >();
   private permanentlyClosed = false;
+  private suspended = false;
   private ready = false;
   private connectPromise: Promise<void> | null = null;
   private connectResolve: (() => void) | null = null;
@@ -120,6 +121,9 @@ export class TradingClient {
     if (this.ready) return Promise.resolve();
     if (this.permanentlyClosed) {
       return Promise.reject(new Error("stream client is closed"));
+    }
+    if (this.suspended) {
+      return Promise.reject(new Error("stream client is suspended"));
     }
     if (this.connectPromise) return this.connectPromise;
 
@@ -142,7 +146,12 @@ export class TradingClient {
     ws.addEventListener("open", () => {
       void this.sendLogin(false);
     });
-    ws.addEventListener("message", (event) => this.onMessage(event.data));
+    ws.addEventListener("message", (event) => {
+      // `close()` is asynchronous. A suspended/replaced socket may still
+      // deliver buffered frames, which must not mutate the new generation.
+      if (this.ws !== ws) return;
+      this.onMessage(event.data);
+    });
     ws.addEventListener("error", (event) => {
       const error =
         event instanceof Error ? event : new Error("WebSocket transport error");
@@ -326,7 +335,11 @@ export class TradingClient {
       for (const listener of listeners) listener.hooks.onClose?.(code, reason);
     }
     this.opts.onClose?.(code, reason);
-    if (!this.permanentlyClosed && (this.opts.autoReconnect ?? true)) {
+    if (
+      !this.permanentlyClosed &&
+      !this.suspended &&
+      (this.opts.autoReconnect ?? true)
+    ) {
       this.scheduleReconnect();
     }
   }
@@ -337,7 +350,9 @@ export class TradingClient {
       this.reconnectTimer = null;
       void this.connect().catch((error) => {
         this.opts.onError?.(error as Error);
-        if (!this.permanentlyClosed) this.scheduleReconnect();
+        if (!this.permanentlyClosed && !this.suspended) {
+          this.scheduleReconnect();
+        }
       });
     }, this.opts.reconnectDelayMs ?? 250);
     this.reconnectTimer.unref?.();
@@ -456,6 +471,42 @@ export class TradingClient {
 
   ping(): Promise<void> {
     return this.request<void>({ op: "ping" });
+  }
+
+  /**
+   * Close the current socket and suppress reconnects while retaining channel
+   * subscriptions. Used while a new CVM transport generation is verified.
+   */
+  suspend(): void {
+    if (this.permanentlyClosed || this.suspended) return;
+    this.suspended = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const ws = this.ws;
+    this.ws = null;
+    this.ready = false;
+    this.loginRequestId = null;
+    this.refreshInFlight = false;
+    this.stopHeartbeat();
+    for (const pending of this.pending.values()) {
+      pending.reject(
+        new Error("stream client suspended for transport recovery"),
+      );
+    }
+    this.pending.clear();
+    this.failConnect(
+      new Error("stream client suspended for transport recovery"),
+    );
+    ws?.close();
+  }
+
+  /** Reconnect the retained subscriptions through the active generation. */
+  resume(): void {
+    if (this.permanentlyClosed || !this.suspended) return;
+    this.suspended = false;
+    if (this.channelListeners.size > 0) {
+      void this.connect().catch((error) => this.opts.onError?.(error as Error));
+    }
   }
 
   close(): void {

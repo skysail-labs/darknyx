@@ -42,6 +42,9 @@ pub struct InfoResponse {
     /// Fresh 32-byte process-boot session id, hex. Every order signature binds
     /// it so pre-reboot requests cannot be replayed.
     pub boot_session_id: String,
+    /// Boot-selected connection policy. Operational cross-check only: the
+    /// transport-attestation manifest is the authoritative quote-bound value.
+    pub transport_mode: &'static str,
     pub tcb_info: TcbInfo,
     /// Solana base58 of the shard-0 (primary) Ed25519 signer pubkey.
     /// Kept for back-compat; prefer `tee_pubkeys` for the full set.
@@ -72,6 +75,7 @@ pub async fn handler(State(state): State<Arc<ApiState>>) -> Json<InfoResponse> {
         device_id: state.app_info.device_id.clone(),
         compose_hash: state.app_info.compose_hash.clone(),
         boot_session_id: hex::encode(state.boot_session_id),
+        transport_mode: state.transport_mode.as_str(),
         tcb_info: TcbInfo {
             mrtd: state.app_info.mrtd.clone(),
         },

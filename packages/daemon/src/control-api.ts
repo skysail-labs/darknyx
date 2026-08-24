@@ -172,7 +172,8 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
   for await (const c of req) {
     const buf = c as Buffer;
     total += buf.length;
-    if (total > MAX_BODY_BYTES) throw new BodyTooLarge("request body too large");
+    if (total > MAX_BODY_BYTES)
+      throw new BodyTooLarge("request body too large");
     chunks.push(buf);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
@@ -280,7 +281,9 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
         .trim()
         .toLowerCase();
       if (ct !== "application/json") {
-        return send(res, 415, { error: "content_type_must_be_application_json" });
+        return send(res, 415, {
+          error: "content_type_must_be_application_json",
+        });
       }
     }
 
@@ -293,6 +296,10 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
           pause_reason: trust.pauseReason,
           last_finalized_key_refresh_ms: trust.lastFinalizedKeyRefreshMs,
           onchain_key_monitoring: trust.onchainKeyMonitoring,
+          transport_state: trust.transportState,
+          transport_pause_reason: trust.transportPauseReason,
+          transport_recovery_attempts: trust.transportRecoveryAttempts,
+          transport_next_attempt_ms: trust.transportNextAttemptMs,
         },
       });
     }

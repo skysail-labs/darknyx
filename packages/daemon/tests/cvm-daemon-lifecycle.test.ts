@@ -43,7 +43,10 @@ import WebSocket from "ws";
 
 import { createDcapQuoteVerifier, parseEventLog } from "@darknyx/sdk";
 import type { NodeWebSocketLike } from "@darknyx/sdk/transport-node";
-import { buildDaemonTransport } from "../src/transport.js";
+import {
+  buildDaemonTransport,
+  DaemonTransportSupervisor,
+} from "../src/transport.js";
 import {
   findAssociatedTokenPda,
   getCreateAssociatedTokenIdempotentInstruction,
@@ -137,7 +140,18 @@ function mintToIx(
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
+const RESTART_READY_PATH = resolve(
+  REPO_ROOT,
+  ".devnet/cvm-daemon-restart-ready.json",
+);
+const RESTART_RESULT_PATH = resolve(
+  REPO_ROOT,
+  ".devnet/cvm-daemon-restart-result.json",
+);
 /**
  * Leak guard, ported from `cvm-daemon-smoke` when that suite was retired into
  * this one. Under `ra-tls`, NOTHING may reach the CVM on global `fetch`.
@@ -171,6 +185,7 @@ const transportLeaks: string[] = [];
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 
 const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
+const RESTART_DRILL = process.env.RUN_CVM_DAEMON_RESTART_DRILL === "1";
 
 /**
  * One transport for the whole file, selected exactly as the daemon entrypoint
@@ -181,9 +196,9 @@ const RATLS = process.env.DARKNYX_CVM_TRANSPORT === "ra-tls";
  * silently UNRUNNABLE — it died on DEPTH_ZERO_SELF_SIGNED_CERT before reaching
  * a single assertion.
  */
-let sharedTransport: Awaited<ReturnType<typeof buildDaemonTransport>>;
+let transportSupervisor: DaemonTransportSupervisor;
 const tfetch: typeof fetch = ((i: never, init: never) =>
-  sharedTransport.fetch(i, init)) as typeof fetch;
+  transportSupervisor.fetch(i, init)) as typeof fetch;
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 const READY =
   process.env.RUN_CVM_DAEMON_LIFECYCLE === "1" &&
@@ -286,8 +301,25 @@ async function ensureFunded(
 
 interface E2EConfig {
   vaultProgramId: string;
+  quoteMint?: { pubkey: string };
+  baseMint?: { pubkey: string };
+  markets?: Array<{
+    symbol: string;
+    quoteMint: { pubkey: string };
+    baseMint: { pubkey: string };
+  }>;
+}
+
+function configuredMarket(cfg: E2EConfig): {
   quoteMint: { pubkey: string };
   baseMint: { pubkey: string };
+} {
+  const market = cfg.markets?.find((candidate) => candidate.symbol === SYMBOL);
+  if (market) return market;
+  if (cfg.quoteMint && cfg.baseMint) {
+    return { quoteMint: cfg.quoteMint, baseMint: cfg.baseMint };
+  }
+  throw new Error(`${CONFIG_PATH} does not define market ${SYMBOL}`);
 }
 
 async function authToken(): Promise<string> {
@@ -466,43 +498,143 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     return n;
   }
 
+  /**
+   * Billable D2 closure leg. The test writes a public marker, then an external
+   * operator redeploys the same reviewed compose while this process and its
+   * subscriptions stay alive. Requests keep probing through the OLD verified
+   * generation until its typed refusal trips the supervisor; no test-only
+   * recovery call is used.
+   */
+  async function awaitSupervisedBootRotation(): Promise<void> {
+    const before = buyer.getAttestation()?.bootSessionId;
+    expect(
+      before,
+      "restart drill requires strict application attestation",
+    ).toMatch(/^[0-9a-f]{64}$/);
+    const startedMs = Date.now();
+    const rssBeforeMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    writeFileSync(
+      RESTART_READY_PATH,
+      `${JSON.stringify({ boot_session_id: before, ready_at_ms: startedMs })}\n`,
+      { mode: 0o600 },
+    );
+    console.log(`  · CVM_RESTART_READY boot=${before} rss_mb=${rssBeforeMb}`);
+
+    const states = new Set<string>();
+    // `reconciling` can be shorter than a polling interval on an empty state
+    // set. The daemon emits its reconciliation boundary synchronously, so use
+    // that event as the non-sampling record while retaining status polling for
+    // the longer transport states.
+    const unsubscribeStateEvents = buyer.subscribe((event) => {
+      if (event.type === "error" && event.context === "reconcile") {
+        states.add("reconciling");
+      }
+    });
+    let requestFailures = 0;
+    let recoveryObserved = false;
+    const deadline = startedMs + 240_000;
+    while (Date.now() < deadline) {
+      if (!recoveryObserved) {
+        try {
+          await buyer.tee.serverTime();
+        } catch {
+          requestFailures += 1;
+        }
+      }
+      const trust = buyer.getTrustStatus();
+      states.add(trust.transportState);
+      recoveryObserved ||= trust.transportState !== "ready";
+      const after = buyer.getAttestation()?.bootSessionId;
+      if (
+        recoveryObserved &&
+        trust.transportState === "ready" &&
+        after !== undefined &&
+        after !== before
+      ) {
+        const finishedMs = Date.now();
+        const rssAfterMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+        const result = {
+          before_boot_session_id: before,
+          after_boot_session_id: after,
+          recovery_ms: finishedMs - startedMs,
+          request_failures: requestFailures,
+          states: [...states],
+          final_attempts: trust.transportRecoveryAttempts,
+          rss_before_mb: rssBeforeMb,
+          rss_after_mb: rssAfterMb,
+          rss_delta_mb: rssAfterMb - rssBeforeMb,
+        };
+        writeFileSync(
+          RESTART_RESULT_PATH,
+          `${JSON.stringify(result, null, 2)}\n`,
+          { mode: 0o600 },
+        );
+        console.log(`  · CVM_RESTART_RECOVERED ${JSON.stringify(result)}`);
+        expect(states.has("reverifying")).toBe(true);
+        expect(states.has("reconciling")).toBe(true);
+        unsubscribeStateEvents();
+        return;
+      }
+      await sleep(recoveryObserved ? 100 : 500);
+    }
+    unsubscribeStateEvents();
+    throw new Error(
+      `daemon did not recover from a real boot rotation; states=${[
+        ...states,
+      ].join(",")} failures=${requestFailures}`,
+    );
+  }
+
   beforeAll(async () => {
     // Built before any gateway call: `/auth/token` below exchanges an API
     // secret for a bearer token and must not travel on global fetch.
-    sharedTransport = await buildDaemonTransport(
-      {
-        gatewayUrl: GATEWAY,
-        transportMode: RATLS
-          ? ("ra-tls" as const)
-          : ("gateway-terminated" as const),
-        ...(RATLS
-          ? {
-              expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
-              attestation: {
-                composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
-              },
-            }
-          : {}),
-      } as DaemonConfig,
-      {
-        verifierDeps: {
-          verifyQuote: (q: string) =>
-            createDcapQuoteVerifier({})(
-              Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
-            ),
-          parseEventLog,
-          randomNonce: () => new Uint8Array(randomBytes(32)),
+    let supervisorRef: DaemonTransportSupervisor | undefined;
+    const buildTransport = () =>
+      buildDaemonTransport(
+        {
+          gatewayUrl: GATEWAY,
+          transportMode: RATLS
+            ? ("ra-tls" as const)
+            : ("gateway-terminated" as const),
+          deploymentTier: RATLS ? "production" : "development",
+          allowLegacyTransport: !RATLS,
+          ...(RATLS
+            ? {
+                expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
+                attestation: {
+                  composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+                  teePubkey: process.env.DARKNYX_EXPECT_TEE_PUBKEY,
+                },
+              }
+            : {}),
+        } as DaemonConfig,
+        {
+          verifierDeps: {
+            verifyQuote: (q: string) =>
+              createDcapQuoteVerifier({})(
+                Uint8Array.from(q.match(/../g)!.map((b) => parseInt(b, 16))),
+              ),
+            parseEventLog,
+            randomNonce: () => new Uint8Array(randomBytes(32)),
+          },
+          ...(RATLS
+            ? {
+                createWebSocket: (u: string) =>
+                  new WebSocket(u, {
+                    rejectUnauthorized: false,
+                  }) as unknown as NodeWebSocketLike,
+              }
+            : {}),
+          onTransportViolation: (error) =>
+            supervisorRef?.reportViolation(error),
         },
-        ...(RATLS
-          ? {
-              createWebSocket: (u: string) =>
-                new WebSocket(u, {
-                  rejectUnauthorized: false,
-                }) as unknown as NodeWebSocketLike,
-            }
-          : {}),
-      },
+      );
+    const initialTransport = await buildTransport();
+    transportSupervisor = new DaemonTransportSupervisor(
+      initialTransport,
+      buildTransport,
     );
+    supervisorRef = transportSupervisor;
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
     conn = new Connection(RPC, "confirmed");
     admin = await loadKp(
@@ -517,8 +649,9 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     );
     await ensureFunded(conn, funder, buyerPayer.publicKey);
     await ensureFunded(conn, funder, sellerPayer.publicKey);
-    quoteMint = new PublicKey(cfg.quoteMint.pubkey);
-    baseMint = new PublicKey(cfg.baseMint.pubkey);
+    const market = configuredMarket(cfg);
+    quoteMint = new PublicKey(market.quoteMint.pubkey);
+    baseMint = new PublicKey(market.baseMint.pubkey);
     programId = new PublicKey(cfg.vaultProgramId);
     token = await authToken();
 
@@ -537,11 +670,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       transportMode: RATLS
         ? ("ra-tls" as const)
         : ("gateway-terminated" as const),
+      deploymentTier: RATLS ? "production" : "development",
+      allowLegacyTransport: !RATLS,
       ...(RATLS
         ? {
             expectSignerSetSha256: process.env.DARKNYX_EXPECT_SIGNER_SET,
             attestation: {
               composeHash: process.env.DARKNYX_EXPECT_COMPOSE_HASH,
+              teePubkey: process.env.DARKNYX_EXPECT_TEE_PUBKEY,
             },
           }
         : {}),
@@ -556,9 +692,11 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       thresholds: {
         mergeThreshold: 2,
       },
-      // Functional lifecycle test — dev-partial attestation (not strict DCAP).
-      attestationStrict: false,
-      attestOnchainCheck: false,
+      // The restart drill exercises the production application/governance
+      // verification path; ordinary lifecycle runs keep their cheaper partial
+      // attestation mode.
+      attestationStrict: RESTART_DRILL,
+      attestOnchainCheck: RESTART_DRILL,
       programId: cfg.vaultProgramId,
     };
     const { client, merkleProvider } = createMergeClient({
@@ -580,11 +718,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       // over the selected transport. Omitting these left the daemon's own
       // attestation fetch on global fetch, which fails closed against the
       // enclave's self-signed certificate.
-      fetchImpl: sharedTransport.fetch,
-      ...(sharedTransport.webSocketFactory
+      fetchImpl: transportSupervisor.fetch,
+      transportSupervisor,
+      streamTokenProvider: authToken,
+      quoteVerifier: createDcapQuoteVerifier({}),
+      ...(RATLS
         ? {
             sendableWebSocketFactory:
-              sharedTransport.webSocketFactory as ConstructorParameters<
+              transportSupervisor.webSocketFactory as ConstructorParameters<
                 typeof Daemon
               >[0]["sendableWebSocketFactory"],
           }
@@ -620,15 +761,19 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
         // placing orders over a peer nothing verified. This was the cause of
         // the live "WebSocket transport error" on this suite: the injected
         // placer bypassed the transport the rest of the daemon was using.
-        ...(sharedTransport.webSocketFactory
+        ...(RATLS
           ? {
               webSocketFactory:
-                sharedTransport.webSocketFactory as ConstructorParameters<
+                transportSupervisor.webSocketFactory as ConstructorParameters<
                   typeof WsOrderPlacer
                 >[0]["webSocketFactory"],
             }
           : {}),
       }),
+      // The restart leg measures the one reconciliation that follows a real
+      // transport-generation swap. Skipping the redundant pre-marker scan
+      // keeps the billable choreography deterministic.
+      reconcileOnStart: !RESTART_DRILL,
       settlementPollMs: 2000,
     });
   });
@@ -673,7 +818,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     const note = buyer.getNote(dep.commitment)!;
 
     const before = await leafCount();
-    const { orderId } = await buyer.placeOrder(
+    let { orderId } = await buyer.placeOrder(
       {
         symbol: SYMBOL,
         side: OrderSide.Bid,
@@ -686,6 +831,50 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       note,
     );
     expect(buyer.getOrder(orderId)?.phase).toBe("open");
+
+    // Rotate only after collateral is reserved by a real resting order. The
+    // recovery must reconcile that exact order without re-signing or silently
+    // rebooking it before any fresh post-recovery action is allowed.
+    if (RESTART_DRILL) {
+      await awaitSupervisedBootRotation();
+      expect(buyer.getOrder(orderId)?.phase).toBe("open");
+      const forgotten = await tfetch(`${GATEWAY}/orders/${orderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(forgotten.status, "pre-restart order was silently rebooked").toBe(
+        404,
+      );
+
+      // The enclave's in-memory book is intentionally empty after a boot. A
+      // missing order remains reserved locally; recovery must never invent a
+      // cancellation and free its collateral. Resume with an explicit fresh
+      // note + signed order, which is the operator action the product requires.
+      await sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(mintToIx(quoteMint, buyerAta, admin, collateral)),
+        [admin],
+      );
+      const freshDeposit = await buyer.deposit({
+        tokenMint: quoteMint.toBytes(),
+        amount: collateral,
+        depositorTokenAccount: buyerAta,
+      });
+      await waitForLeaf(freshDeposit.commitment, token);
+      const freshNote = buyer.getNote(freshDeposit.commitment)!;
+      ({ orderId } = await buyer.placeOrder(
+        {
+          symbol: SYMBOL,
+          side: OrderSide.Bid,
+          policy: limitPolicy({
+            priceLimit: bidPrice,
+            expirySlot: await futureExpiry(),
+          }),
+          amount: buyQty,
+        },
+        freshNote,
+      ));
+      expect(buyer.getOrder(orderId)?.phase).toBe("open");
+    }
 
     // ── crossing ask → partial fill ──
     await sellerAsk(SLICE, askPrice);
@@ -700,7 +889,31 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       await sleep(3000);
     }
     expect(after, "settle did not land").toBeGreaterThanOrEqual(before + 3);
-    await sleep(5000); // let the fills WS memo + the daemon dispatch settle
+    // The leaf append precedes the matcher lifecycle commit. Wait for the
+    // confirmed partial-fill transition before trying to cancel the residual;
+    // cancelling `pending_settlement` is correctly rejected by the venue.
+    let cvmOrderStatus = "";
+    const lifecycleDeadline = Date.now() + 60_000;
+    while (Date.now() < lifecycleDeadline) {
+      const response = await tfetch(`${GATEWAY}/orders/${orderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (response.status === 200) {
+        cvmOrderStatus = ((await response.json()) as { status: string }).status;
+      }
+      if (
+        // The REST book exposes a confirmed partial residual as the resting
+        // `pending` state; `partially_filled` is the account-stream event that
+        // drives the daemon back to its local `open` phase.
+        cvmOrderStatus === "pending" &&
+        buyer.getOrder(orderId)?.phase === "open"
+      ) {
+        break;
+      }
+      await sleep(1000);
+    }
+    expect(cvmOrderStatus, "partial fill was not committed").toBe("pending");
+    expect(buyer.getOrder(orderId)?.phase).toBe("open");
     // ── diagnostics ──
     console.log(
       `  · leaf ${before}→${after} | events=${JSON.stringify(

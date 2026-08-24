@@ -22,20 +22,24 @@ import type { ExpectedMeasurements } from "./attestation.js";
  * exists.
  */
 export type DaemonTransportMode = "ra-tls" | "gateway-terminated";
+export type DaemonDeploymentTier = "production" | "development" | "simulator";
 
 export interface DaemonConfig {
-  /** CVM gateway origin, e.g. `https://<app>-8080.dstack-pha-prod5.phala.network`. */
+  /** CVM RA-TLS origin, e.g. `https://<app>-8443s.dstack-pha-prod9.phala.network`. */
   gatewayUrl: string;
   /** CVM gateway WS origin. Defaults to `gatewayUrl` with `http(s)`→`ws(s)`. */
   gatewayWsUrl: string;
   /** Bearer token from `POST /auth/token`. */
   token: string;
   /**
-   * Transport the daemon requires (T-03P). Defaults to `gateway-terminated`
-   * so an upgrade cannot silently change how an existing deployment connects;
-   * turning on RA-TLS is a deliberate act.
+   * Transport the daemon requires (T-03P). Defaults to `ra-tls`; the legacy
+   * path is an explicit non-production exception.
    */
   transportMode: DaemonTransportMode;
+  /** Security policy tier. Production permits only quote-bound RA-TLS. */
+  deploymentTier: DaemonDeploymentTier;
+  /** Explicit acknowledgement required for the legacy transport in non-production. */
+  allowLegacyTransport: boolean;
   /**
    * SHA-256 over the on-chain `VaultConfig.tee_pubkeys` in shard order, hex.
    * Required when `transportMode` is `ra-tls`: without it a verified transport
@@ -133,6 +137,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       ),
     },
     transportMode: parseTransportMode(env),
+    deploymentTier: parseDeploymentTier(env),
+    allowLegacyTransport: env.DARKNYX_DAEMON_ALLOW_LEGACY_TRANSPORT === "1",
     expectSignerSetSha256: env.DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256,
     attestation: parseExpected(env),
     attestationStrict: env.DARKNYX_DAEMON_ATTEST_STRICT !== "0",
@@ -151,7 +157,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
  * than run in a state that reads as secure and is not.
  */
 export function assertTransportConfigCoherent(cfg: DaemonConfig): void {
-  if (cfg.transportMode !== "ra-tls") return;
+  if (cfg.transportMode === "gateway-terminated") {
+    if (cfg.deploymentTier === "production") {
+      throw new Error(
+        "DARKNYX_DAEMON_TRANSPORT_MODE=gateway-terminated is forbidden in production",
+      );
+    }
+    if (!cfg.allowLegacyTransport) {
+      throw new Error(
+        "gateway-terminated transport requires " +
+          "DARKNYX_DAEMON_ALLOW_LEGACY_TRANSPORT=1 in development or simulator mode",
+      );
+    }
+    return;
+  }
   const missing: string[] = [];
   if (!cfg.attestation?.composeHash) {
     missing.push("DARKNYX_DAEMON_EXPECT_COMPOSE_HASH");
@@ -171,19 +190,31 @@ export function assertTransportConfigCoherent(cfg: DaemonConfig): void {
 /**
  * Parse `DARKNYX_DAEMON_TRANSPORT_MODE`.
  *
- * Unset or empty is the legacy default. A set but unrecognised value is a hard
+ * Unset or empty selects RA-TLS. A set but unrecognised value is a hard
  * error rather than a fallback — a typo like `ratls` must not leave an operator
  * on the weaker transport believing they enabled the stronger one. Mirrors the
  * same rule on the TEE side (`DARKNYX_TEE_TRANSPORT_MODE`).
  */
 function parseTransportMode(env: NodeJS.ProcessEnv): DaemonTransportMode {
   const raw = env.DARKNYX_DAEMON_TRANSPORT_MODE?.trim();
-  if (!raw) return "gateway-terminated";
+  if (!raw) return "ra-tls";
   if (raw === "ra-tls" || raw === "gateway-terminated") return raw;
   throw new Error(
     `DARKNYX_DAEMON_TRANSPORT_MODE=${JSON.stringify(raw)} is not recognised; ` +
       'expected "ra-tls" or "gateway-terminated". Refusing to start rather ' +
       "than silently falling back to the legacy transport.",
+  );
+}
+
+function parseDeploymentTier(env: NodeJS.ProcessEnv): DaemonDeploymentTier {
+  const raw = env.DARKNYX_DAEMON_DEPLOYMENT_TIER?.trim();
+  if (!raw) return "production";
+  if (raw === "production" || raw === "development" || raw === "simulator") {
+    return raw;
+  }
+  throw new Error(
+    `DARKNYX_DAEMON_DEPLOYMENT_TIER=${JSON.stringify(raw)} is not recognised; ` +
+      'expected "production", "development", or "simulator".',
   );
 }
 

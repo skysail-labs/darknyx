@@ -564,6 +564,7 @@ async fn main() -> Result<()> {
     let api_state = api_state
         .with_instruments(instruments)
         .with_oracle_mode(cfg.oracle_mode)
+        .with_transport_mode(cfg.transport_mode)
         .with_market_runtimes(matchers, current_slot, oracle.clone())
         .with_market_trading_gates(market_gates)
         .with_settle_state(settle_state)

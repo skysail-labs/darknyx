@@ -32,6 +32,7 @@ export {
 
 export {
   createVerifiedTransport,
+  TransportVerificationError,
   type CreateVerifiedTransportOptions,
   type VerifiedTransport,
 } from "./tee/transport.node.js";

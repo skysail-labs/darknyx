@@ -100,6 +100,7 @@ function attestFetch(
     bindWrongKey?: boolean;
     staleNonce?: boolean;
     bootSessionId?: string;
+    transportMode?: unknown;
     /** Override the served event log (CA-01 forgery cases). */
     eventLog?: EventLogEntry[];
   } = {},
@@ -135,6 +136,7 @@ function attestFetch(
           app_id: "app_x",
           compose_hash: composeHash,
           boot_session_id: opts.bootSessionId ?? "5a".repeat(32),
+          transport_mode: opts.transportMode ?? "gateway-terminated",
           tcb_info: { mrtd: MRTD }, // B-1: nested, not top-level
           tee_pubkey: teePubkey,
         }),
@@ -175,6 +177,32 @@ describe("verifyAttestation — strict DCAP", () => {
     expect(r.teePubkey).toBe(TEE_PUBKEY_B58);
     expect(r.composeHash).toBe(COMPOSE);
     expect(r.dcapVerified).toBe(true);
+    expect(r.transportMode).toBe("gateway-terminated");
+  });
+
+  it("rejects a server mode that disagrees with the daemon policy", async () => {
+    await expect(
+      verifyAttestation({
+        gatewayUrl: GW,
+        token: TOKEN,
+        fetchImpl: attestFetch(),
+        quoteVerifier: goodVerifier(),
+        expected: PINS,
+        expectedTransportMode: "ra-tls",
+      }),
+    ).rejects.toMatchObject({ kind: "malformed" });
+  });
+
+  it("rejects an absent or unknown server transport mode", async () => {
+    await expect(
+      verifyAttestation({
+        gatewayUrl: GW,
+        token: TOKEN,
+        fetchImpl: attestFetch({ transportMode: "plaintext" }),
+        quoteVerifier: goodVerifier(),
+        expected: PINS,
+      }),
+    ).rejects.toMatchObject({ kind: "malformed" });
   });
 
   it("rejects a malformed boot session before trading", async () => {
@@ -376,6 +404,8 @@ describe("Daemon — attestation gate", () => {
     // Legacy path: predates T-03P and exercises the gateway-terminated
     // transport. Stated rather than defaulted.
     transportMode: "gateway-terminated" as const,
+    deploymentTier: "simulator" as const,
+    allowLegacyTransport: true,
     gatewayWsUrl: "wss://gw",
     token: TOKEN,
     rpcUrl: "https://rpc",
@@ -398,6 +428,7 @@ describe("Daemon — attestation gate", () => {
     mrtd: MRTD,
     quote: "q",
     dcapVerified: true,
+    transportMode: "gateway-terminated" as const,
   });
 
   it("refuses to start when attestation fails", async () => {

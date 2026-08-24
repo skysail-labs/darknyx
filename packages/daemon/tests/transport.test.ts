@@ -10,7 +10,11 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDaemonTransport } from "../src/transport.js";
-import { assertTransportConfigCoherent, type DaemonConfig } from "../src/config.js";
+import {
+  assertTransportConfigCoherent,
+  loadConfig,
+  type DaemonConfig,
+} from "../src/config.js";
 
 const SIGNER_SET = "33".repeat(32);
 const COMPOSE = "aa".repeat(32);
@@ -21,6 +25,8 @@ function cfg(over: Partial<DaemonConfig> = {}): DaemonConfig {
     gatewayWsUrl: "wss://example",
     token: "t",
     transportMode: "gateway-terminated",
+    deploymentTier: "simulator",
+    allowLegacyTransport: true,
     rpcUrl: "https://rpc",
     dbPath: ":memory:",
     controlPort: 0,
@@ -88,12 +94,81 @@ describe("assertTransportConfigCoherent", () => {
   });
 });
 
+describe("loadConfig — production transport policy", () => {
+  const base = (): NodeJS.ProcessEnv => ({
+    DARKNYX_DAEMON_GATEWAY_URL: "https://example",
+    DARKNYX_DAEMON_TOKEN: "t",
+    DARKNYX_DAEMON_RPC_URL: "https://rpc",
+    DARKNYX_DAEMON_EXPECT_COMPOSE_HASH: COMPOSE,
+    DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256: SIGNER_SET,
+  });
+
+  it("defaults to production RA-TLS", () => {
+    const loaded = loadConfig(base());
+    expect(loaded.transportMode).toBe("ra-tls");
+    expect(loaded.deploymentTier).toBe("production");
+  });
+
+  it("refuses the default RA-TLS mode when its governance pins are absent", () => {
+    expect(() =>
+      loadConfig({
+        DARKNYX_DAEMON_GATEWAY_URL: "https://example",
+        DARKNYX_DAEMON_TOKEN: "t",
+        DARKNYX_DAEMON_RPC_URL: "https://rpc",
+      }),
+    ).toThrow(/EXPECT_COMPOSE_HASH.*EXPECT_SIGNER_SET_SHA256/);
+  });
+
+  it("rejects gateway termination in production", () => {
+    expect(() =>
+      loadConfig({
+        ...base(),
+        DARKNYX_DAEMON_TRANSPORT_MODE: "gateway-terminated",
+        DARKNYX_DAEMON_ALLOW_LEGACY_TRANSPORT: "1",
+      }),
+    ).toThrow(/forbidden in production/);
+  });
+
+  it("requires an explicit legacy acknowledgement in development", () => {
+    const env = {
+      ...base(),
+      DARKNYX_DAEMON_DEPLOYMENT_TIER: "development",
+      DARKNYX_DAEMON_TRANSPORT_MODE: "gateway-terminated",
+    };
+    expect(() => loadConfig(env)).toThrow(/ALLOW_LEGACY_TRANSPORT/);
+    expect(
+      loadConfig({ ...env, DARKNYX_DAEMON_ALLOW_LEGACY_TRANSPORT: "1" })
+        .transportMode,
+    ).toBe("gateway-terminated");
+  });
+
+  it("rejects a deployment-tier typo", () => {
+    expect(() =>
+      loadConfig({ ...base(), DARKNYX_DAEMON_DEPLOYMENT_TIER: "prod" }),
+    ).toThrow(/DEPLOYMENT_TIER/);
+  });
+
+  it("rejects a transport-mode typo instead of falling back", () => {
+    expect(() =>
+      loadConfig({ ...base(), DARKNYX_DAEMON_TRANSPORT_MODE: "ratls" }),
+    ).toThrow(/TRANSPORT_MODE/);
+  });
+});
+
 describe("buildDaemonTransport — legacy mode", () => {
   it("returns a plain fetch and never reports staleness", async () => {
     const t = await buildDaemonTransport(cfg(), { verifierDeps: {} as never });
     expect(t.mode).toBe("gateway-terminated");
     expect(t.webSocketFactory).toBeUndefined();
     expect(t.isStale()).toBe(false);
+  });
+
+  it("rejects a hand-built production legacy config", async () => {
+    await expect(
+      buildDaemonTransport(cfg({ deploymentTier: "production" }), {
+        verifierDeps: {} as never,
+      }),
+    ).rejects.toThrow(/forbidden in production/);
   });
 });
 
@@ -118,28 +193,28 @@ describe("buildDaemonTransport — ra-tls refuses to half-protect", () => {
     // This module is reachable from a hand-built config, so it re-checks
     // rather than trusting loadConfig to have run.
     await expect(
-      buildDaemonTransport(
-        ratls({ attestation: undefined }),
-        { verifierDeps: {} as never, createWebSocket: () => ({}) as never },
-      ),
-    ).rejects.toThrow(/compose hash/i);
+      buildDaemonTransport(ratls({ attestation: undefined }), {
+        verifierDeps: {} as never,
+        createWebSocket: () => ({}) as never,
+      }),
+    ).rejects.toThrow(/EXPECT_COMPOSE_HASH|compose hash/i);
   });
 
   it("refuses a signer-set pin that is not 32 bytes", async () => {
     await expect(
-      buildDaemonTransport(
-        ratls({ expectSignerSetSha256: "aabb" }),
-        { verifierDeps: {} as never, createWebSocket: () => ({}) as never },
-      ),
+      buildDaemonTransport(ratls({ expectSignerSetSha256: "aabb" }), {
+        verifierDeps: {} as never,
+        createWebSocket: () => ({}) as never,
+      }),
     ).rejects.toThrow(/32 bytes/);
   });
 
   it("refuses a signer-set pin that is not hex", async () => {
     await expect(
-      buildDaemonTransport(
-        ratls({ expectSignerSetSha256: "zz".repeat(32) }),
-        { verifierDeps: {} as never, createWebSocket: () => ({}) as never },
-      ),
+      buildDaemonTransport(ratls({ expectSignerSetSha256: "zz".repeat(32) }), {
+        verifierDeps: {} as never,
+        createWebSocket: () => ({}) as never,
+      }),
     ).rejects.toThrow(/valid hex/);
   });
 });

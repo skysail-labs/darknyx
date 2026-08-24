@@ -36,6 +36,7 @@ import {
   teeKeySetBytes,
   verifyReportAgainstExpected,
 } from "@darknyx/sdk";
+import type { DaemonTransportMode } from "./config.js";
 
 // Re-export the shared types so existing daemon imports (config.ts, daemon.ts,
 // bin/daemon.ts) keep resolving through this module. QuoteVerifier +
@@ -57,6 +58,7 @@ export interface TeeInfo {
   teePubkey: string; // base58 (shard-0 primary)
   teePubkeys: string[]; // full K-shard set, shard order
   bootSessionId: string; // 32-byte hex, fresh per CVM boot
+  transportMode: DaemonTransportMode;
 }
 
 export interface AttestationQuote {
@@ -80,12 +82,14 @@ export interface AttestationResult {
    * 32-byte boot-session id, hex — the S-07 session scope signed into every
    * order and cancel.
    *
-   * **NOT ATTESTED (SW-18).** Every other field on this object is either
-   * DCAP-derived or quote-bound; this one is read from the unauthenticated
-   * `/info` and simply carried alongside `dcapVerified: true`. The quote's
+   * **Not bound by the legacy application quote (SW-18).** This value is read
+   * from `/info`. Under RA-TLS, the daemon cross-checks it against the separately
+   * quote-bound transport boot before use; legacy gateway mode has only the
+   * weaker denial-of-service ceiling described below. The application quote's
    * `report_data` is `nonce ‖ SHA-256(signer_set)` and is FULL at 64 bytes, so
    * there is no room to bind the session without changing what `report_data`
-   * commits to (the reason T-03 stayed deferred).
+   * commits to. Transport uses its own per-request quote instead of changing
+   * this application-attestation contract.
    *
    * The ceiling is low and worth stating so nobody over-reacts to this comment:
    * the TEE validates the session at intake, so a gateway serving a WRONG value
@@ -95,6 +99,8 @@ export interface AttestationResult {
    * cover, and a reader should not infer otherwise from its neighbours.
    */
   bootSessionId: string;
+  /** Server-reported policy, cross-checked against the locally required mode. */
+  transportMode: DaemonTransportMode;
 }
 
 /**
@@ -184,9 +190,16 @@ export async function fetchInfo(
     tee_pubkey: string;
     tee_pubkeys?: string[];
     boot_session_id: string;
+    transport_mode: unknown;
   }>(new URL("/info", gatewayUrl).toString(), token, fetchImpl);
   if (!/^[0-9a-fA-F]{64}$/.test(b.boot_session_id)) {
     throw new AttestationError("invalid /info boot_session_id", "malformed");
+  }
+  if (
+    b.transport_mode !== "ra-tls" &&
+    b.transport_mode !== "gateway-terminated"
+  ) {
+    throw new AttestationError("invalid /info transport_mode", "malformed");
   }
   return {
     appId: b.app_id,
@@ -195,6 +208,7 @@ export async function fetchInfo(
     teePubkey: b.tee_pubkey,
     teePubkeys: b.tee_pubkeys ?? [b.tee_pubkey],
     bootSessionId: b.boot_session_id,
+    transportMode: b.transport_mode,
   };
 }
 
@@ -236,6 +250,8 @@ export interface VerifyAttestationOptions {
   strict?: boolean;
   /** Accepted TCB statuses. Defaults to {@link DEFAULT_TCB_ALLOWLIST}. */
   tcbAllowlist?: readonly string[];
+  /** Operational mode the daemon selected locally; disagreement is fatal. */
+  expectedTransportMode?: DaemonTransportMode;
 }
 
 /**
@@ -258,6 +274,15 @@ export async function verifyAttestation(
   // /info gives the full K-shard set the quote's report_data binds. Fetch it up
   // front (both paths need it), and tie shard 0 to the attestation.
   const info = await fetchInfo(opts.gatewayUrl, opts.token, fetchImpl);
+  if (
+    opts.expectedTransportMode &&
+    info.transportMode !== opts.expectedTransportMode
+  ) {
+    throw new AttestationError(
+      `/info transport_mode ${info.transportMode} != expected ${opts.expectedTransportMode}`,
+      "malformed",
+    );
+  }
   if (info.teePubkey !== att.teePubkey) {
     throw new AttestationError(
       "/info tee_pubkey != /attestation tee_pubkey",
@@ -328,6 +353,7 @@ export async function verifyAttestation(
       quote: att.quote,
       dcapVerified: true,
       bootSessionId: info.bootSessionId,
+      transportMode: info.transportMode,
     };
   }
 
@@ -360,5 +386,6 @@ export async function verifyAttestation(
     quote: att.quote,
     dcapVerified: false,
     bootSessionId: info.bootSessionId,
+    transportMode: info.transportMode,
   };
 }
