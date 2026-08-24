@@ -140,7 +140,10 @@ function mintToIx(
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 const RESTART_READY_PATH = resolve(
   REPO_ROOT,
   ".devnet/cvm-daemon-restart-ready.json",
@@ -298,8 +301,25 @@ async function ensureFunded(
 
 interface E2EConfig {
   vaultProgramId: string;
+  quoteMint?: { pubkey: string };
+  baseMint?: { pubkey: string };
+  markets?: Array<{
+    symbol: string;
+    quoteMint: { pubkey: string };
+    baseMint: { pubkey: string };
+  }>;
+}
+
+function configuredMarket(cfg: E2EConfig): {
   quoteMint: { pubkey: string };
   baseMint: { pubkey: string };
+} {
+  const market = cfg.markets?.find((candidate) => candidate.symbol === SYMBOL);
+  if (market) return market;
+  if (cfg.quoteMint && cfg.baseMint) {
+    return { quoteMint: cfg.quoteMint, baseMint: cfg.baseMint };
+  }
+  throw new Error(`${CONFIG_PATH} does not define market ${SYMBOL}`);
 }
 
 async function authToken(): Promise<string> {
@@ -618,8 +638,9 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     );
     await ensureFunded(conn, funder, buyerPayer.publicKey);
     await ensureFunded(conn, funder, sellerPayer.publicKey);
-    quoteMint = new PublicKey(cfg.quoteMint.pubkey);
-    baseMint = new PublicKey(cfg.baseMint.pubkey);
+    const market = configuredMarket(cfg);
+    quoteMint = new PublicKey(market.quoteMint.pubkey);
+    baseMint = new PublicKey(market.baseMint.pubkey);
     programId = new PublicKey(cfg.vaultProgramId);
     token = await authToken();
 
@@ -786,7 +807,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     const note = buyer.getNote(dep.commitment)!;
 
     const before = await leafCount();
-    const { orderId } = await buyer.placeOrder(
+    let { orderId } = await buyer.placeOrder(
       {
         symbol: SYMBOL,
         side: OrderSide.Bid,
@@ -806,6 +827,42 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     if (RESTART_DRILL) {
       await awaitSupervisedBootRotation();
       expect(buyer.getOrder(orderId)?.phase).toBe("open");
+      const forgotten = await tfetch(`${GATEWAY}/orders/${orderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(forgotten.status, "pre-restart order was silently rebooked").toBe(
+        404,
+      );
+
+      // The enclave's in-memory book is intentionally empty after a boot. A
+      // missing order remains reserved locally; recovery must never invent a
+      // cancellation and free its collateral. Resume with an explicit fresh
+      // note + signed order, which is the operator action the product requires.
+      await sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(mintToIx(quoteMint, buyerAta, admin, collateral)),
+        [admin],
+      );
+      const freshDeposit = await buyer.deposit({
+        tokenMint: quoteMint.toBytes(),
+        amount: collateral,
+        depositorTokenAccount: buyerAta,
+      });
+      await waitForLeaf(freshDeposit.commitment, token);
+      const freshNote = buyer.getNote(freshDeposit.commitment)!;
+      ({ orderId } = await buyer.placeOrder(
+        {
+          symbol: SYMBOL,
+          side: OrderSide.Bid,
+          policy: limitPolicy({
+            priceLimit: bidPrice,
+            expirySlot: await futureExpiry(),
+          }),
+          amount: buyQty,
+        },
+        freshNote,
+      ));
+      expect(buyer.getOrder(orderId)?.phase).toBe("open");
     }
 
     // ── crossing ask → partial fill ──
@@ -821,7 +878,31 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       await sleep(3000);
     }
     expect(after, "settle did not land").toBeGreaterThanOrEqual(before + 3);
-    await sleep(5000); // let the fills WS memo + the daemon dispatch settle
+    // The leaf append precedes the matcher lifecycle commit. Wait for the
+    // confirmed partial-fill transition before trying to cancel the residual;
+    // cancelling `pending_settlement` is correctly rejected by the venue.
+    let cvmOrderStatus = "";
+    const lifecycleDeadline = Date.now() + 60_000;
+    while (Date.now() < lifecycleDeadline) {
+      const response = await tfetch(`${GATEWAY}/orders/${orderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (response.status === 200) {
+        cvmOrderStatus = ((await response.json()) as { status: string }).status;
+      }
+      if (
+        // The REST book exposes a confirmed partial residual as the resting
+        // `pending` state; `partially_filled` is the account-stream event that
+        // drives the daemon back to its local `open` phase.
+        cvmOrderStatus === "pending" &&
+        buyer.getOrder(orderId)?.phase === "open"
+      ) {
+        break;
+      }
+      await sleep(1000);
+    }
+    expect(cvmOrderStatus, "partial fill was not committed").toBe("pending");
+    expect(buyer.getOrder(orderId)?.phase).toBe("open");
     // ── diagnostics ──
     console.log(
       `  · leaf ${before}→${after} | events=${JSON.stringify(

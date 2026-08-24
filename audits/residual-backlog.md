@@ -90,8 +90,8 @@ capture one authenticated request per won race. The rest is Low/Info
 (`TR-03…TR-09`, `PF-31`). The RA-TLS cryptographic core itself — manifest,
 identity, verification core, WS gate, Rust↔TS lockstep — read **clean**, and
 the CPU cutover evidence is corroborated by source. The 2026-08-23 follow-up
-nonetheless reopens T-03P until the implemented daemon recovery and
-production-mode policy gain CPU restart evidence and merge. TR-02's
+reopened T-03P until the daemon recovery and production-mode policy gained CPU
+restart evidence; PR #200 supplied that evidence and closure. TR-02's
 connector-level replacement refusal merged in PR #199; GPU parity remains a
 separately deferred deployment surface. `TR-01`
 and the browser `R-` queue are deferred with the browser product, with re-entry
@@ -430,11 +430,12 @@ CVM run to verify, not merely a green local gate.
 
 ## Release and external-use gates
 
-> **Transport status correction — 2026-08-23.** The T-03P row below preserves
+> **Transport status correction — 2026-08-24.** The T-03P row below preserves
 > the 2026-08-16 CPU cutover evidence, but its `Closed` label is superseded.
-> T-03P is **reopened for post-cutover hardening**. TR-02 merged in PR #199.
-> TR-03/TR-05 are code complete on the combined daemon lifecycle/policy branch;
-> they remain open pending the CPU restart drill, hosted review, and merge.
+> T-03P was reopened for post-cutover hardening. TR-02 merged in PR #199;
+> TR-03/TR-05 closed in PR #200 after a real CPU restart drill proved bounded
+> pause, re-attestation, finalized-governance verification, reconciliation,
+> explicit fresh placement, settlement, and cancellation without auto-rebook.
 > TR-10 leaves the separately deferred GPU compose
 > on plaintext. The ordered
 > execution plan is
@@ -531,9 +532,9 @@ and
 | PF-30 | Perf-Nit | Browser recovery | Sequential `getAccountInfo` per recovered note. Batch via the host's existing `getMultipleAccounts` allowlist. | **Open — `audit_8`.** |
 | TR-01 | **High** | Trader-host + T-03B | Gate the browser stream relay's upstream WebSocket if the browser product resumes: wrap the relay's `new WebSocket(...)` (`live-proxy.ts:382-388`) in the SDK's verified WebSocket factory, refusing and closing downstream on SPKI mismatch. This protects trader-host's upstream hop but does not remove trader-host's own plaintext visibility, so it is not T-03B closure by itself. | **Deferred with the browser product — 2026-08-23.** Re-entry before any external browser user or real value. Evidence: [`audit_9/audit_9_findings.md`](audit_9/audit_9_findings.md). |
 | TR-02 | Medium | SDK transport | Authenticate every post-bootstrap socket inside the custom connector before undici receives it. The expected SPKI is immutable for the transport generation; a different-SPKI replacement is destroyed before dispatch, while an exact match inherits the already quote-bound boot verdict. | **Merged 2026-08-23 in PR #199.** `transport-relay-attack.test.ts` swaps the peer after the gate and proves a substituted certificate receives zero requests and zero body bytes; the same certificate succeeds. Removing the connector guard makes the unique private marker cross, so the regression is mutation-proven. No CVM is required for this socket-boundary fix. |
-| TR-03 | Low | TEE API + clients | Ship the `transport_mode` field `config.rs:66-70` promises on `/info` (it is absent from `/info`, `/system/status`, and the OpenAPI), and have the daemon pin it at startup the way R-06 pins `oracle_mode`. | **Code complete 2026-08-23; CPU evidence and merge pending.** `/info` emits boot-selected mode, both OpenAPI contracts require it, production omission selects RA-TLS, legacy is rejected in production and explicitly acknowledged in development/simulator, and startup plus recovery reject disagreement. |
+| TR-03 | Low | TEE API + clients | Ship the `transport_mode` field `config.rs:66-70` promises on `/info` (it is absent from `/info`, `/system/status`, and the OpenAPI), and have the daemon pin it at startup the way R-06 pins `oracle_mode`. | **Closed 2026-08-24 in PR #200.** `/info` emits boot-selected mode, both OpenAPI contracts require it, production omission selects RA-TLS, legacy is rejected in production and explicitly acknowledged in development/simulator, and startup plus recovery reject disagreement. The digest-pinned CPU drill is recorded in [`../docs/transport-integrity-remediation-plan.md`](../docs/transport-integrity-remediation-plan.md) §8.5. |
 | TR-04 | Low | Trader-host | If the browser product resumes, use `createVerifiedTransport` (or pass `expectedBootSessionId` on reconnect) in `cvm-transport.ts` so a restarted enclave fails re-verification instead of silently passing on compose+signers alone; surface `isStale()`. | **Deferred with the browser product — 2026-08-23.** Same re-entry as T-03B. |
-| TR-05 | Low | Daemon | Consume `isStale()` on the existing attestation-refresh cadence: pause placement, rebuild the transport, re-attest, resume. Today a CVM restart degrades every request with `boot_session_mismatch` and no lifecycle path trips. | **Code complete 2026-08-23; CPU restart drill and merge pending.** One single-flight supervisor handles typed HTTP/WS refusal and cadence staleness, pins the application boot to the transport quote, rechecks finalized signers, refreshes the stream, reconciles without auto-rebooking, and exposes closed-set recovery status. Network failures alone receive bounded backoff. |
+| TR-05 | Low | Daemon | Consume `isStale()` on the existing attestation-refresh cadence: pause placement, rebuild the transport, re-attest, resume. Today a CVM restart degrades every request with `boot_session_mismatch` and no lifecycle path trips. | **Closed 2026-08-24 in PR #200.** One single-flight supervisor handles typed HTTP/WS refusal and cadence staleness, pins the application boot to the transport quote, rechecks finalized signers, refreshes the stream, and reconciles without auto-rebooking. The CPU drill rotated the boot, traversed `reverifying`/`paused`/`reconciling`, resumed in 94,915 ms, then completed an explicit fresh placement, settlement, and cancellation. |
 | TR-06 | Info | SDK transport | Make `verifyTransportOnSocket` destroy the socket on the three early failure paths (non-OK status, oversize/undecodable body, `parseObservedManifest` throw) its doc contract at `:287-289` claims to cover. Hygiene: no credential crosses on those paths. | **Open — `audit_9`.** |
 | TR-07 | Low | Public docs | Keep the public transport narrative aligned with the RA-TLS route (`8443s`, `/transport-attestation`, boot-scoped cert) and state the deferred browser boundary without implying launch support. | **Code complete 2026-08-23; merge pending.** GitBook transport, privacy, architecture, trade-flow, base-URL, programmatic-access and generated OpenAPI descriptions now agree. |
 | TR-08 | Low | TEE settlement | Bound the marker-sweep ingress (`marker_sweep.rs:88` unbounded channel → `persistence/markers.rs:53-57` unbounded set); evict only expired roots past a cap. C3 class; growth bounded by close-path health, not by an attacker. | **Open — `audit_9`.** |
@@ -682,9 +683,8 @@ SW-11.
    when the next GPU compose is rebuilt (mirror CPU RA-TLS or
    document the lag). **R-11** / **R-12** / **R-13** last, after the
    code moves. **`audit_9`'s TR-01 and TR-04 join that deferred browser
-   slice.** TR-02 is merged; TR-03 and TR-05 are code complete together and
-   await one CPU daemon restart drill, hosted review, and merge, independently
-   of browser re-entry.
+   slice.** TR-02 is merged; TR-03 and TR-05 closed together in PR #200 after
+   the CPU daemon restart drill, independently of browser re-entry.
 1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
    in-band recovery. Ship the fail-closed half (divergence stops tree reads and
    pauses trading) even if the scope fix lands separately.

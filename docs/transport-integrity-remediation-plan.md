@@ -1,14 +1,14 @@
 # Transport integrity — architecture, evidence, and remediation plan
 
 **Status:** CPU RA-TLS is deployed and live-tested. D1 is merged. D2/D3 are
-implemented together and locally verified; their CPU restart drill and merge
-remain open. Browser transport and GPU parity are deferred by product/resource
+implemented together, locally verified, and closed by the CPU restart drill in
+PR #200. Browser transport and GPU parity are deferred by product/resource
 decision.
 
 - **Canonical record since:** 2026-08-23
-- **Last code baseline reviewed:** `main` at `a9a2a04b` plus the combined D2/D3 branch
+- **Last code baseline reviewed:** PR #200 (`remediation/daemon-ratls-lifecycle-policy`)
 - **Primary finding:** T-03
-- **Active follow-ups:** audit_9 TR-03 and TR-05 (TR-02 merged in PR #199)
+- **Closed follow-ups:** audit_9 TR-02 (PR #199), TR-03 and TR-05 (PR #200)
 - **Deferred follow-ups:** T-03B/R-01 (browser); TR-10/R-22 (GPU)
 - **Source ledgers:** `audits/audit_6/tracker.md`,
   `audits/audit_8/audit_8_findings.md`,
@@ -259,10 +259,10 @@ The remaining daemon work must preserve all of these properties.
 
 ## 6. Active phase and PR map
 
-| Phase | Branch / PR | Finding | Result | Live requirement | Status |
-|---|---|---|---|---|---|
-| D1 | `remediation/ratls-socket-adoption` / PR #199 | TR-02 | Every replacement HTTP socket is SPKI-refused before undici can dispatch bytes | Local adversarial TLS peers; no CVM | Merged 2026-08-23 |
-| D2 + D3 | `remediation/daemon-ratls-lifecycle-policy` | TR-03 + TR-05 + legacy-default gap | One supervised restart lifecycle; production RA-TLS default; server mode and transport boot pinned | One CPU CVM restart drill | Code complete; live evidence and merge pending |
+| Phase   | Branch / PR                                           | Finding                            | Result                                                                                             | Live requirement                    | Status            |
+| ------- | ----------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------- | ----------------- |
+| D1      | `remediation/ratls-socket-adoption` / PR #199         | TR-02                              | Every replacement HTTP socket is SPKI-refused before undici can dispatch bytes                     | Local adversarial TLS peers; no CVM | Merged 2026-08-23 |
+| D2 + D3 | `remediation/daemon-ratls-lifecycle-policy` / PR #200 | TR-03 + TR-05 + legacy-default gap | One supervised restart lifecycle; production RA-TLS default; server mode and transport boot pinned | One CPU CVM restart drill           | Closed 2026-08-24 |
 
 There is deliberately no GPU phase. TR-10/R-22 remain deferred as described in
 §1.3.
@@ -420,8 +420,32 @@ lifecycle state, reason, attempt count, and next retry time.
 Local tests cover ten concurrent violations collapsing to one build, atomic
 HTTP/WebSocket swap, boot disagreement, application and governance rejection,
 network-only retry, reconciliation gating, no automatic placement, and stop
-during verification. The live CPU drill above remains mandatory before
-closure.
+during verification.
+
+The CPU closure drill ran on 2026-08-24 against `nightly-test-cvm`
+(`app_9ca3cded105f16923afb0e3f62537882c14db637`, prod9, 8-vCPU CPU instance,
+zero GPUs) with image digest
+`sha256:7dd1b18cfd72faf6a50290b2c1f3defe40aa5761a1d9cc7056fcfd68e566f051`
+and compose hash
+`12c00a88e3ecbbca538c4225ec823eeb8c8c9f48690585b54b89e18d7afd6401`.
+The daemon observed boot
+`ba82a646ffff7e1720607a227acb9ea4885378274f3b9b360e7ca1924494bdeb`
+rotate to
+`2a66ccb5f61b428649f808719702965d95eee4f7dd926d588f005d21c7669218`,
+entered `ready → reverifying → paused → reconciling → ready`, rechecked all
+four finalized TEE keys, and recovered in 94,915 ms with one transient request
+failure, zero final retry attempts, and zero reconciliation errors. RSS moved
+from 648 MiB to 124 MiB; the negative delta is recorded as an observation, not
+as a memory-performance claim.
+
+The pre-restart reserved order was absent from the new enclave and remained
+reserved locally rather than being silently rebooked. After recovery the test
+made an explicit fresh deposit and signed order, confirmed a 1,000-unit partial
+fill (`leaf_count` 25 → 32), observed the residual as REST `pending` and daemon
+`open`, then cancelled it successfully. Two successful CPU settlements on the
+same reviewed digest recorded native witness generation at 433/296 ms,
+rapidsnark proving at 3,175/2,769 ms, and total settle pipelines at
+9,283/10,738 ms. The CVM was confirmed stopped immediately after the drill.
 
 ---
 
