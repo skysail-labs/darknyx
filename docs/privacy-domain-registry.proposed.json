@@ -1,0 +1,358 @@
+{
+  "$schema": "./privacy-domain-registry.schema.json",
+  "schemaVersion": 1,
+  "registryStatus": "phase0-provisional",
+  "frozenOn": "2026-08-25",
+  "lifecycleValues": [
+    "active",
+    "provisional",
+    "retired"
+  ],
+  "policy": {
+    "domainNumbersAreNeverReused": true,
+    "sameArityMeaningChangeRequiresFreshDomain": true,
+    "provisionalBecomesActiveOnlyInAtomicCutover": true,
+    "retiredAssignmentsRemainReserved": true
+  },
+  "domains": [
+    {
+      "number": 1,
+      "symbol": "DOMAIN_OWNER",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "owner commitment from spending key and r_owner",
+      "supersededBy": 32,
+      "consumers": [
+        "crates/darkpool-crypto/src/note.rs",
+        "packages/sdk/src/utxo/note.ts",
+        "circuits/valid_deposit/circuit.circom",
+        "circuits/valid_input/circuit.circom",
+        "circuits/valid_spend/circuit.circom",
+        "circuits/templates/valid_merge.circom"
+      ]
+    },
+    {
+      "number": 2,
+      "symbol": "DOMAIN_NOTE",
+      "arity": 6,
+      "lifecycle": "active",
+      "version": 2,
+      "meaning": "note commitment from mint halves, amount, owner, and inner",
+      "consumers": [
+        "crates/darkpool-crypto/src/note.rs",
+        "packages/sdk/src/utxo/note.ts",
+        "circuits/valid_deposit/circuit.circom",
+        "circuits/valid_input/circuit.circom",
+        "circuits/valid_spend/circuit.circom",
+        "circuits/templates/valid_merge.circom",
+        "circuits/templates/match_batch.circom"
+      ]
+    },
+    {
+      "number": 3,
+      "symbol": "DOMAIN_NULL",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 2,
+      "meaning": "legacy VALID_SPEND nullifier from spending key and inner",
+      "retirementPhase": 3,
+      "consumers": [
+        "crates/darkpool-crypto/src/nullifier.rs",
+        "packages/sdk/src/utxo/note.ts",
+        "circuits/valid_spend/circuit.circom"
+      ]
+    },
+    {
+      "number": 5,
+      "symbol": "DOMAIN_PRICE_COMMITMENT",
+      "arity": null,
+      "lifecycle": "retired",
+      "version": 1,
+      "meaning": "historical price-commitment assignment; no production consumer remains",
+      "consumers": []
+    },
+    {
+      "number": 10,
+      "symbol": "DOMAIN_ROOT",
+      "arity": 4,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "wallet-create root branch",
+      "retirementPhase": 1,
+      "consumers": [
+        "crates/darkpool-crypto/src/user_commitment.rs",
+        "packages/sdk/src/keys/user-commitment.ts",
+        "circuits/valid_wallet_create/circuit.circom"
+      ]
+    },
+    {
+      "number": 11,
+      "symbol": "DOMAIN_SPEND",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "wallet-create spend branch",
+      "retirementPhase": 1,
+      "consumers": [
+        "crates/darkpool-crypto/src/user_commitment.rs",
+        "packages/sdk/src/keys/user-commitment.ts",
+        "circuits/valid_wallet_create/circuit.circom"
+      ]
+    },
+    {
+      "number": 12,
+      "symbol": "DOMAIN_VIEW",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "wallet-create BN254 viewing branch",
+      "retirementPhase": 1,
+      "consumers": [
+        "crates/darkpool-crypto/src/user_commitment.rs",
+        "packages/sdk/src/keys/user-commitment.ts",
+        "circuits/valid_wallet_create/circuit.circom"
+      ]
+    },
+    {
+      "number": 13,
+      "symbol": "DOMAIN_LEAF",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "wallet-create root/spend branch fold",
+      "retirementPhase": 1,
+      "consumers": [
+        "crates/darkpool-crypto/src/user_commitment.rs",
+        "packages/sdk/src/keys/user-commitment.ts",
+        "circuits/valid_wallet_create/circuit.circom"
+      ]
+    },
+    {
+      "number": 14,
+      "symbol": "DOMAIN_TOP",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "wallet-create top-level commitment",
+      "retirementPhase": 1,
+      "consumers": [
+        "crates/darkpool-crypto/src/user_commitment.rs",
+        "packages/sdk/src/keys/user-commitment.ts",
+        "circuits/valid_wallet_create/circuit.circom"
+      ]
+    },
+    {
+      "number": 20,
+      "symbol": "DOMAIN_LEAF_INNER",
+      "arity": 12,
+      "lifecycle": "retired",
+      "version": 1,
+      "meaning": "retired first stage of two-stage match leaf",
+      "consumers": []
+    },
+    {
+      "number": 21,
+      "symbol": "DOMAIN_LEAF_TOP",
+      "arity": 9,
+      "lifecycle": "retired",
+      "version": 1,
+      "meaning": "retired second stage of two-stage match leaf",
+      "consumers": []
+    },
+    {
+      "number": 22,
+      "symbol": "DOMAIN_BATCH_ROOT",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "binary MATCH_BATCH Merkle internal node",
+      "consumers": [
+        "circuits/templates/match_batch.circom",
+        "crates/darknyx-tee/src/prover/leaf.rs",
+        "packages/sdk/tests/helpers/match-batch-prover.ts"
+      ]
+    },
+    {
+      "number": 23,
+      "symbol": "DOMAIN_LEAF_V2",
+      "arity": 11,
+      "lifecycle": "retired",
+      "version": 2,
+      "meaning": "retired commitment-keyed match leaf",
+      "consumers": []
+    },
+    {
+      "number": 24,
+      "symbol": "DOMAIN_MATCH_OUTPUT_INNER",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "trade/change/continuation inner from consumed input inner and role",
+      "consumers": [
+        "crates/darkpool-crypto/src/match_output.rs",
+        "packages/sdk/src/utxo/match-output.ts",
+        "circuits/templates/match_batch.circom"
+      ]
+    },
+    {
+      "number": 25,
+      "symbol": "DOMAIN_MATCH_FEE_INNER",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "legacy fee inner from public input commitment and role",
+      "supersededBy": 36,
+      "consumers": [
+        "crates/darkpool-crypto/src/match_output.rs",
+        "packages/sdk/src/utxo/match-output.ts",
+        "circuits/templates/match_batch.circom"
+      ]
+    },
+    {
+      "number": 26,
+      "symbol": "DOMAIN_MERGE_INNER",
+      "arity": 6,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "legacy merge inner from public input commitments and bitmap",
+      "supersededBy": 34,
+      "consumers": [
+        "crates/darkpool-crypto/src/merge.rs",
+        "packages/sdk/src/utxo/merge-inner.ts",
+        "circuits/templates/valid_merge.circom"
+      ]
+    },
+    {
+      "number": 27,
+      "symbol": "DOMAIN_DEPOSIT_INNER",
+      "arity": 4,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "deposit inner from owner, public recovery nonce, and note secret",
+      "supersededBy": 33,
+      "consumers": [
+        "crates/darkpool-crypto/src/deposit.rs",
+        "packages/sdk/src/utxo/deposit-inner.ts",
+        "circuits/valid_deposit/circuit.circom"
+      ]
+    },
+    {
+      "number": 28,
+      "symbol": "DOMAIN_MATCH_CONFIG",
+      "arity": 8,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "match config digest without fee-key binding and epoch",
+      "supersededBy": 37,
+      "consumers": [
+        "crates/darkpool-crypto/src/match_config.rs",
+        "packages/sdk/src/utxo/match-config.ts",
+        "circuits/templates/match_batch.circom",
+        "programs/vault/src/instructions/verify_match_batch.rs"
+      ]
+    },
+    {
+      "number": 29,
+      "symbol": "DOMAIN_NOTE_USE",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "public note-use tag from commitment and private inner",
+      "consumers": [
+        "crates/darkpool-crypto/src/note_use.rs",
+        "packages/sdk/src/utxo/note-use.ts",
+        "circuits/valid_input/circuit.circom",
+        "circuits/valid_spend/circuit.circom",
+        "circuits/templates/valid_merge.circom",
+        "circuits/templates/match_batch.circom"
+      ]
+    },
+    {
+      "number": 30,
+      "symbol": "DOMAIN_RELOCK_DIGEST",
+      "arity": 3,
+      "lifecycle": "active",
+      "version": 1,
+      "meaning": "fold of the two continuation/relock use tags in a match leaf",
+      "consumers": [
+        "circuits/templates/match_batch.circom",
+        "crates/darknyx-tee/src/prover/leaf.rs",
+        "packages/sdk/tests/helpers/match-batch-prover.ts"
+      ]
+    },
+    {
+      "number": 31,
+      "symbol": "DOMAIN_LEAF_V3",
+      "arity": 12,
+      "lifecycle": "active",
+      "version": 3,
+      "meaning": "current tag-keyed MATCH_BATCH leaf",
+      "consumers": [
+        "circuits/templates/match_batch.circom",
+        "crates/darknyx-tee/src/prover/leaf.rs",
+        "packages/sdk/tests/helpers/match-batch-prover.ts"
+      ]
+    },
+    {
+      "number": 32,
+      "symbol": "DOMAIN_OWNER_V2",
+      "arity": 2,
+      "lifecycle": "provisional",
+      "version": 2,
+      "meaning": "owner commitment from one spending secret",
+      "activationPhase": 3,
+      "consumers": []
+    },
+    {
+      "number": 33,
+      "symbol": "DOMAIN_DEPOSIT_INNER_V2",
+      "arity": 3,
+      "lifecycle": "provisional",
+      "version": 2,
+      "meaning": "deposit inner from public recovery nonce and private note secret",
+      "activationPhase": 3,
+      "consumers": []
+    },
+    {
+      "number": 34,
+      "symbol": "DOMAIN_MERGE_INNER_V2",
+      "arity": 6,
+      "lifecycle": "provisional",
+      "version": 2,
+      "meaning": "merge inner from four private input inners and active bitmap",
+      "activationPhase": 3,
+      "consumers": []
+    },
+    {
+      "number": 35,
+      "symbol": "DOMAIN_FEE_KEY_BINDING",
+      "arity": 2,
+      "lifecycle": "provisional",
+      "version": 1,
+      "meaning": "governed binding of the protocol fee epoch key",
+      "activationPhase": 3,
+      "consumers": []
+    },
+    {
+      "number": 36,
+      "symbol": "DOMAIN_FEE_INNER_V2",
+      "arity": 4,
+      "lifecycle": "provisional",
+      "version": 2,
+      "meaning": "fee inner from epoch key, consumed use tag, and role",
+      "activationPhase": 3,
+      "consumers": []
+    },
+    {
+      "number": 37,
+      "symbol": "DOMAIN_MATCH_CONFIG_V2",
+      "arity": 10,
+      "lifecycle": "provisional",
+      "version": 2,
+      "meaning": "match config digest including fee-key binding and epoch",
+      "activationPhase": 3,
+      "consumers": []
+    }
+  ]
+}
