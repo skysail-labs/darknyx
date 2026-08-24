@@ -1,0 +1,140 @@
+{
+  "name": "Darknyx Docs",
+  "theme": "maple",
+  "colors": {
+    "primary": "#D4A017",
+    "light": "#F0C040",
+    "dark": "#B8860B"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "documentation/get-started/overview",
+              "documentation/get-started/design-thesis",
+              "documentation/get-started/programmatic-access"
+            ]
+          },
+          {
+            "group": "How It Works",
+            "pages": [
+              "documentation/how-it-works/trade-flow",
+              "documentation/how-it-works/settlement",
+              "documentation/how-it-works/fee-structure",
+              "documentation/how-it-works/multi-market",
+              "documentation/how-it-works/privacy-and-attestation",
+              "documentation/how-it-works/shielded-pool",
+              "documentation/how-it-works/tee-architecture"
+            ]
+          },
+          {
+            "group": "Trading Concepts",
+            "pages": [
+              "documentation/trading-concepts/order-types",
+              "documentation/trading-concepts/order-compatibility",
+              "documentation/trading-concepts/execution-attributes",
+              "documentation/trading-concepts/clearing-price",
+              "documentation/trading-concepts/time-in-force",
+              "documentation/trading-concepts/self-trade-prevention"
+            ]
+          },
+          {
+            "group": "Account",
+            "pages": [
+              "documentation/account/account-model",
+              "documentation/account/deposit",
+              "documentation/account/withdraw"
+            ]
+          },
+          {
+            "group": "SDK",
+            "pages": [
+              "documentation/sdk/typescript-client"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "documentation/reference/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api-reference/getting-started/authentication",
+              "api-reference/getting-started/base-urls",
+              "api-reference/getting-started/error-codes",
+              "api-reference/getting-started/transport-and-attestation"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api-reference/system/health",
+              "api-reference/system/info",
+              "api-reference/system/system-status",
+              "api-reference/system/time"
+            ]
+          },
+          {
+            "group": "Account",
+            "pages": [
+              "api-reference/account/get-account",
+              "api-reference/account/get-settings",
+              "api-reference/account/update-settings"
+            ]
+          },
+          {
+            "group": "Instruments",
+            "pages": [
+              "api-reference/instruments/list-instruments",
+              "api-reference/instruments/get-instrument"
+            ]
+          },
+          {
+            "group": "Orders",
+            "pages": [
+              "api-reference/orders/place-order",
+              "api-reference/orders/get-order",
+              "api-reference/orders/modify-order",
+              "api-reference/orders/cancel-order"
+            ]
+          },
+          {
+            "group": "Settlement",
+            "pages": [
+              "api-reference/settlement/settlement-status",
+              "api-reference/settlement/transparency"
+            ]
+          },
+          {
+            "group": "Tree",
+            "pages": [
+              "api-reference/tree/root",
+              "api-reference/tree/leaves",
+              "api-reference/tree/inclusion"
+            ]
+          },
+          {
+            "group": "WebSocket",
+            "pages": [
+              "api-reference/websocket/session-stream",
+              "api-reference/websocket/ws-trading",
+              "api-reference/websocket/orders-channel",
+              "api-reference/websocket/fills-channel"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
