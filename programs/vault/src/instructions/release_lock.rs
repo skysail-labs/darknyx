@@ -18,7 +18,11 @@ pub struct ReleaseLock {
     pub note_lock: Account<NoteLock>,
 }
 
-pub fn release_lock_handler(ctx: &mut Context<ReleaseLock>, _note_use_tag: [u8; 32]) -> Result<()> {
+pub fn release_lock_handler(ctx: &mut Context<ReleaseLock>, note_use_tag: [u8; 32]) -> Result<()> {
+    require!(
+        ctx.accounts.note_lock.account().data_len() == NoteLock::SPACE,
+        VaultError::InvalidAccountLayout
+    );
     let lock = &ctx.accounts.note_lock;
     let clock = Clock::get()?;
     require!(
@@ -27,7 +31,7 @@ pub fn release_lock_handler(ctx: &mut Context<ReleaseLock>, _note_use_tag: [u8; 
     );
 
     emit!(NoteLockReleased {
-        note_use_tag: lock.note_use_tag,
+        note_use_tag,
         order_id: lock.order_id,
     });
     Ok(())

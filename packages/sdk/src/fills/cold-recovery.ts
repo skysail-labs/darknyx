@@ -23,6 +23,7 @@ import { deriveMergeOutputInnerHash } from "../utxo/merge-inner.js";
 import { deriveDepositInnerHash } from "../utxo/deposit-inner.js";
 import { noteCommitmentV2, ownerCommitment } from "../utxo/note.js";
 import { deriveNoteUseTag } from "../utxo/note-use.js";
+import { noteCommitmentFromBytes } from "../utxo/note-identity.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import {
   decodeSettleFills,
@@ -295,7 +296,7 @@ export async function recoverNotesFromChain(
       const commitment = fromHex(note.commitment);
       if (!commitment) continue;
       const tag = await deriveNoteUseTag(
-        commitment,
+        noteCommitmentFromBytes(commitment),
         bn254ToBE32(note.innerHash),
       );
       index.set(hex(tag), note);

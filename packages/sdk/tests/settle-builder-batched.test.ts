@@ -51,6 +51,7 @@ import {
   noteLockPda,
 } from "../src/idl/vault-client.js";
 import { dummyAddress } from "./helpers/e2e-helpers.js";
+import { noteUseTagFromBytes } from "../src/utxo/note-identity.js";
 
 const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -62,11 +63,17 @@ function filled(len: number, v: number): Uint8Array {
   return b;
 }
 
+function field32(v: number): Uint8Array {
+  const value = filled(32, v);
+  value[0] = 0;
+  return value;
+}
+
 function exactFillFixture(): MatchResultPayload {
   return exactFillPayload({
     matchId: filled(16, 0x11),
-    noteAuseTag: filled(32, 0xa1),
-    noteBuseTag: filled(32, 0xb1),
+    noteAuseTag: field32(0xa1),
+    noteBuseTag: field32(0xb1),
     noteCcommitment: filled(32, 0xc1),
     noteDcommitment: filled(32, 0xd1),
     orderIdA: filled(16, 0x01),
@@ -85,8 +92,16 @@ function fourSiblings(): [Uint8Array, Uint8Array, Uint8Array, Uint8Array] {
 
 describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   it("[hash_cross_env_parity] payload v11 canonical hash matches Rust and on-chain", () => {
+    // Preserve the historical cross-language byte vector exactly. Its filled
+    // test tags predate checked semantic constructors and are intentionally
+    // not passed into a PDA/instruction builder.
+    const pinnedVector = {
+      ...exactFillFixture(),
+      noteAuseTag: filled(32, 0xa1),
+      noteBuseTag: filled(32, 0xb1),
+    };
     expect(
-      Buffer.from(canonicalPayloadHash(exactFillFixture())).toString("hex"),
+      Buffer.from(canonicalPayloadHash(pinnedVector)).toString("hex"),
     ).toBe("039828e122696147495ba9df91daae71cc5289657ad7ec66c74659d0d00d8f65");
   });
 
@@ -139,8 +154,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const payload0 = exactFillFixture();
     const payload1: MatchResultPayload = {
       ...exactFillFixture(),
-      noteAuseTag: filled(32, 0xa2),
-      noteBuseTag: filled(32, 0xb2),
+      noteAuseTag: field32(0xa2),
+      noteBuseTag: field32(0xb2),
       noteCcommitment: filled(32, 0xc2),
       noteDcommitment: filled(32, 0xd2),
     };
@@ -317,7 +332,10 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
     });
-    const [zeroLock] = await noteLockPda(PROGRAM_ID, ZERO_COMMITMENT);
+    const [zeroLock] = await noteLockPda(
+      PROGRAM_ID,
+      noteUseTagFromBytes(ZERO_COMMITMENT),
+    );
     expect(ixExact.keys[7].pubkey.toBase58()).toBe(zeroLock.toBase58());
     expect(ixExact.keys[8].pubkey.toBase58()).toBe(zeroLock.toBase58());
     expect(ixExact.keys[7].isWritable).toBe(false);
@@ -328,8 +346,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // real settle; the assertions below pin that only the TAG is load-bearing.
     const withChange: MatchResultPayload = {
       ...exact,
-      noteEcommitment: filled(32, 0xe2),
-      noteEuseTag: filled(32, 0xe3),
+      noteEcommitment: field32(0xe2),
+      noteEuseTag: field32(0xe3),
     };
     const ixChange = await buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -340,21 +358,24 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
     });
-    const [lockE] = await noteLockPda(PROGRAM_ID, withChange.noteEuseTag);
+    const [lockE] = await noteLockPda(
+      PROGRAM_ID,
+      noteUseTagFromBytes(withChange.noteEuseTag),
+    );
     expect(ixChange.keys[7].pubkey.toBase58()).toBe(lockE.toBase58());
     expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(
       ixChange.keys[8].pubkey.toBase58(),
     );
 
-    // THE confusion this whole layer is exposed to: both fields are 32 bytes,
-    // so seeding the lock from the change COMMITMENT compiles, derives a
-    // plausible address, and fails only on-chain as a missing account. Two
-    // assertions pin the direction:
+    // THE confusion this whole layer was exposed to: both fields are 32 bytes.
+    // The branded PDA helper now rejects a commitment at compile time; this
+    // deliberately explicit raw conversion models the historical bug and pins
+    // the runtime direction too. Two assertions pin the direction:
     //   (a) the commitment's address is NOT the one the builder emitted, and
     //   (b) changing only the commitment leaves the lock address fixed.
     const [wrongLock] = await noteLockPda(
       PROGRAM_ID,
-      withChange.noteEcommitment,
+      noteUseTagFromBytes(withChange.noteEcommitment),
     );
     expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(wrongLock.toBase58());
 
@@ -362,7 +383,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       programId: PROGRAM_ID,
       treeId: 0,
       teeAuthority: tee.publicKey,
-      payload: { ...withChange, noteEcommitment: filled(32, 0xe9) },
+      payload: { ...withChange, noteEcommitment: field32(0xe9) },
       matchIndex: 0,
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
@@ -590,7 +611,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const relock: MatchResultPayload = {
       ...base,
       noteEcommitment: filled(32, 0xe2),
-      noteEuseTag: filled(32, 0xe3),
+      noteEuseTag: field32(0xe3),
       buyerRelockOrderId: filled(16, 0xab),
       buyerRelockExpiry: 1_234_567n,
     };

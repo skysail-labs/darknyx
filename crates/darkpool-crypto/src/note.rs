@@ -27,13 +27,35 @@
 //! `~/.claude/plans/agile-chasing-parnas.md`
 
 use crate::errors::CryptoError;
-use crate::field::{fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr, Fr};
+use crate::field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr, Fr};
 use crate::poseidon::poseidon_hash;
 
 pub const NOTE_COMMITMENT_BYTES: usize = 32;
 
-/// A note commitment — the 32-byte on-chain representation of a note.
-pub type NoteCommitment = [u8; NOTE_COMMITMENT_BYTES];
+/// A note commitment — distinct in the type system from the same-width
+/// [`crate::note_use::NoteUseTag`]. Wire and Borsh boundaries still carry a
+/// raw `[u8; 32]`; callers must convert explicitly at those boundaries.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct NoteCommitment([u8; NOTE_COMMITMENT_BYTES]);
+
+impl NoteCommitment {
+    /// Check and wrap raw wire bytes. Poseidon outputs are canonical BN254
+    /// field elements; accepting a non-canonical value here would create a
+    /// host/circuit identity disagreement.
+    pub fn from_bytes(bytes: [u8; NOTE_COMMITMENT_BYTES]) -> Result<Self, CryptoError> {
+        fr_from_be_bytes(&bytes)?;
+        Ok(Self(bytes))
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; NOTE_COMMITMENT_BYTES] {
+        &self.0
+    }
+
+    pub const fn into_bytes(self) -> [u8; NOTE_COMMITMENT_BYTES] {
+        self.0
+    }
+}
 
 const DOMAIN_OWNER: u64 = 1;
 const DOMAIN_NOTE: u64 = 2;
@@ -59,8 +81,6 @@ pub fn commitment_from_fields_v2(
     owner_commitment: &[u8; 32],
     inner_hash: &[u8; 32],
 ) -> Result<NoteCommitment, CryptoError> {
-    use crate::field::fr_from_be_bytes;
-
     let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
     let amount_fr = u64_to_fr(amount);
     let owner_fr = fr_from_be_bytes(owner_commitment)?;
@@ -75,7 +95,7 @@ pub fn commitment_from_fields_v2(
         inner_fr,
     ];
     let h = poseidon_hash(&inputs)?;
-    Ok(fr_to_be_bytes(&h))
+    Ok(NoteCommitment(fr_to_be_bytes(&h)))
 }
 
 #[cfg(test)]
@@ -97,6 +117,16 @@ mod tests {
         let c1 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
         let c2 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
         assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn checked_wire_constructor_rejects_non_field_bytes() {
+        assert!(NoteCommitment::from_bytes([0xff; 32]).is_err());
+        let bytes = inner(7);
+        assert_eq!(
+            NoteCommitment::from_bytes(bytes).unwrap().into_bytes(),
+            bytes
+        );
     }
 
     #[test]

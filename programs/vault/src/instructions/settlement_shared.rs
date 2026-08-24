@@ -131,7 +131,6 @@ pub(crate) fn create_relock_pda(
     expiry_slot: u64,
 ) -> Result<()> {
     use anchor_lang::system_program;
-    use core::mem::size_of;
 
     let (expected_pda, bump) =
         Address::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
@@ -146,9 +145,9 @@ pub(crate) fn create_relock_pda(
     );
 
     // C-02: cap the relock expiry exactly as `lock_note` caps a fresh lock.
-    // `withdraw` rejects while ANY NoteLock exists — even an expired one — so
-    // the lock window IS the censorship window. `lock_note.rs` enforces this
-    // bound on the initial lock, but the re-lock path (used for partial-fill
+    // Withdraw and merge reject while the lock is live, so this bounds the
+    // censorship window even if no sweeper closes it. `lock_note.rs` enforces
+    // this bound on the initial lock, but the re-lock path (used for partial-fill
     // continuations) previously set `expiry_slot` unchecked, letting a
     // malicious TEE stamp an arbitrarily distant expiry and freeze the note
     // indefinitely. The settler stamps the relock with the order's expiry,
@@ -162,7 +161,7 @@ pub(crate) fn create_relock_pda(
         VaultError::InvalidExpirySlot
     );
 
-    let space = 8 + size_of::<NoteLock>();
+    let space = NoteLock::SPACE;
     // v2: `minimum_balance` is deprecated (it panics past MAX_PERMITTED_DATA_LENGTH);
     // the fallible form returns InvalidArgument instead.
     let lamports = Rent::get()?.try_minimum_balance(space)?;
@@ -191,7 +190,6 @@ pub(crate) fn create_relock_pda(
         data[..8].copy_from_slice(disc);
         let (_head, body) = data.split_at_mut(8);
         let lock: &mut NoteLock = bytemuck::from_bytes_mut(body);
-        lock.note_use_tag = *note_use_tag;
         // CRITICAL: populate token_mint. A later batch that consumes this
         // relocked note reads `note_lock.token_mint` to recompute the
         // batch-binding leaf (`compute_match_leaf`); a zero mint there →
@@ -201,7 +199,6 @@ pub(crate) fn create_relock_pda(
         lock.token_mint = *token_mint;
         lock.order_id = *order_id;
         lock.expiry_slot = (expiry_slot).into();
-        lock.locked_by = *payer.address();
         lock.bump = bump;
         lock._padding = [0u8; 7];
     }

@@ -26,6 +26,11 @@
  */
 
 import { poseidonHashBytesBE } from "./note.js";
+import {
+  noteUseTagFromBytes,
+  type NoteCommitment,
+  type NoteUseTag,
+} from "./note-identity.js";
 
 /**
  * Domain tag. Note 26 is NOT free — it is `DOMAIN_MERGE_INNER`. In use: 1, 2, 3,
@@ -41,13 +46,15 @@ function be32ToBigInt(value: Uint8Array, label: string): bigint {
 }
 
 /** `Poseidon3(29, note_commitment, inner_hash)`. */
-export function deriveNoteUseTag(
-  noteCommitment: Uint8Array,
+export async function deriveNoteUseTag(
+  noteCommitment: NoteCommitment,
   innerHash: Uint8Array,
-): Promise<Uint8Array> {
-  return poseidonHashBytesBE([
-    DOMAIN_NOTE_USE,
-    be32ToBigInt(noteCommitment, "noteCommitment"),
-    be32ToBigInt(innerHash, "innerHash"),
-  ]);
+): Promise<NoteUseTag> {
+  return noteUseTagFromBytes(
+    await poseidonHashBytesBE([
+      DOMAIN_NOTE_USE,
+      be32ToBigInt(noteCommitment, "noteCommitment"),
+      be32ToBigInt(innerHash, "innerHash"),
+    ]),
+  );
 }

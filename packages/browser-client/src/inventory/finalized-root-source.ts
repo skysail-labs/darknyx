@@ -3,6 +3,7 @@ import {
   consumedNotePda,
   merkleTreePda,
   noteLockPda,
+  noteUseTagFromBytes,
 } from "@darknyx/sdk/browser-inventory-crypto";
 import { parseMerkleRootRing } from "@darknyx/sdk/merkle-root-ring";
 
@@ -56,7 +57,10 @@ export class SolanaFinalizedRootSource {
     const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
       Number.parseInt(byte, 16),
     );
-    const [address] = await consumedNotePda(this.#programId, tag);
+    const [address] = await consumedNotePda(
+      this.#programId,
+      noteUseTagFromBytes(tag),
+    );
     const account = await this.#connection.getAccountInfo(address, "finalized");
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {
@@ -73,7 +77,10 @@ export class SolanaFinalizedRootSource {
     const tag = Uint8Array.from(noteUseTag.match(/../g) ?? [], (byte) =>
       Number.parseInt(byte, 16),
     );
-    const [address] = await noteLockPda(this.#programId, tag);
+    const [address] = await noteLockPda(
+      this.#programId,
+      noteUseTagFromBytes(tag),
+    );
     const account = await this.#connection.getAccountInfo(address, "finalized");
     if (!account) return false;
     if (!account.owner.equals(this.#programId)) {

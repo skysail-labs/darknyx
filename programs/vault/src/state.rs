@@ -36,9 +36,10 @@ pub const ROOT_HISTORY_SIZE: usize = 64;
 
 /// Hard ceiling on how far in the future a `NoteLock`'s `expiry_slot` may
 /// sit. The settler stamps the lock with the ORDER's `expiry_slot`, so this is
-/// simultaneously the **max order lifetime** and the **censorship window**: the
-/// `withdraw` ix refuses while a lock exists, even an expired one, until
-/// `release_lock` is called (F-05).
+/// simultaneously the **max order lifetime** and the **live censorship
+/// window**: withdraw and merge refuse the note strictly before this boundary,
+/// then treat the lock as dead at expiry even if a sweeper has not closed its
+/// account yet (F-05 / CS-09).
 ///
 /// 4_500 slots ≈ **30 min at today's 400 ms slots**. Placement→settlement is
 /// ≤ ~30 s in practice, so this is ~60× headroom. It's a FIXED slot count, so
@@ -215,15 +216,11 @@ impl MerkleTree {
 /// any concurrent deposit would invalidate the proof. This account is the
 /// version that does not trade liveness for it.
 #[account]
-pub struct DepositedNoteEntry {
-    pub note_commitment: [u8; 32],
-    pub deposited_slot: PodU64,
-    pub bump: u8,
-    pub _padding: [u8; 7],
-}
+pub struct DepositedNoteEntry {}
 
 impl DepositedNoteEntry {
     pub const SEED: &'static [u8] = b"deposited_note";
+    pub const SPACE: usize = 8;
 }
 
 /// PDA marking a note consumed, keyed by its NOTE-USE TAG.
@@ -238,41 +235,24 @@ impl DepositedNoteEntry {
 /// A path left on commitments would let one note be consumed once under each
 /// scheme, which is a double-spend; that is why the migration lands atomically.
 #[account]
-pub struct ConsumedNoteEntry {
-    pub note_use_tag: [u8; 32],
-    pub match_id: [u8; 16],
-    pub consumed_slot: PodU64,
-    pub bump: u8,
-    pub _padding: [u8; 7],
-}
+pub struct ConsumedNoteEntry {}
 
 impl ConsumedNoteEntry {
     pub const SEED: &'static [u8] = b"consumed_note";
+    pub const SPACE: usize = 8;
 }
 
 /// PDA locking a note to a specific order. Automatically expires at `expiry_slot`.
 ///
-/// Amount-privacy: the `amount` field (the locked note's full value) was
-/// REMOVED. It was only ever read by the old on-chain conservation check in
-/// `tee_forced_settle*`, which is now proven in-circuit by VALID_MATCH_BATCH
-/// over private, range-checked amounts. The note commitment binds the amount;
-/// the lock no longer needs (and must not leak) it.
-///
-/// v2 additions (on-chain hardening — see `tee_v2_status_and_migration_brief.md`):
-///   - `token_mint` is the SPL mint that the locked note carries. Set by
-///     `lock_note` from the public inputs of the VALID_INPUT proof (so it is
-///     cryptographically bound to the on-chain Merkle leaf — a malicious TEE
-///     cannot lie about the mint). The settle handler reads it back to
-///     recompute the batch-binding leaf + to stamp continuation re-locks.
+/// The lock deliberately stores neither amount nor its note-use-tag PDA seed.
+/// VALID_MATCH_BATCH proves conservation over private, range-checked amounts.
+/// `token_mint` comes from VALID_INPUT public inputs, so it is bound to the
+/// Merkle leaf and can safely bind settlement and continuation re-locks.
 #[account]
 pub struct NoteLock {
-    /// The note-use tag this lock pins. NOT the commitment — see
-    /// `ConsumedNoteEntry` above for why the public handle moved.
-    pub note_use_tag: [u8; 32],
     pub token_mint: Address,
     pub order_id: [u8; 16],
     pub expiry_slot: PodU64,
-    pub locked_by: Address, // the TEE key that locked
     pub bump: u8,
     pub _padding: [u8; 7],
 }
@@ -280,10 +260,14 @@ pub struct NoteLock {
 impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
 
+    /// Exact current account size. A 136-byte lock cannot be decoded as this
+    /// layout: the removed seed/tag occupied the bytes now read as `token_mint`.
+    /// Every read path therefore checks this size and fails closed until the
+    /// required development-state reset removes legacy locks.
+    pub const SPACE: usize = 8 + core::mem::size_of::<Self>();
+
     /// Byte offset of `expiry_slot` in the account DATA (discriminator
-    /// included): disc(8) + note_use_tag(32) + token_mint(32) + order_id(16).
-    /// The tag is the same width as the commitment it replaced, so the offset
-    /// is unchanged and `lock_sweep`'s raw-byte parser needs no new constant.
+    /// included): disc(8) + token_mint(32) + order_id(16).
     ///
     /// `note_lock_is_live` slices the raw account bytes at this offset, so a
     /// field reordering that moved `expiry_slot` would not fail to compile —
@@ -291,7 +275,7 @@ impl NoteLock {
     /// number and mis-classify every lock's liveness. The assertion below ties
     /// the constant to the real `#[repr(C)]` layout so that becomes a build
     /// error instead.
-    pub const EXPIRY_SLOT_OFFSET: usize = 8 + 32 + 32 + 16;
+    pub const EXPIRY_SLOT_OFFSET: usize = 8 + 32 + 16;
 }
 
 /// Compile-time drift guard for [`NoteLock::EXPIRY_SLOT_OFFSET`].
@@ -322,18 +306,19 @@ const _: () = assert!(
 /// is dead AT its expiry, which is the CS-09 boundary settlement is required to
 /// land strictly before.
 ///
-/// Fails CLOSED — an account that is program-owned but too short to parse is
-/// treated as live rather than assumed absent.
+/// Fails CLOSED — a program-owned account with the legacy/wrong size or
+/// discriminator is treated as live rather than assumed absent.
 pub fn note_lock_is_live(info: &AccountView, now_slot: u64) -> Result<bool> {
     if info.owner() != &crate::ID {
         return Ok(false); // no lock at all
     }
     let data = info.try_borrow()?;
-    let end = NoteLock::EXPIRY_SLOT_OFFSET + 8;
-    if data.len() < end {
-        // Program-owned but unparseable: refuse to treat it as absent.
+    if data.len() != NoteLock::SPACE || &data[..8] != NoteLock::DISCRIMINATOR {
+        // Program-owned but not the current lock layout: refuse to treat it as
+        // absent. This includes the 136-byte compatibility layout.
         return Ok(true);
     }
+    let end = NoteLock::EXPIRY_SLOT_OFFSET + 8;
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&data[NoteLock::EXPIRY_SLOT_OFFSET..end]);
     Ok(now_slot < u64::from_le_bytes(buf))

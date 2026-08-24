@@ -17,6 +17,12 @@ import {
 } from "../../src/utxo/note.js";
 import { deriveMergeOutputInnerHash } from "../../src/utxo/merge.js";
 import { deriveNoteUseTag } from "../../src/utxo/note-use.js";
+import {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+  type NoteCommitment,
+  type NoteUseTag,
+} from "../../src/utxo/note-identity.js";
 import { bn254ToBE32 } from "../../src/keys/key-generators.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
@@ -54,9 +60,9 @@ export interface MergeProveResult {
    * Returned so callers cannot accidentally pass the commitments, which are
    * the same width and would derive plausible-but-wrong PDAs.
    */
-  inputUseTagsBE: Uint8Array[];
+  inputUseTagsBE: NoteUseTag[];
   /** The merged-note commitment (32B BE). */
-  outputCommitmentBE: Uint8Array;
+  outputCommitmentBE: NoteCommitment;
   /** Commitment-derived merged-note inner hash. */
   outputInnerHash: bigint;
   outputAmount: bigint;
@@ -125,8 +131,11 @@ export async function proveValidMerge(
   const inputUseTagsBE = await Promise.all(
     inputCommitments.map((commitment, i) =>
       slots[i]
-        ? deriveNoteUseTag(commitment, bn254ToBE32(slots[i]!.innerHash))
-        : Promise.resolve(new Uint8Array(32)),
+        ? deriveNoteUseTag(
+            noteCommitmentFromBytes(commitment),
+            bn254ToBE32(slots[i]!.innerHash),
+          )
+        : Promise.resolve(noteUseTagFromBytes(new Uint8Array(32))),
     ),
   );
 

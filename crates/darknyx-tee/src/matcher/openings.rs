@@ -82,6 +82,7 @@ impl NoteOpening {
             &self.owner_commitment,
             &self.inner_hash,
         )
+        .map(|commitment| commitment.into_bytes())
         .map_err(|e| OpeningError::NotFrSafe(e.to_string()))
     }
 
@@ -233,7 +234,7 @@ mod tests {
         let commitment =
             commitment_from_fields_v2(&o.token_mint, o.amount, &o.owner_commitment, &o.inner_hash)
                 .unwrap();
-        assert!(o.verify_commitment(&commitment).is_ok());
+        assert!(o.verify_commitment(commitment.as_bytes()).is_ok());
     }
 
     #[test]
@@ -247,7 +248,9 @@ mod tests {
         // a_amount == note_amount.
         let mut tampered = o.clone();
         tampered.amount = 1_001;
-        let err = tampered.verify_commitment(&commitment).unwrap_err();
+        let err = tampered
+            .verify_commitment(commitment.as_bytes())
+            .unwrap_err();
         assert!(matches!(err, OpeningError::CommitmentMismatch { .. }));
     }
 
@@ -259,7 +262,7 @@ mod tests {
                 .unwrap();
         let mut tampered = o.clone();
         tampered.inner_hash[31] = 0x34;
-        assert!(tampered.verify_commitment(&commitment).is_err());
+        assert!(tampered.verify_commitment(commitment.as_bytes()).is_err());
     }
 
     #[test]

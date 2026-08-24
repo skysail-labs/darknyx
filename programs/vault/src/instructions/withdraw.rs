@@ -3,7 +3,6 @@ use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_spend::*, Groth16Proof};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
-use core::mem::size_of;
 
 /// Split a 32-byte Solana pubkey into [lo_u128_be32, hi_u128_be32] — each
 /// encoded as 32 BE bytes (left-padded). Matches `darkpool-crypto`'s
@@ -71,7 +70,7 @@ pub struct Withdraw {
     #[account(
         init,
         payer = payer,
-        space = 8 + size_of::<ConsumedNoteEntry>(),
+        space = ConsumedNoteEntry::SPACE,
         seeds = [ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         bump,
     )]
@@ -205,15 +204,8 @@ pub fn withdraw_handler(
     // an `inner_hash` collide on it and the second legitimate withdraw is
     // bricked. `note_use_tag` is a circuit-bound public OUTPUT of
     // VALID_SPEND, so the tag-keyed guard is complete on its own.
-    let slot = Clock::get()?.slot;
-    // The shared consume-once guard with TEE settle. `match_id` is the all-zero
-    // sentinel — there is no match on the withdraw path.
-    let c = &mut ctx.accounts.consumed_note;
-    c.note_use_tag = note_use_tag;
-    c.match_id = [0u8; 16];
-    c.consumed_slot = (slot).into();
-    c.bump = ctx.bumps.consumed_note;
-    c._padding = [0u8; 7];
+    // `init` already wrote the typed discriminator. The PDA seed is the tag;
+    // account existence is the complete consume-once state.
 
     // ----- Decrement outstanding counter -----
     // The InsufficientOutstanding check above already guarantees no underflow;

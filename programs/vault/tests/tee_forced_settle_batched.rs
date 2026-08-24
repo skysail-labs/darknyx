@@ -88,23 +88,9 @@ fn settle_rejects_at_or_after_either_input_lock_expiry() {
     }
 }
 
-// ===========================================================================
-// Regression — withdraw→settle double-spend is CLOSED (the consume-guard fix).
-//
-// Before the fix a withdrawn note left NO commitment-keyed consume guard:
-// `withdraw` only initialized a separate nullifier-keyed PDA and merely read
-// (never wrote) `ConsumedNoteEntry[commitment]`, while settle consumes a note
-// by its COMMITMENT (`consumed_a`). A TEE-chosen nullifier used to ride the
-// settle payload and could avoid colliding with the withdraw's real one, so the
-// same note paid out twice. (A litesvm PoC confirmed this reproduces on the
-// pre-fix code before the fix landed.)
-//
-// The fix: `withdraw` now ALSO inits `ConsumedNoteEntry[commitment]`, making
-// the commitment-keyed entry the single trustless consume-once guard shared by
-// both paths. This test runs a REAL end-to-end withdraw (real SPL mint +
-// deposit + snarkjs VALID_SPEND proof) and asserts a subsequent settle of the
-// same note now REVERTS on the `consumed_a` init collision.
-// ===========================================================================
+// A real withdraw and a later settle must collide on the same tag-keyed
+// ConsumedNoteEntry. The test uses a real SPL mint, deposit, and VALID_SPEND
+// proof so no mock can conceal a disagreement between the two consume paths.
 #[test]
 fn withdraw_then_settle_double_spend_is_blocked() {
     let mut h = Harness::setup();
@@ -161,8 +147,8 @@ fn withdraw_then_settle_double_spend_is_blocked() {
     let stx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
     let res = h.svm.send_transaction(stx);
 
-    // POST-FIX: the settle REVERTS — `consumed_a` init collides with the entry
-    // withdraw wrote, so the already-withdrawn note cannot be consumed again.
+    // The settle reverts because `consumed_a` collides with the marker written
+    // by withdrawal.
     assert!(
         res.is_err(),
         "withdraw→settle double-spend must be blocked (settle's consumed_a init \
@@ -170,14 +156,8 @@ fn withdraw_then_settle_double_spend_is_blocked() {
     );
 }
 
-// ===========================================================================
-// Regression — settle→withdraw double-spend is CLOSED.
-//
-// The mirror direction: a note consumed by a settle (which inits
-// `ConsumedNoteEntry[X]`) can no longer be withdrawn. Post-fix withdraw's own
-// `consumed_note` init collides on that PDA (pre-fix it was the manual Layer-3
-// check; the guarantee is unchanged, but the guard is now a single `init`).
-// ===========================================================================
+// The mirror direction: settlement creates the same tag-keyed marker, so a
+// later withdrawal must collide with it.
 #[test]
 fn settle_then_withdraw_double_spend_is_blocked() {
     let mut h = Harness::setup();
@@ -354,14 +334,12 @@ fn cu_profile_worst_case_settle() {
 }
 
 // ---------------------------------------------------------------------------
-// C-02 regression: `create_relock_pda` must cap a continuation re-lock's expiry
-// at `current_slot + MAX_LOCK_TTL_SLOTS`, exactly as `lock_note` caps a fresh
-// lock. Before the fix the re-lock path set `expiry_slot` unchecked, so a
-// malicious TEE could stamp an arbitrarily distant expiry — and because
-// `withdraw` rejects while ANY NoteLock exists (even an expired one), that
-// freezes the note indefinitely (censorship). This mirrors the passing
-// worst-case settle above; the ONLY change is the buyer re-lock expiry is set
-// beyond the cap, so the whole settle must revert atomically.
+// `create_relock_pda` must cap a continuation re-lock's expiry at
+// `current_slot + MAX_LOCK_TTL_SLOTS`, exactly as `lock_note` caps a fresh
+// lock. An unchecked distant expiry lets a malicious TEE keep the lock live
+// and censor use of that continuation note. This mirrors the passing
+// worst-case settle above; only the buyer re-lock expiry exceeds the cap, so
+// the whole settle must revert atomically.
 // ---------------------------------------------------------------------------
 #[test]
 fn settle_rejects_relock_expiry_beyond_ttl_cap() {

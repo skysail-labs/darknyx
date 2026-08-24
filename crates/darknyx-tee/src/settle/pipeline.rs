@@ -18,7 +18,7 @@
 //! transaction rides on the per-batch ALT alone and is correspondingly larger.
 //! The TEE keypair signs as both fee-payer and `tee_authority`.
 //!
-//! On the two-ALT path the assembled transaction measures ~1173 bytes, leaving 59
+//! On the two-ALT path the assembled transaction measures 1172 bytes, leaving 60
 //! bytes of headroom.
 //! Adding an account or payload field here overflows the limit and surfaces as
 //! `TransactionTooLarge` at send time — see `CRYPTOGRAPHY.md` §9 before changing
@@ -106,15 +106,16 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
-/// CU ceiling for the settle tx (Tx D). Post-CU-1 the true worst case (6
-/// output leaves + both continuation re-locks) is 78,388 after payload v9;
-/// 115k leaves a deliberately conservative >46% margin over that measurement.
+/// CU ceiling for the settle tx (Tx D). The local devnet-admin SBF test measures
+/// 58,251 CU for six output leaves plus both continuation re-locks; 115k keeps
+/// a conservative runtime margin.
 /// Lowering it cuts the settle priority fee (= price × requested_limit) by
 /// ~38%. NOTE: must be confirmed by a `cvm-settle-e2e` run on a redeployed CVM
 /// image before the reduced fee is relied on — a too-low limit fails the
 /// settle tx loud-and-safe with `ComputationalBudgetExceeded` (no fund risk).
 const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 115_000;
-/// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
+/// CU ceiling for each lock_note tx (Tx A). The proof-backed LiteSVM test
+/// measures 101,076 CU; 136k leaves about 34% local-runtime headroom.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
 /// CU ceiling for the verify_match_batch tx (Tx B). The two-public-input
 /// statement measures 103,346 CU in litesvm after paying for the authoritative

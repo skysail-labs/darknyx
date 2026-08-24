@@ -123,7 +123,49 @@ fn withdraw_succeeds_at_the_expiry_boundary_without_a_release() {
 
     assert!(
         consumed_note_exists(&h, &note.use_tag),
-        "a successful withdraw must init the commitment-keyed consume guard"
+        "a successful withdraw must init the tag-keyed consume guard"
+    );
+}
+
+/// The retired 136-byte lock cannot be safely decoded as the lean layout: its
+/// duplicated tag would be mistaken for the mint. The migration deliberately
+/// has no dual-layout production branch, so a legacy lock remains blocking and
+/// cannot be released until the required development-state reset.
+#[test]
+fn legacy_note_lock_layout_fails_closed_until_reset() {
+    let mut h = Harness::setup();
+    let (note, depositor, dest) = deposit_one(&mut h);
+    let expiry = 5_000u64;
+    seed_legacy_note_lock(&mut h, &note.use_tag, &[0x77u8; 16], expiry);
+
+    h.svm.warp_to_slot(expiry);
+    h.svm.expire_blockhash();
+    let tx = build_withdraw_tx(&h, &note, &depositor, &dest);
+    let err = h
+        .svm
+        .send_transaction(tx)
+        .expect_err("a legacy lock must not be interpreted as expired/absent");
+    let log = format!("{:?}", err.meta.logs);
+    assert!(
+        logs_have_error_code(&log, E_NOTE_ALREADY_LOCKED),
+        "legacy lock must fail closed in the raw spend guard: {log}"
+    );
+
+    h.svm.expire_blockhash();
+    let release_ix = build_release_lock_ix(&h, &note.use_tag, &depositor.pubkey());
+    let release_tx = Transaction::new(
+        &[&depositor],
+        Message::new(&[release_ix], Some(&depositor.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    let release_err = h
+        .svm
+        .send_transaction(release_tx)
+        .expect_err("release must reject the retired account layout");
+    let release_log = format!("{:?}", release_err.meta.logs);
+    assert!(
+        logs_have_error_code(&release_log, E_INVALID_ACCOUNT_LAYOUT),
+        "expected the explicit retired-layout error, got: {release_log}"
     );
 }
 

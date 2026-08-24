@@ -1,6 +1,7 @@
 import {
   bn254ToBE32,
   deriveNoteUseTag,
+  noteCommitmentFromBytes,
   noteCommitmentV2,
   type StoredNote,
 } from "@darknyx/sdk/browser-inventory-crypto";
@@ -483,8 +484,10 @@ describe("browser inventory plane", () => {
     continuation.consumedCommitment = input.commitment;
     const inputTag = Array.from(
       await deriveNoteUseTag(
-        Uint8Array.from(input.commitment.match(/../g) ?? [], (byte) =>
-          Number.parseInt(byte, 16),
+        noteCommitmentFromBytes(
+          Uint8Array.from(input.commitment.match(/../g) ?? [], (byte) =>
+            Number.parseInt(byte, 16),
+          ),
         ),
         bn254ToBE32(input.innerHash),
       ),
@@ -508,8 +511,10 @@ describe("browser inventory plane", () => {
       consumedTags.add(
         Array.from(
           await deriveNoteUseTag(
-            Uint8Array.from(consumed.commitment.match(/../g) ?? [], (byte) =>
-              Number.parseInt(byte, 16),
+            noteCommitmentFromBytes(
+              Uint8Array.from(consumed.commitment.match(/../g) ?? [], (byte) =>
+                Number.parseInt(byte, 16),
+              ),
             ),
             bn254ToBE32(consumed.innerHash),
           ),

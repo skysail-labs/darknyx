@@ -32,6 +32,7 @@ import {
   noteLockPda,
   vaultConfigPda,
 } from "../idl/vault-client.js";
+import { noteUseTagFromBytes } from "../utxo/note-identity.js";
 
 /** Canonical on-chain Ed25519 precompile program id. */
 export const ED25519_PROGRAM_ID = new PublicKey(
@@ -348,15 +349,19 @@ export async function buildSettleBatchedIx(
 
   const [vaultConfig] = await vaultConfigPda(p.programId);
   const [merkleTree] = await merkleTreePda(p.programId, p.treeId);
-  const [lockA] = await noteLockPda(p.programId, p.payload.noteAuseTag);
-  const [lockB] = await noteLockPda(p.programId, p.payload.noteBuseTag);
-  const [consumedA] = await consumedNotePda(p.programId, p.payload.noteAuseTag);
-  const [consumedB] = await consumedNotePda(p.programId, p.payload.noteBuseTag);
+  const noteAUseTag = noteUseTagFromBytes(p.payload.noteAuseTag);
+  const noteBUseTag = noteUseTagFromBytes(p.payload.noteBuseTag);
+  const noteEUseTag = noteUseTagFromBytes(p.payload.noteEuseTag);
+  const noteFUseTag = noteUseTagFromBytes(p.payload.noteFuseTag);
+  const [lockA] = await noteLockPda(p.programId, noteAUseTag);
+  const [lockB] = await noteLockPda(p.programId, noteBUseTag);
+  const [consumedA] = await consumedNotePda(p.programId, noteAUseTag);
+  const [consumedB] = await consumedNotePda(p.programId, noteBUseTag);
   // The relock locks are seeded on the TAGS, not the change commitments the
   // adjacent fields carry. An exact fill leaves both zero, and the encoder
   // dedups the two identical PDAs into one account slot (CLAUDE.md §6).
-  const [lockE] = await noteLockPda(p.programId, p.payload.noteEuseTag);
-  const [lockF] = await noteLockPda(p.programId, p.payload.noteFuseTag);
+  const [lockE] = await noteLockPda(p.programId, noteEUseTag);
+  const [lockF] = await noteLockPda(p.programId, noteFUseTag);
   const [batchMarker] = await batchValidityMarkerPda(p.programId, p.merkleRoot);
   const buyerRelock = p.payload.buyerRelockOrderId.some((x) => x !== 0);
   const sellerRelock = p.payload.sellerRelockOrderId.some((x) => x !== 0);

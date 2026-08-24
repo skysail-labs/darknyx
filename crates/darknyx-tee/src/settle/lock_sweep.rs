@@ -79,10 +79,11 @@ pub const LOCK_SWEEP_MAX_PER_TX: usize = 10;
 const LOCK_REGISTRATION_GRACE: Duration = Duration::from_secs(90);
 
 /// Anchor account layout:
-/// discriminator(8) || note_use_tag(32) || token_mint(32) || order_id(16)
-/// || expiry_slot(8 LE) || locked_by(32) || bump(1) || _padding(7).
+/// discriminator(8) || token_mint(32) || order_id(16) || expiry_slot(8 LE)
+/// || bump(1) || _padding(7).
 /// Mirrors `programs/vault/src/state.rs::NoteLock`.
-const LOCK_EXPIRY_OFFSET: usize = 8 + 32 + 32 + 16;
+const NOTE_LOCK_ACCOUNT_LEN: usize = 72;
+const LOCK_EXPIRY_OFFSET: usize = 8 + 32 + 16;
 const LOCK_EXPIRY_END: usize = LOCK_EXPIRY_OFFSET + 8;
 
 static NOTE_LOCK_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
@@ -128,7 +129,7 @@ pub fn build_release_lock_ix(
 /// discriminator and length first. `None` ⇒ not a lock we should act on.
 fn lock_expiry_slot(account: &crate::solana_rpc::RpcAccountInfo) -> Option<u64> {
     if account.owner != vault_program_id()
-        || account.data.len() < LOCK_EXPIRY_END
+        || account.data.len() != NOTE_LOCK_ACCOUNT_LEN
         || account.data[..8] != *NOTE_LOCK_DISCRIMINATOR
     {
         return None;
@@ -383,20 +384,20 @@ mod tests {
     /// live locks or never release dead ones.
     #[test]
     fn expiry_offset_matches_the_on_chain_layout() {
-        assert_eq!(LOCK_EXPIRY_OFFSET, 8 + 32 + 32 + 16);
-        let acct = lock_account(123_456, true, true, LOCK_EXPIRY_END + 40);
+        assert_eq!(LOCK_EXPIRY_OFFSET, 8 + 32 + 16);
+        let acct = lock_account(123_456, true, true, NOTE_LOCK_ACCOUNT_LEN);
         assert_eq!(lock_expiry_slot(&acct), Some(123_456));
     }
 
     #[test]
     fn rejects_foreign_owner_bad_discriminator_and_short_data() {
         assert_eq!(
-            lock_expiry_slot(&lock_account(1, false, true, LOCK_EXPIRY_END + 40)),
+            lock_expiry_slot(&lock_account(1, false, true, NOTE_LOCK_ACCOUNT_LEN)),
             None,
             "an account owned by another program must be ignored"
         );
         assert_eq!(
-            lock_expiry_slot(&lock_account(1, true, false, LOCK_EXPIRY_END + 40)),
+            lock_expiry_slot(&lock_account(1, true, false, NOTE_LOCK_ACCOUNT_LEN)),
             None,
             "a non-NoteLock discriminator must be ignored"
         );
@@ -404,6 +405,11 @@ mod tests {
             lock_expiry_slot(&lock_account(1, true, true, LOCK_EXPIRY_END - 1)),
             None,
             "a truncated account must be ignored, not read past its end"
+        );
+        assert_eq!(
+            lock_expiry_slot(&lock_account(1, true, true, 136)),
+            None,
+            "the retired 136-byte layout must not be misread as the lean lock"
         );
     }
 

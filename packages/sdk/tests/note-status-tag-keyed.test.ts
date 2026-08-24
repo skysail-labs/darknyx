@@ -19,6 +19,10 @@ import { DarkPoolClient } from "../src/client.js";
 import { consumedNotePda, noteLockPda } from "../src/idl/vault-client.js";
 import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { bn254ToBE32 } from "../src/keys/key-generators.js";
+import {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+} from "../src/utxo/note-identity.js";
 import type {
   AccountInfoProvider,
   MasterSeedStorage,
@@ -30,8 +34,16 @@ const PROGRAM_ID = new PublicKey(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-const COMMITMENT = new Uint8Array(32).fill(0x11);
+const COMMITMENT = noteCommitmentFromBytes(new Uint8Array(32).fill(0x11));
 const INNER_HASH = bn254ToBE32(0x2222n);
+
+if (false) {
+  // The brands must reject the exact mistake this test guards at runtime.
+  // @ts-expect-error a commitment cannot seed the tag-keyed lock namespace
+  void noteLockPda(PROGRAM_ID, COMMITMENT);
+  // @ts-expect-error a commitment cannot seed the tag-keyed consume namespace
+  void consumedNotePda(PROGRAM_ID, COMMITMENT);
+}
 
 /** Answers non-null for exactly one address; null everywhere else. */
 function providerAnsweringOnly(target: PublicKey): AccountInfoProvider {
@@ -88,7 +100,9 @@ describe("getNoteStatus is keyed on the note-use tag", () => {
     // account and answer "consumed"; a tag-keyed one must ignore it entirely.
     const [consumedByCommitment] = await consumedNotePda(
       PROGRAM_ID,
-      COMMITMENT,
+      // A caller now has to make this explicit semantic violation; passing the
+      // commitment directly is a TypeScript error.
+      noteUseTagFromBytes(COMMITMENT),
     );
     const client = makeClient(providerAnsweringOnly(consumedByCommitment));
 

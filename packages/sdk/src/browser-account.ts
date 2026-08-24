@@ -8,6 +8,10 @@ export {
   type BuildWithdrawParams,
 } from "./idl/vault-client.js";
 export { assertPublicInputs } from "./zk/assert-public-inputs.js";
+export {
+  noteCommitmentFromBytes,
+  noteUseTagFromBytes,
+} from "./utxo/note-identity.js";
 export type {
   DepositInputs,
   Groth16ProofBytes,

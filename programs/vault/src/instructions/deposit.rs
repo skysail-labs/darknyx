@@ -7,7 +7,6 @@ use anchor_lang::prelude::*;
 // this module import is load-bearing despite looking unused. Do not remove it.
 use anchor_spl::token;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
-use std::mem::size_of;
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8, amount: u64, note_commitment: [u8; 32], recovery_nonce: [u8; 32], proof: Groth16Proof)]
@@ -74,7 +73,7 @@ pub struct Deposit {
     #[account(
         init,
         payer = depositor,
-        space = 8 + size_of::<DepositedNoteEntry>(),
+        space = DepositedNoteEntry::SPACE,
         seeds = [DepositedNoteEntry::SEED, note_commitment.as_ref()],
         bump,
     )]

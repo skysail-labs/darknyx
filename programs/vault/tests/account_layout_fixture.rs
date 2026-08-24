@@ -51,7 +51,8 @@ use std::path::PathBuf;
 // image rather than a borsh encoding. `bytemuck::bytes_of` reads exactly those
 // bytes, which is what makes this fixture a LAYOUT check under both models --
 // and therefore the thing that proves v1 and v2 agree byte for byte.
-use anchor_lang::prelude::Address as Pubkey;
+use anchor_lang::prelude::{Address as Pubkey, Rent};
+use anchor_lang::{AccountDeserialize, Discriminator};
 use bytemuck::Pod;
 use vault::state::{
     BatchValidityMarker, ConsumedNoteEntry, DepositedNoteEntry, MarketConfig, MerkleTree, NoteLock,
@@ -72,10 +73,14 @@ fn field(name: &str, offset: usize, size: usize) -> String {
 }
 
 fn account(name: &str, len: usize, fields: Vec<String>) -> String {
-    format!(
-        "    \"{name}\": {{\n      \"account_len\": {len},\n{}\n    }}",
-        fields.join(",\n")
-    )
+    if fields.is_empty() {
+        format!("    \"{name}\": {{\n      \"account_len\": {len}\n    }}")
+    } else {
+        format!(
+            "    \"{name}\": {{\n      \"account_len\": {len},\n{}\n    }}",
+            fields.join(",\n")
+        )
+    }
 }
 
 /// Borsh offsets accumulate in declaration order; every field below is
@@ -182,23 +187,18 @@ fn render() -> String {
     // Added when the Anchor v2 port needed layout identity asserted for ALL
     // account structs, not only the five that happened to be here. These are
     // the smallest and least glamorous, which is exactly why they were the ones
-    // missing: nothing in the settle path reads them field-by-field, so a
-    // silent offset shift would surface as a PDA that derives fine and decodes
-    // to garbage.
-    let mut f = Vec::new();
-    zc!(DepositedNoteEntry, f, note_commitment: 32, deposited_slot: 8, bump: 1);
+    // missing. The two replay markers are now deliberately discriminator-only:
+    // their PDA seed carries the identity, and existence carries the bit.
     accounts.push(account(
         "DepositedNoteEntry",
-        DISC + core::mem::size_of::<DepositedNoteEntry>(),
-        f,
+        DepositedNoteEntry::SPACE,
+        Vec::new(),
     ));
 
-    let mut f = Vec::new();
-    zc!(ConsumedNoteEntry, f, note_use_tag: 32, match_id: 16, consumed_slot: 8, bump: 1);
     accounts.push(account(
         "ConsumedNoteEntry",
-        DISC + core::mem::size_of::<ConsumedNoteEntry>(),
-        f,
+        ConsumedNoteEntry::SPACE,
+        Vec::new(),
     ));
 
     let mut f = Vec::new();
@@ -254,6 +254,68 @@ fn space_constants_match_the_pod_sizes() {
         DISC + core::mem::size_of::<BatchValidityMarker>(),
         "BatchValidityMarker::SPACE drifted from the Pod size"
     );
+    assert_eq!(DepositedNoteEntry::SPACE, DISC);
+    assert_eq!(ConsumedNoteEntry::SPACE, DISC);
+    assert_eq!(
+        NoteLock::SPACE,
+        DISC + core::mem::size_of::<NoteLock>(),
+        "NoteLock::SPACE drifted from the Pod size"
+    );
+}
+
+#[test]
+fn compact_account_rent_is_pinned() {
+    let rent = Rent::from_bytes(&6_960u64.to_le_bytes()).expect("canonical rent parameters");
+    let balance = |size| {
+        rent.try_minimum_balance(size)
+            .expect("account size is valid")
+    };
+    let deposit_marker = balance(DepositedNoteEntry::SPACE);
+    let consumed_marker = balance(ConsumedNoteEntry::SPACE);
+    let note_lock = balance(NoteLock::SPACE);
+
+    // These numbers use Solana's canonical Rent parameters. Pinning both the
+    // absolute lamports and the old-layout deltas makes a future layout or Rent
+    // assumption change visible in review instead of silently invalidating the
+    // account-cost evidence.
+    assert_eq!(deposit_marker, 946_560);
+    assert_eq!(consumed_marker, 946_560);
+    assert_eq!(note_lock, 1_392_000);
+
+    let old_deposit_marker = balance(56);
+    let old_consumed_marker = balance(72);
+    let old_note_lock = balance(136);
+    assert_eq!(old_deposit_marker - deposit_marker, 334_080);
+    assert_eq!(old_consumed_marker - consumed_marker, 445_440);
+    assert_eq!(old_note_lock - note_lock, 445_440);
+
+    eprintln!(
+        "RENT_PROFILE deposit_marker={} consumed_marker={} note_lock={} savings_deposit={} savings_consumed={} savings_lock={}",
+        deposit_marker,
+        consumed_marker,
+        note_lock,
+        old_deposit_marker - deposit_marker,
+        old_consumed_marker - consumed_marker,
+        old_note_lock - note_lock,
+    );
+}
+
+#[test]
+fn legacy_replay_markers_remain_existence_compatible() {
+    // Anchor accepts trailing bytes after the current account body. Pin that
+    // behavior explicitly: old development accounts remain recognizable as
+    // occupied replay markers during a drain/reset, while every newly-created
+    // marker pays rent for the discriminator only. No retired payload field is
+    // read or trusted.
+    let mut legacy_deposit = vec![0xA5; 56];
+    legacy_deposit[..DISC].copy_from_slice(DepositedNoteEntry::DISCRIMINATOR);
+    DepositedNoteEntry::try_deserialize(&mut legacy_deposit.as_slice())
+        .expect("legacy deposit marker must remain occupied");
+
+    let mut legacy_consumed = vec![0xA5; 72];
+    legacy_consumed[..DISC].copy_from_slice(ConsumedNoteEntry::DISCRIMINATOR);
+    ConsumedNoteEntry::try_deserialize(&mut legacy_consumed.as_slice())
+        .expect("legacy consume marker must remain occupied");
 }
 
 #[test]

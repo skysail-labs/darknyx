@@ -33,7 +33,7 @@
 //! on-chain handler can re-derive it via `solana_poseidon::hashv`; keep it
 //! ≤ 12 (CLAUDE.md §5.3).
 
-use darkpool_crypto::{note_use_tag, poseidon_hash_bytes, CryptoError};
+use darkpool_crypto::{note_use_tag, poseidon_hash_bytes, CryptoError, NoteCommitment};
 
 use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
@@ -85,19 +85,35 @@ pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError
     // commitments — the circuit needs them as private signals to bind amount,
     // owner and mint — so the tags are derived here exactly as the circuit
     // derives them, from (commitment, inner).
-    let tag_a = note_use_tag(&slot.note_a_commitment, &slot.a_inner)?;
-    let tag_b = note_use_tag(&slot.note_b_commitment, &slot.b_inner)?;
+    let tag_a = note_use_tag(
+        &NoteCommitment::from_bytes(slot.note_a_commitment)?,
+        &slot.a_inner,
+    )?
+    .into_bytes();
+    let tag_b = note_use_tag(
+        &NoteCommitment::from_bytes(slot.note_b_commitment)?,
+        &slot.b_inner,
+    )?
+    .into_bytes();
 
     // Masked like their commitments: no change note means no tag.
     let tag_e = if slot.note_e_commitment == [0u8; 32] {
         [0u8; 32]
     } else {
-        note_use_tag(&slot.note_e_commitment, &slot.e_inner)?
+        note_use_tag(
+            &NoteCommitment::from_bytes(slot.note_e_commitment)?,
+            &slot.e_inner,
+        )?
+        .into_bytes()
     };
     let tag_f = if slot.note_f_commitment == [0u8; 32] {
         [0u8; 32]
     } else {
-        note_use_tag(&slot.note_f_commitment, &slot.f_inner)?
+        note_use_tag(
+            &NoteCommitment::from_bytes(slot.note_f_commitment)?,
+            &slot.f_inner,
+        )?
+        .into_bytes()
     };
 
     let relock_digest = poseidon_hash_bytes(&[u8_tag_to_be32(DOMAIN_RELOCK_DIGEST), tag_e, tag_f])?;

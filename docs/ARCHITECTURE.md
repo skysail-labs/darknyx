@@ -175,8 +175,9 @@ root.
 | `BatchValidityMarker` | `[b"batch_validity", batch_root]` | one verified N=16 batch |
 | vault token account | `[b"vault_token", mint]` | SPL custody for one mint |
 
-The obsolete nullifier-keyed account type and its client derivation helpers are
-removed. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
+The strict deposit-once marker is commitment-keyed. The shared consume-once
+marker is note-use-tag-keyed, so withdrawal, merge, and settlement collide in
+one replay namespace without republishing the Merkle-leaf commitment.
 
 ## Circuit boundaries
 
@@ -184,7 +185,7 @@ removed. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
 |---|---:|---|
 | VALID_DEPOSIT | 5 | recoverable note construction for public mint/amount/nonce without exposing owner/inner |
 | VALID_SPEND | 8 | note opening, ownership, inclusion, nullifier, public amount/mint, and exact destination account |
-| VALID_INPUT | 4 | owned positive-u64 note with a public commitment/mint at a recent root |
+| VALID_INPUT | 4 | owned positive-u64 note with a public use tag/mint at a recent root |
 | VALID_MERGE K=2/K=4 | 6/8 | active positive same-owner/same-mint inputs sum to one derived output |
 | VALID_MATCH_BATCH N=16 | 2 | up to 16 matches under one market/config digest and Poseidon batch root |
 
