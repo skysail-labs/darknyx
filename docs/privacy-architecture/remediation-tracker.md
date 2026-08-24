@@ -5,13 +5,13 @@
 **Last updated:** 2026-08-25
 
 **Canonical design:**
-[`privacy-architecture-remediation-plan.md`](privacy-architecture-remediation-plan.md)
+[`remediation-plan.md`](remediation-plan.md)
 
 **Phase 0 evidence:**
-[`privacy-architecture-phase0-report.md`](privacy-architecture-phase0-report.md)
+[`phase0-report.md`](phase0-report.md)
 
 **Frozen formula vectors:**
-[`privacy-architecture-phase0-vectors.json`](privacy-architecture-phase0-vectors.json)
+[`phase0-vectors.json`](phase0-vectors.json)
 
 **Current phase:** Phase 0 complete; Phase 1 is next
 

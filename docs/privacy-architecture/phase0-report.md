@@ -11,7 +11,7 @@ protocol change
 their replacements are frozen, and PA-08/09/10 are decided.
 
 This report is the durable output of Phase 0 in
-[`privacy-architecture-remediation-plan.md`](privacy-architecture-remediation-plan.md).
+[`remediation-plan.md`](remediation-plan.md).
 It records the experiment, not a production implementation. The one-off Rust
 benchmark/PoC was removed after its output was captured; no benchmark circuit,
 feature gate, or executable remains in the repository.
@@ -169,7 +169,7 @@ proof-bound and public in Tx D. Public inputs remain `[batch_root,
 config_digest]`.
 
 The reproducible vector, including every decimal preimage, is
-[`privacy-architecture-phase0-vectors.json`](privacy-architecture-phase0-vectors.json):
+[`phase0-vectors.json`](phase0-vectors.json):
 
 ```text
 fee_key_binding_v1 =
@@ -494,11 +494,11 @@ move atomically in Phase 2.
 ## 8. Provisional domain freeze
 
 The machine-readable proposal is
-[`privacy-domain-registry.proposed.json`](privacy-domain-registry.proposed.json).
+[`domain-registry.proposed.json`](domain-registry.proposed.json).
 Its JSON Schema is
-[`privacy-domain-registry.schema.json`](privacy-domain-registry.schema.json).
+[`domain-registry.schema.json`](domain-registry.schema.json).
 The companion machine-readable formula vectors are
-[`privacy-architecture-phase0-vectors.json`](privacy-architecture-phase0-vectors.json).
+[`phase0-vectors.json`](phase0-vectors.json).
 Phase 0 reserves:
 
 | Domain | Name | Arity | Meaning |
@@ -543,8 +543,8 @@ Repository checks for this documentation-only phase:
 
 ```sh
 git diff --check
-python3 -m json.tool docs/privacy-domain-registry.proposed.json
-python3 -m json.tool docs/privacy-architecture-phase0-vectors.json
+python3 -m json.tool docs/privacy-architecture/domain-registry.proposed.json
+python3 -m json.tool docs/privacy-architecture/phase0-vectors.json
 ```
 
 A temporary serializer test for Tx B was attempted but did not complete because

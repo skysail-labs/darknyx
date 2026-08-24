@@ -23,16 +23,16 @@ sources of truth. Audit reports under `audits/` remain immutable and are not
 superseded by this document.
 
 Implementation state is tracked in
-[`privacy-architecture-remediation-tracker.md`](privacy-architecture-remediation-tracker.md).
+[`remediation-tracker.md`](remediation-tracker.md).
 Phase 0 measurements, fixed vectors, account-reader inventory, and the frozen
 design decisions live in
-[`privacy-architecture-phase0-report.md`](privacy-architecture-phase0-report.md).
+[`phase0-report.md`](phase0-report.md).
 The proposed machine-readable domain allocation is
-[`privacy-domain-registry.proposed.json`](privacy-domain-registry.proposed.json).
+[`domain-registry.proposed.json`](domain-registry.proposed.json).
 Its validation contract is
-[`privacy-domain-registry.schema.json`](privacy-domain-registry.schema.json).
+[`domain-registry.schema.json`](domain-registry.schema.json).
 The reproducible frozen formula vectors are
-[`privacy-architecture-phase0-vectors.json`](privacy-architecture-phase0-vectors.json).
+[`phase0-vectors.json`](phase0-vectors.json).
 
 ---
 
@@ -1136,7 +1136,7 @@ report, fixed vectors, and reusable regression tests.
 
 ## 8. Remediation tracker contract
 
-Create `docs/privacy-architecture-remediation-tracker.md` when Phase 0 starts.
+Create `docs/privacy-architecture/remediation-tracker.md` when Phase 0 starts.
 It should contain one row per PA ID with:
 
 | Field | Meaning |
