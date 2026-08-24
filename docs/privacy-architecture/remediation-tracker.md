@@ -13,8 +13,8 @@
 **Frozen formula vectors:**
 [`phase0-vectors.json`](phase0-vectors.json)
 
-**Current phase:** Phase 2 implementation and local evidence complete; hosted
-CI, review, and devnet reset/lifecycle evidence are pending
+**Current phase:** Phase 2 merged; hosted replay and lock lifecycle evidence is
+complete. Phase 3 is next; a full CVM settlement remains a Phase 5 gate.
 
 **Mainnet status:** blocked on mandatory implementation, devnet/CVM evidence,
 independent circuit/privacy review, and Phase-2 ceremony
@@ -50,9 +50,9 @@ review, and ceremony.
 | PA-01 | High privacy | **Validated** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Implement v2 circuit/config/recovery bundle atomically in Phase 3. |
 | PA-02 | High privacy | **Validated** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Replace public commitments with private input inners in Phase 3. |
 | PA-03 | Medium privacy/architecture | **Code complete** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Retain as code complete pending final external/release assurance. |
-| PA-04 | Low security / High volume cost | **Code complete** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Run the mandatory clean devnet reset and replay smoke after merge. |
-| PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Run proof-backed devnet lock/release/expiry/settle lifecycle after merge. |
-| PA-06 | Medium recoverability | **Code complete** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Collect the required devnet exact-retry evidence. |
+| PA-04 | Low security / High volume cost | **Hosted validated** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Retain for final release assurance; hosted replay and exact 8-byte layouts passed. |
+| PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Exercise settlement-created continuation locks in the Phase 5 CVM run. |
+| PA-06 | Medium recoverability | **Hosted validated** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Retain for final release assurance; exact devnet retry is recorded. |
 | PA-07 | Low privacy/complexity | **Validated** | 3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier. | VALID_SPEND public inputs/instruction/event shrink | Remove in atomic Phase 3 proof cutover. |
 | PA-08 | Design simplification | **Design frozen** | 3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent. | All note circuits/formulas change under domain 32 | Implement `Poseidon2(32, spending_key)` in Phase 3. |
 | PA-09 | Design/documentation | **Design frozen** | 3 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner. | VALID_DEPOSIT/formula change under domain 33 | Implement in Phase 3 and prove canonical-client recovery. |
@@ -67,8 +67,8 @@ review, and ceremony.
 | Phase | Branch | Scope | Status | PR/commit | Required evidence before advancing |
 |---:|---|---|---|---|---|
 | 0 | `privacy/coherence-measurements` | PoCs, benchmark, reader inventory, design/domain freeze | **Merged** | PR #202 / `ef111b1b` | Complete; no production behavior changed |
-| 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI passed** | PR #203 / `b11e1fc0` | complete except PA-06's explicit devnet retry evidence |
-| 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Implementation and local evidence complete; PR pending** | branch based on `b11e1fc0` | hosted CI/review, then clean devnet reset and lifecycle smoke |
+| 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0` | complete; final external/release assurance remains |
+| 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
 | 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | Not started | — | all artifacts/vectors/parity, SBF, serializer sizes, negative mutation tests |
 | 4 | `privacy/fee-recovery-v2` | protocol/user recovery operations if not wire-coupled into Phase 3 | Not started | — | journal-loss and epoch-rotation recovery drills |
 | 5 | `privacy/release-assurance` | devnet/CVM evidence, docs, external gates | Not started | — | final evidence table, independent review, ceremony, mainnet build/deploy checks |
@@ -188,21 +188,22 @@ instructions as implementation proceeds.
   fixed stale `tsconfig.tsbuildinfo` retention. Repository guards for image
   digests, CUDA env, namespace, debug endpoints, process markers, doctests, and
   script awaits passed. `cargo fmt --check` and `git diff --check` passed.
-- **Hosted gate:** PR #203 passed hosted CI before merge. PA-06 remains short of
-  hosted validation until the explicit devnet exact-retry scenario is recorded.
+- **Hosted gate:** PR #203 passed hosted CI before merge. The 2026-08-25 Phase 2
+  devnet lifecycle run reused the exact note/public statement, rejected the
+  duplicate deposit atomically, and observed the unchanged 8-byte replay
+  marker, completing PA-06's explicit retry evidence.
 - **Local evidence required:** deletion reference sweep, keystore migration,
   backup round-trip, exact-retry/ambiguous-submit tests, seed-plus-chain deposit
-  recovery, full local gate.
-- **Hosted evidence:** none required solely for deletion; devnet deposit retry
-  is required for PA-06 before closure.
+  recovery, full local gate. **Complete.**
+- **Hosted evidence:** none required solely for deletion; PA-06's devnet retry
+  is recorded with the Phase 2 signatures below.
 - **Rollback:** code-only before new keystore v3 is written; while migrating,
   retain a reader for v2 backups but never regenerate or replace a seed.
 
 ### PA-04 / PA-05 — Phase 2 account compaction
 
 - **Owner:** Phase 2 implementation agent
-- **PR/commit:** branch `privacy/compact-note-state`; PR pending; base
-  `b11e1fc0`
+- **PR/commit:** PR #204; merge `96222ffe`
 - **Invariant:** replay sets remain exact and eternal; lock mint/order/expiry
   semantics remain unchanged under lean layouts.
 - **Implementation:** `DepositedNoteEntry` and `ConsumedNoteEntry` are
@@ -245,7 +246,48 @@ instructions as implementation proceeds.
 - **Local evidence required:** layout fixtures, SDK parity, litesvm deposit
   replay, cross-consume guard, live/expired/release/settle tests; measured rent,
   CU, and Tx sizes. **Complete.**
-- **Hosted evidence:** devnet reset and lifecycle smoke before reuse.
+- **Hosted evidence (2026-08-25, private Helius devnet):** upgraded the
+  canonical program in place
+  (`SRJyPDPMoSrW5KGX77orzeHzc7541h9yUPtxzv6AbG5m11Ukgv6XZJV4h9qNJ8evMsJkJAikDNd3usC66uruipf`),
+  regenerated the four-shard foundation with fresh mints and ALT, and reset
+  shards 0..3. The repeatable `RUN_DEVNET_DW=1` test then proved a real deposit
+  and VALID_INPUT lock, rejected the exact deposit replay atomically, observed
+  an 8-byte deposit marker, rejected release while live, observed and parsed a
+  72-byte lock, released it at expiry, re-locked, withdrew through the expired
+  lock, observed an 8-byte consume marker, rejected re-lock after consumption,
+  restored the original four-key signer set in `finally`, and reclaimed the
+  temporary signer's balance. The final run passed in 42.29 seconds. The
+  isolated `RUN_DEVNET_MERGE=1` deposit -> merge(K=2) -> withdraw test also
+  passed.
+- **Reset signatures:** shard 0
+  `2hMd6V65QUMxjRBCKvA1HFLv2y1pSotCpRmUgabR3YkQWiSw56B2hcmpiUMvRrtL96eofifjnD3r4qq6XQdgesGT`;
+  shard 1
+  `4bbYNV4dbhGbvUfVrVruUL1u1rSK9VcdcDjgBwuQSSRkz2TBoCXcX1HSxxafjswufVAaL7BiZNJkKXkJv1zxj7Js`;
+  shard 2
+  `6gWpZR6pyFS3YjnZM4RrKFFrJc2pRNnJSKbvvVRWhLimsza4s1x1repYGaM27skm7A15N6gHiMaLTz2S3kyj9m7`;
+  shard 3
+  `5LGXjX7dD43cpq5j4yDuPFR66vm7XvagiZQ22dkjgAcB4LE4rjgixaUjg3McWyJpjn6Jkg3rQ7smpZaZ7wWVoocS`.
+- **Final lifecycle signatures:** deposit
+  `4qrqdP2D1Zm7hKWAea4ANYE4B2uv1pPJpU9TF2vjXZAEsBe339RgLLdFa3WpT4aCKVsvLfjHfb7QurrfnxyeXqY8`;
+  temporary signer rotation
+  `3t1XAxrHMu3n1pYGBaBbFpQysExFx929YNujnKc4S3J81ZEge4QUgVba7X27LMYbzKDBS79bECxw9FeDuErAau6`;
+  first lock
+  `5qswkxcy3fmWmCcnY5p8KsggQjix7tJvPG5mbCTBsJjxF4y2sXyLiKDrxRi6CYRJsgM2DMtQQaLmYB1V8t41pLSu`;
+  first release
+  `34eCzcM1WEvtYiuEjcKExmUgypuMiQDbWkLxQsDohjounu7EaJu7BExbGBSuCjrLS3Lmn6jQdvtFg8iGEUY6vYif`;
+  second lock
+  `5yQ7rQf9qP9aNUyAQy4QnDLyE3cr6bv32zPBMefwJKJvAk4uCuZnSXhgQ2e3e6Ur69SSCjT4yvwMxJMCgPLE4U5j`;
+  withdraw
+  `3VrD9mjBndrk8XCr6xZmoHeMaJ8fBgjYWdFZyXes2ved7XiLNvEDvbSvmCJtX5RRMDY4kU3wgk2U8t2bVtU9hCcf`;
+  expired-lock release
+  `5LZarJgjbAGcHtr58Axm2g9HhpAP3fAPNTcs5gSEpqzVeNgqXaEw1KNU2i7psiiuKUe3ieghM24PY7kvea8jFzce`;
+  signer restore
+  `2LiWdGxH9f6TmUxxKJj55sBUdQVYYWhKvqKVpwrowHuGaAne9MmjixkdK29ygjs9SV4QV6ADeV3SG3y4mzxrFCWJ`;
+  balance reclaim
+  `oqmEV65D4YsKBTosRitNJQm2jY3qfUm4xc7fKq2CwJPFpjixU3D8WLQ6jorjdwoaaL6wqmRvSzRAkjjstihqQFy`.
+- **Remaining hosted evidence:** no CVM was started. A digest-pinned full settle
+  must still prove settlement-created continuation locks use the 72-byte
+  layout; that belongs to the Phase 5 CVM suite and is not implied here.
 - **Rollback:** development state is reset; no dual-layout mainnet path is
   required because no mainnet notes exist.
 
@@ -268,10 +310,11 @@ instructions as implementation proceeds.
 
 All remain open:
 
-- [ ] Phase 1 merged with keystore/deposit recovery evidence.
-- [ ] Phase 2 merged with exact replay/lock semantics and measured layouts.
+- [x] Phase 1 merged with keystore/deposit recovery evidence.
+- [x] Phase 2 merged with exact replay/lock semantics and measured layouts.
 - [ ] Phase 3 atomic cutover merged with every source/artifact/vector in sync.
-- [ ] Clean reset of every Merkle shard and post-reset sync floor recorded.
+- [x] Clean reset of every Merkle shard recorded; the CVM post-reset sync floor
+      remains part of the Phase 5 cold boot.
 - [ ] User seed-plus-chain full-lineage recovery drill passed.
 - [ ] Protocol fee key-plus-chain recovery and epoch-rotation drill passed.
 - [ ] Devnet SBF/CU/transaction-size evidence recorded.

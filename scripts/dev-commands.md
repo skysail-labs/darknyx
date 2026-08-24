@@ -689,10 +689,16 @@ creds), `--report <path.md>`.
 ## 8. Vault crypto on devnet (no CVM)
 
 `devnet-deposit-withdraw.test.ts` exercises the **VALID_DEPOSIT-gated vault
-deposit + VALID_SPEND withdraw round-trip on devnet in isolation** — no CVM,
-no TEE authority. It resets the tree, mints, proves and deposits a v2 note,
-then withdraws it with a VALID_SPEND proof and asserts the round-trip. Use it
-to test vault crypto changes without spending on a CVM.
+deposit + VALID_INPUT lock lifecycle + VALID_SPEND withdraw round-trip on
+devnet in isolation** — no CVM or matcher. It resets the tree, proves and
+deposits a v2 note, rejects an exact replay without moving tokens, and pins the
+8-byte deposit marker. It then temporarily installs an ephemeral K-key TEE set,
+creates a real 72-byte proof-backed lock, rejects early release, releases at
+expiry, re-locks, withdraws through the expired lock, pins the 8-byte consume
+marker, and rejects re-lock after consumption. The original signer set is
+restored in a `finally` block and the temporary signer's balance is reclaimed.
+Use it to test vault crypto and lock-layout changes without spending on a CVM;
+it does not replace a full settlement smoke.
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_DW=1 \
