@@ -191,7 +191,7 @@ icicle-snark  = { path = "../../third_party/icicle-snark", optional = true }
 # than an ark-groth16 re-implementation) means intake accepts exactly what
 # the vault accepts: no proof-format conversion, no pi_a-negation subtlety,
 # and no second verification code path that could drift. It works off-BPF —
-# `programs/vault/tests/zk_roundtrip.rs` already verifies on the host.
+# `programs/vault/tests/zk_spend_roundtrip.rs` already verifies on the host.
 groth16-solana = { workspace = true }
 # Join independent transparency RPC reads; integration tests also use its
 # `SinkExt`/`StreamExt` traits to drive real WebSocket clients.

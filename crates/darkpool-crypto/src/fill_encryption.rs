@@ -1,8 +1,8 @@
 //! Asymmetric encryption of a fill side's trade + change amounts — the
 //! permanent on-chain recovery backstop.
 //!
-//! Distinct from [`crate::viewing_keys`] (the symmetric compliance hierarchy
-//! MVK→PairVK→MonthlyVK). Here the **TEE** encrypts each side's two `u64`
+//! This is the live recovery hierarchy; the former symmetric compliance-key
+//! hierarchy is retired. The **TEE** encrypts each side's two `u64`
 //! output amounts TO that side's X25519 viewing-encryption *public* key, so
 //! only the holder of the matching secret — derived client-side from the master
 //! seed (`deriveViewingEncKeypair` in the SDK) — can recover it. This survives a

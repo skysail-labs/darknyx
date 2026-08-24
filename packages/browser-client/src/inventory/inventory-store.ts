@@ -109,12 +109,11 @@ function decodeSnapshot(bytes: Uint8Array): InventorySnapshot {
     return {
       ...(value as Omit<
         InventorySnapshot,
-        "version" | "orders" | "nextOrderIndex" | "nextDepositIndex"
+        "version" | "orders" | "nextOrderIndex"
       >),
       version: 3,
       orders: [],
       nextOrderIndex: 0,
-      nextDepositIndex: 0,
     };
   }
   if (value.version === 2) {
@@ -125,21 +124,20 @@ function decodeSnapshot(bytes: Uint8Array): InventorySnapshot {
     ) {
       throw new Error("unsupported browser inventory snapshot");
     }
-    return {
-      ...(value as Omit<InventorySnapshot, "version" | "nextDepositIndex">),
-      version: 3,
-      nextDepositIndex: 0,
-    };
+    return { ...(value as Omit<InventorySnapshot, "version">), version: 3 };
   }
   if (
     !("orders" in value) ||
     !Array.isArray(value.orders) ||
-    !("nextOrderIndex" in value) ||
-    !("nextDepositIndex" in value)
+    !("nextOrderIndex" in value)
   ) {
     throw new Error("unsupported browser inventory snapshot");
   }
-  const snapshot = value as InventorySnapshot;
+  const { nextDepositIndex: _retired, ...snapshot } =
+    value as InventorySnapshot & {
+      nextDepositIndex?: unknown;
+    };
+  void _retired;
   // Pre-release v2 snapshots predate durable cancel nonces. Starting at one is
   // safe because every trading index/key is unique to one order.
   snapshot.orders = snapshot.orders.map((order) => ({

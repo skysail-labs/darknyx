@@ -4,7 +4,6 @@ import { constants } from "node:fs";
 import { resolve } from "node:path";
 
 export const CIRCUITS = Object.freeze({
-  wallet_create: { build: "valid_wallet_create", warmRuns: 100 },
   deposit: { build: "valid_deposit", warmRuns: 100 },
   input: { build: "valid_input", warmRuns: 300 },
   spend: { build: "valid_spend", warmRuns: 100 },

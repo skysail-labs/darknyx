@@ -94,7 +94,6 @@ build_circuit() {
     echo "[$name] done."
 }
 
-build_circuit valid_wallet_create
 build_circuit valid_deposit
 build_circuit valid_spend
 build_circuit valid_input

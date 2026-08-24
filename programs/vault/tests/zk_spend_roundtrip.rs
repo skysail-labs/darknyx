@@ -384,7 +384,7 @@ fn valid_spend_roundtrip() {
     );
 }
 
-// ----- Same proof parsing helpers as zk_roundtrip.rs -----
+// ----- snarkjs proof parsing helpers -----
 
 fn dec_to_be32(s: &str) -> [u8; 32] {
     str_to_u256_be(s)

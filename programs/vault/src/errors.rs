@@ -36,9 +36,10 @@ pub enum VaultError {
     #[msg("Nullifier has already been spent")]
     NullifierAlreadySpent,
 
-    // ---- Wallet registry ----
-    #[msg("User commitment is already registered")]
-    WalletAlreadyRegistered,
+    // Error-code slot 6008 is retained so removing the retired wallet registry
+    // cannot renumber every later Anchor error. No instruction emits it.
+    #[msg("Retired error-code slot")]
+    RetiredWalletRegistry,
 
     // ---- Lock lifecycle ----
     #[msg("Note lock has not yet expired")]

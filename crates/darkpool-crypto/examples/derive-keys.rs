@@ -1,16 +1,14 @@
 //! Helper CLI used by the TS parity test to emit derived keys as hex.
 //! Invoked as:
 //!   target/debug/examples/derive-keys spending <seed_hex>
-//!   target/debug/examples/derive-keys viewing  <seed_hex>
 //!   target/debug/examples/derive-keys trading  <seed_hex> <offset>
-//!   target/debug/examples/derive-keys root     <seed_hex>
 //!   target/debug/examples/derive-keys blinding <seed_hex> <counter>
 //!   target/debug/examples/derive-keys note-secret <seed_hex> <recovery_nonce_hex>
 
 use darkpool_crypto::field::fr_to_be_bytes;
 use darkpool_crypto::keys::{
-    derive_blinding_factor, derive_master_viewing_key, derive_note_secret, derive_root_key,
-    derive_spending_key, derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
+    derive_blinding_factor, derive_note_secret, derive_spending_key, derive_trading_key_at_offset,
+    MasterSeed, MASTER_SEED_BYTES,
 };
 
 fn parse_seed(h: &str) -> MasterSeed {
@@ -32,8 +30,6 @@ fn main() {
 
     let out: String = match cmd.as_str() {
         "spending" => hex::encode(fr_to_be_bytes(&derive_spending_key(&seed).unwrap())),
-        "viewing" => hex::encode(fr_to_be_bytes(&derive_master_viewing_key(&seed).unwrap())),
-        "root" => hex::encode(derive_root_key(&seed).unwrap().to_bytes()),
         "trading" => {
             let off: u64 = args[3].parse().expect("offset u64");
             hex::encode(derive_trading_key_at_offset(&seed, off).unwrap().to_bytes())

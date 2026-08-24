@@ -14,7 +14,6 @@
  * CVM; `bin/daemon.ts` supplies the real implementations.
  */
 
-import { randomBytes } from "node:crypto";
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
   OrderSide,
@@ -1070,13 +1069,9 @@ export class Daemon {
     if (!this.depositFn || !this.depositor) {
       throw new Error("deposit not configured (no payer/RPC/program id)");
     }
-    // A random per-deposit index seeds the note's inner_hash (recoverable by
-    // commitment, not by index — so no persisted counter is needed).
-    const depositIndex = randomBytes(8).readBigUInt64BE(0);
     const receipt = await this.depositFn({
       depositor: this.depositor,
       treeId: req.treeId ?? this.treeId,
-      depositIndex,
       tokenMint: req.tokenMint,
       amount: req.amount,
       depositorTokenAccount: req.depositorTokenAccount,

@@ -4,7 +4,7 @@
 //!   - SPL token custody via per-mint PDA token accounts.
 //!   - UTXO note Merkle tree (Poseidon2 over BN254, depth 20).
 //!   - Nullifier set / consumed-notes set / note locks (all PDA-based).
-//!   - Groth16 verification of VALID_WALLET_CREATE and VALID_SPEND proofs.
+//!   - Groth16 verification of deposit, spend, input, merge, and match proofs.
 //!   - TEE-forced atomic settlement.
 //!
 //! See `CRYPTOGRAPHY.md` for the note model, circuits, and settlement design,
@@ -24,7 +24,6 @@ pub mod zk;
 // under `programs/vault/src/instructions/`.
 pub use instructions::close_batch_validity_marker;
 pub use instructions::close_vault_config;
-pub use instructions::create_wallet;
 pub use instructions::deposit;
 pub use instructions::initialize;
 pub use instructions::initialize_market;
@@ -100,15 +99,6 @@ pub mod vault {
     /// root key (self-signature model — admin cannot override).
     pub fn rotate_root_key(ctx: &mut Context<RotateRootKey>, new_root_key: Address) -> Result<()> {
         rotate_root_key::rotate_root_key_handler(ctx, new_root_key)
-    }
-
-    /// Register a User Commitment via VALID_WALLET_CREATE proof.
-    pub fn create_wallet(
-        ctx: &mut Context<CreateWallet>,
-        commitment: [u8; 32],
-        proof: Groth16Proof,
-    ) -> Result<()> {
-        create_wallet::create_wallet_handler(ctx, commitment, proof)
     }
 
     /// Deposit SPL tokens and insert a proof-bound UTXO note commitment.

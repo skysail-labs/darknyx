@@ -53,10 +53,11 @@ SNARKs; GoDarkDEX runs a shielded pool with hidden settlement amounts — see
 real competitive and MEV exposure.
 
 ### 1.2 Compliance is not a reason to keep the leak
-"Auditable" ≠ "publicly plaintext." Our key model already has a **`viewingKey`**, so a user (or
-the protocol) can **selectively disclose** specific trades to an auditor without broadcasting them
-to the whole chain. Amount privacy + viewing-key disclosure gives the compliance story *without*
-the public leak.
+"Auditable" ≠ "publicly plaintext." Each order carries the user's contributory
+**X25519 fill-recovery key**, so the user can decrypt and selectively disclose
+specific trade/change amounts without broadcasting them to the whole chain.
+The earlier BN254 compliance-viewing hierarchy was never wired into this path
+and has been retired; any protocol-wide disclosure product needs a fresh design.
 
 ---
 

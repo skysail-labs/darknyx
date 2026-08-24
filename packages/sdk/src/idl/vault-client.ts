@@ -34,7 +34,6 @@ import {
   VAULT_CONFIG_SEED,
   MARKET_CONFIG_SEED,
   MERKLE_TREE_SEED,
-  WALLET_SEED,
   NOTE_LOCK_SEED,
   CONSUMED_NOTE_SEED,
   DEPOSITED_NOTE_SEED,
@@ -145,31 +144,6 @@ export async function staticSettleAltAddresses(
     out.push((await merkleTreePda(programId, treeId))[0]);
   }
   return out;
-}
-
-/**
- * `WalletEntry` PDA — seeded by (commitment, OWNER).
- *
- * The owner is a REQUIRED seed, not an optimisation. VALID_WALLET_CREATE's only
- * public input is the commitment, so a landed `create_wallet` transaction can be
- * replayed by anyone; without the owner in the seeds a front-runner takes the
- * address permanently (`init` is one-shot, there is no `close_wallet`) and the
- * legitimate registration can never land. See
- * `programs/vault/src/instructions/create_wallet.rs`.
- *
- * Mirrors the on-chain `seeds` exactly. A drift here surfaces only at runtime,
- * as `ConstraintSeeds (2006)` or `AccountNotFound` — CI does not catch it
- * (CLAUDE.md §8.3).
- */
-export async function walletEntryPda(
-  programId: PublicKey,
-  commitment: Uint8Array,
-  owner: PublicKey,
-): Promise<[PublicKey, number]> {
-  return PublicKey.findProgramAddress(
-    [WALLET_SEED, fixed32(commitment), owner.toBytes()],
-    programId,
-  );
 }
 
 /**
@@ -633,36 +607,6 @@ export async function buildRotateRootKeyInstruction(
     keys: [
       { pubkey: p.currentRootKey, isSigner: true, isWritable: false },
       { pubkey: vaultPda, isSigner: false, isWritable: true },
-    ],
-    data,
-  });
-}
-
-export interface BuildCreateWalletParams {
-  programId: PublicKey;
-  owner: PublicKey;
-  commitment: Uint8Array;
-  proof: Groth16OnChainProof;
-}
-
-export async function buildCreateWalletInstruction(
-  p: BuildCreateWalletParams,
-): Promise<TransactionInstruction> {
-  const [walletPda] = await walletEntryPda(p.programId, p.commitment, p.owner);
-  const data = cat(
-    anchorDiscriminator("create_wallet"),
-    fixed32(p.commitment),
-    serializeProof(p.proof),
-  );
-  // Accounts: [owner(signer,mut), wallet_entry(init,mut), system_program(ro)].
-  // CU-3 / audit F-07: the unused `vault_config` account was removed from the
-  // on-chain `CreateWallet` struct — keep this list in lockstep.
-  return new TransactionInstruction({
-    programId: p.programId,
-    keys: [
-      { pubkey: p.owner, isSigner: true, isWritable: true },
-      { pubkey: walletPda, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,
   });

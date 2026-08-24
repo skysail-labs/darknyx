@@ -18,8 +18,8 @@
  *   4. Parses `public.json` into a list of 32-byte BE field-element arrays.
  *
  * Output shape matches `Groth16OnChainProof` in `packages/sdk/src/idl/vault-client.ts`,
- * so the result can be passed straight into `buildCreateWalletInstruction` or
- * `buildWithdrawInstruction`.
+ * so the result can be passed straight into the corresponding vault
+ * instruction builder.
  */
 
 import { execFileSync } from "node:child_process";

@@ -2,6 +2,7 @@
 export {
   bn254ToBE32,
   deriveBlindingFactor,
+  generateRecoveryNonce,
   deriveNoteSecret,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,

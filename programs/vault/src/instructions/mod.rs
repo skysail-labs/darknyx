@@ -24,8 +24,6 @@ pub mod close_batch_validity_marker;
 // alone gave, because it tests the artifact instead of the source.
 pub mod close_vault_config;
 #[allow(unused_variables)]
-pub mod create_wallet;
-#[allow(unused_variables)]
 pub mod deposit;
 #[allow(unused_variables)]
 pub mod initialize;
@@ -58,7 +56,6 @@ pub mod withdraw;
 pub use close_batch_validity_marker::*;
 #[cfg(feature = "devnet-admin")]
 pub use close_vault_config::*;
-pub use create_wallet::*;
 pub use deposit::*;
 pub use initialize::*;
 pub use initialize_market::*;

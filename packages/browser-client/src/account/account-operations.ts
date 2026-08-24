@@ -290,8 +290,6 @@ export class BrowserAccountOperations {
     const mint = new PublicKey(params.tokenMint);
     const depositor = this.#walletAddress();
     const tokenAccount = await associatedTokenAddress(mint, depositor);
-    const depositIndex = await this.#options.inventory.allocateDepositIndex();
-    const treeId = depositIndex % this.#options.venue.numTrees;
     this.#options.onProgress?.(operation, "preparing");
     const prepared = await requestVaultInternal<PreparedDeposit>(
       this.#options.vault,
@@ -299,9 +297,9 @@ export class BrowserAccountOperations {
       {
         tokenMint: hex(mint.toBytes()),
         amount: params.amount.toString(),
-        depositIndex,
       },
     );
+    const treeId = prepared.recoveryNonce[31] % this.#options.venue.numTrees;
     this.#options.onProgress?.(operation, "proving");
     const proof = await this.#options.prover.deposit.prove(prepared.witness);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());

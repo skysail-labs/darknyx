@@ -13,16 +13,6 @@ export interface Groth16ProofBytes {
   publicInputs: Uint8Array[]; // each 32 BE bytes
 }
 
-export interface WalletCreateInputs {
-  userCommitment: bigint;
-  rootKey: [bigint, bigint]; // [lo, hi]
-  spendingKey: bigint;
-  viewingKey: bigint;
-  r0: bigint;
-  r1: bigint;
-  r2: bigint;
-}
-
 export interface SpendInputs {
   merkleRoot: bigint;
   nullifier: bigint;
@@ -86,9 +76,6 @@ export interface MergeInputs {
 }
 
 export interface IDarkPoolZkProverSuite {
-  walletCreate: {
-    prove(inputs: WalletCreateInputs): Promise<Groth16ProofBytes>;
-  };
   deposit: {
     prove(inputs: DepositInputs): Promise<Groth16ProofBytes>;
   };
@@ -122,13 +109,6 @@ export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
   constructor(reason = "wire up the selected client prover adapter") {
     this.reason = reason;
   }
-  walletCreate: IDarkPoolZkProverSuite["walletCreate"] = {
-    prove: async (): Promise<Groth16ProofBytes> => {
-      throw new Error(
-        `UnimplementedProverSuite.walletCreate.prove: ${this.reason}`,
-      );
-    },
-  };
   deposit: IDarkPoolZkProverSuite["deposit"] = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(`UnimplementedProverSuite.deposit.prove: ${this.reason}`);

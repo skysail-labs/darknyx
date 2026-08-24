@@ -42,7 +42,6 @@ const emptySnapshot = (): InventorySnapshot => ({
   roots: [],
   orders: [],
   nextOrderIndex: 0,
-  nextDepositIndex: 0,
 });
 
 const hex = (value: Uint8Array): string =>
@@ -324,13 +323,6 @@ export class BrowserInventory implements InventoryIntentPort {
     ) {
       throw new Error("inventory order index is invalid");
     }
-    if (
-      !Number.isSafeInteger(this.#snapshot.nextDepositIndex) ||
-      this.#snapshot.nextDepositIndex < 0 ||
-      this.#snapshot.nextDepositIndex > 0xffff_ffff
-    ) {
-      throw new Error("inventory deposit index is invalid");
-    }
     const orderIds = new Set<string>();
     const tradingIndices = new Set<number>();
     for (const order of this.#snapshot.orders) {
@@ -480,20 +472,6 @@ export class BrowserInventory implements InventoryIntentPort {
         }
         const index = this.#snapshot.nextOrderIndex;
         this.#snapshot.nextOrderIndex += 1;
-        return index;
-      }),
-    );
-  }
-
-  /** Allocate and persist a never-reused deposit recovery-nonce index. */
-  async allocateDepositIndex(): Promise<number> {
-    return this.#serialized(() =>
-      this.#mutate(async () => {
-        if (this.#snapshot.nextDepositIndex > 0xffff_fffe) {
-          throw new Error("browser deposit sequence is exhausted");
-        }
-        const index = this.#snapshot.nextDepositIndex;
-        this.#snapshot.nextDepositIndex += 1;
         return index;
       }),
     );
@@ -675,9 +653,9 @@ export class BrowserInventory implements InventoryIntentPort {
           );
           const reusable = Boolean(
             note &&
-              (note.state === "reserved" ||
-                note.state === "pending_settlement") &&
-              note.reservationId === order.reservationId,
+            (note.state === "reserved" ||
+              note.state === "pending_settlement") &&
+            note.reservationId === order.reservationId,
           );
           if (reusable && note) {
             // `recover()` preserves a reservation only when finalized chain

@@ -50,7 +50,7 @@ beforeEach(() => {
 });
 
 describe("signed client artifact manifest", () => {
-  it("accepts the exact pinned signer, set id, protocol, and six circuits", async () => {
+  it("accepts the exact pinned signer, set id, protocol, and five circuits", async () => {
     const { envelope, publicKey } = await signedEnvelope();
     const fetchImpl = vi.fn(
       async () =>
@@ -66,7 +66,7 @@ describe("signed client artifact manifest", () => {
       trustedPublicKey: publicKey,
       fetchImpl,
     });
-    expect(Object.keys(manifest.circuits)).toHaveLength(6);
+    expect(Object.keys(manifest.circuits)).toHaveLength(5);
     expect(manifest.circuits.input.public_inputs).toBe(4);
   });
 

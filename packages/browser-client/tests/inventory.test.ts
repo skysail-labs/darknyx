@@ -83,7 +83,6 @@ describe("browser inventory plane", () => {
               reservations: [],
               roots: [],
               nextOrderIndex: 1,
-              nextDepositIndex: 0,
               orders: [
                 {
                   orderId: "ab".repeat(16),
@@ -127,25 +126,6 @@ describe("browser inventory plane", () => {
       provingKeyVersion: "pk-1",
     });
     await expect(reloaded.allocateOrderIndex()).resolves.toBe(1);
-  });
-
-  it("persists never-reused deposit recovery indices", async () => {
-    const store = new InMemoryInventoryStore();
-    const first = await BrowserInventory.create({
-      store,
-      markets: [market],
-      circuitVersion: "valid-input-v3",
-      provingKeyVersion: "pk-1",
-    });
-    await expect(first.allocateDepositIndex()).resolves.toBe(0);
-    await expect(first.allocateDepositIndex()).resolves.toBe(1);
-    const reloaded = await BrowserInventory.create({
-      store,
-      markets: [market],
-      circuitVersion: "valid-input-v3",
-      provingKeyVersion: "pk-1",
-    });
-    await expect(reloaded.allocateDepositIndex()).resolves.toBe(2);
   });
 
   it("rolls an account reservation back when durable persistence fails", async () => {

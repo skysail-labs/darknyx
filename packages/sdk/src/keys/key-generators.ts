@@ -1,5 +1,6 @@
 /**
- * Four-key derivation — TypeScript mirror of `crates/darkpool-crypto/src/keys.rs`.
+ * Live client key derivations — TypeScript mirror of
+ * `crates/darkpool-crypto/src/keys.rs`.
  *
  * Must produce byte-identical outputs to the Rust implementation for a given
  * master seed + info string. See the cross-env parity test in
@@ -16,9 +17,7 @@ import type { MasterSeedMode } from "../providers.js";
 export const MASTER_SEED_BYTES = 64;
 
 const INFO_SPENDING = new TextEncoder().encode("darkpool_spend_key_v1");
-const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
-const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 /**
  * Domain string for the per-note deposit secret. Distinct from every other
@@ -95,11 +94,6 @@ export function deriveSpendingKey(seed: Uint8Array): bigint {
   return reduceMod(okm);
 }
 
-export function deriveMasterViewingKey(seed: Uint8Array): bigint {
-  const okm = darknyxShakeKdfV1(seed, INFO_VIEWING, new Uint8Array(), 64);
-  return reduceMod(okm);
-}
-
 export interface Ed25519RawKeypair {
   secretKey: Uint8Array; // 32-byte seed
 }
@@ -115,10 +109,6 @@ export function deriveTradingKeyAtOffset(
   info.set(new Uint8Array(offsetBuf), INFO_TRADING.length);
   const okm = hkdfExpand(seed, info, 32);
   return { secretKey: okm };
-}
-
-export function deriveRootKey(seed: Uint8Array): Ed25519RawKeypair {
-  return { secretKey: hkdfExpand(seed, INFO_ROOT, 32) };
 }
 
 /**
@@ -143,6 +133,24 @@ export function deriveNoteSecret(
   }
   const okm = darknyxShakeKdfV1(seed, INFO_NOTE_SECRET, recoveryNonce, 64);
   return reduceMod(okm);
+}
+
+/**
+ * Generate a fresh canonical BN254 field element for a deposit recovery nonce.
+ *
+ * The nonce is public, but unpredictability and uniqueness keep the ordinary
+ * deposit API restart-safe without a caller-managed counter. Rejection
+ * sampling avoids modulo bias and guarantees the bytes are accepted anywhere
+ * an Fr encoding is required. An exact retry must reuse the nonce returned by
+ * the prepared deposit, never call this function again.
+ */
+export function generateRecoveryNonce(): Uint8Array {
+  for (;;) {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    let value = 0n;
+    for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+    if (value > 0n && value < BN254_R) return bytes;
+  }
 }
 
 /**

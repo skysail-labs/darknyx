@@ -622,6 +622,9 @@ jobs:
       # Building rather than path-mapping to sdk/src is deliberate: it checks the
       # daemon against the DECLARATIONS it actually consumes, so a declaration
       # emit that breaks is caught here too.
+      - name: Remove stale TypeScript declarations
+        run: node scripts/clean-ts-dist.mjs
+
       - name: Build the SDK (daemon/indexer typecheck against its declarations)
         run: |
           node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.json
@@ -1056,8 +1059,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # Phase 3 — cross-environment proof round-trip.
-  # `zk_roundtrip` and `zk_spend_roundtrip` are the Section 22.4
-  # "critical compatibility check": generate a snarkjs Groth16 proof
+  # `zk_spend_roundtrip` is a critical compatibility check: generate a
+  # snarkjs Groth16 proof
   # and verify it with the exact `groth16-solana` code the on-chain
   # program runs. `merkle_host` exercises pure-Rust Merkle invariants
   # (poseidon2, zero-subtree roots, append_leaf). None of these need
@@ -1106,7 +1109,6 @@ jobs:
       - name: Cross-env round-trips + merkle host tests
         run: |
           cargo test -p vault \
-            --test zk_roundtrip \
             --test zk_spend_roundtrip \
             --test merkle_host \
             --test merkle_fuzz \
@@ -1123,13 +1125,11 @@ jobs:
   # ------------------------------------------------------------------
   # Phase 3 — vault litesvm tests.
   # Boots LiteSVM, loads `target/deploy/vault.so`, and drives the
-  # registration + governance paths end-to-end.
-  # `user_commitment_registration` shells out to snarkjs for a
-  # VALID_WALLET_CREATE proof, so it needs the circuit artefact too.
-  # `set_protocol_config` does not, but pulling both in is cheap.
+  # governance + custody paths end-to-end. Proof-backed deposit, input, spend,
+  # merge, and match tests consume both the SBF and circuit artefacts.
   # ------------------------------------------------------------------
   vault-litesvm:
-    name: Vault LiteSVM — registration + governance
+    name: Vault LiteSVM — governance + custody
     runs-on: ubuntu-latest
     needs: [changes, sbf-build, circuits]
     if: >-
@@ -1189,7 +1189,6 @@ jobs:
           cargo test -p vault \
             --test set_protocol_config \
             --test set_tee_pubkey \
-            --test user_commitment_registration \
             --test tee_forced_settle_batched \
             --test match_batch_verify \
             --test lock_note_consumed_guard \

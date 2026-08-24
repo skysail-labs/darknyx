@@ -5,7 +5,7 @@
 # Why two PTAU files:
 #   - pot16 (~72 MB)  covers up to ~65k constraints. Sufficient for the
 #                     per-circuit ZK proofs (valid_input / valid_spend /
-#                     valid_wallet_create) and the dev/test batched
+#                     client-side circuits) and the dev/test batched
 #                     instances (N=2, N=4).
 #   - pot18 (~288 MB) needed by the batched validity circuit at N=4, and
 #                     formerly at N=16.

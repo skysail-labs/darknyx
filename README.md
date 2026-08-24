@@ -109,7 +109,7 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 |------------------|------------------------------------------------------------------------------|
 | `programs/`      | On-chain Anchor program — `vault` (the only on-chain program)               |
 | `crates/`        | `darkpool-crypto` (host Poseidon/key/note crypto), `darkpool-matcher` (the matching algorithm), `darknyx-tee` (the in-CVM matcher/settler), `darknyx-tee-loadgen` |
-| `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_input`, `valid_deposit`, `valid_spend`, `valid_match_batch`, `valid_merge` |
+| `circuits/`      | Circom 2 ZK circuits — `valid_input`, `valid_deposit`, `valid_spend`, `valid_match_batch`, `valid_merge` |
 | `packages/sdk/`  | `@darknyx/sdk` — TypeScript client (ix builders, prover, order/settlement)      |
 | `deploy/`        | Dockerfile + `docker-compose.yaml` for the Phala CVM image                  |
 | `scripts/`       | Build / deploy / setup shell scripts + master dev cheat-sheet               |

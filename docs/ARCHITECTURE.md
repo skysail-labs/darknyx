@@ -63,7 +63,6 @@ programs/vault/                 only on-chain program
   tests/                        litesvm circuit/account/settlement tests
 
 circuits/
-  valid_wallet_create/
   valid_deposit/
   valid_spend/
   valid_input/
@@ -169,7 +168,6 @@ root.
 | `VaultConfig` | `[b"vault_config"]` | global authorities, signers, fee config, shard count |
 | `MarketConfig` | `[b"market_config", base_mint, quote_mint]` | one governed market |
 | `MerkleTree` | `[b"merkle_tree", tree_id]` | one append-only note tree shard |
-| `WalletEntry` | `[b"wallet", user_commitment, owner]` | registered public wallet commitment. **The owner is a required seed** — the proof binds only the commitment, so without it a replayed `(commitment, proof)` squats the address permanently (`audit_9` TR-14) |
 | `DepositedNoteEntry` | `[b"deposited_note", note_commitment]` | strict deposit-once guard |
 | `ConsumedNoteEntry` | `[b"consumed_note", note_use_tag]` | shared settle/withdraw consume-once guard |
 | `NoteLock` | `[b"note_lock", note_use_tag]` | bounded order lock; amount remains private |
@@ -184,7 +182,6 @@ removed. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
 
 | Circuit | Public signals | What it proves |
 |---|---:|---|
-| VALID_WALLET_CREATE | 1 | knowledge of the root/spending/viewing keys behind `user_commitment` |
 | VALID_DEPOSIT | 5 | recoverable note construction for public mint/amount/nonce without exposing owner/inner |
 | VALID_SPEND | 8 | note opening, ownership, inclusion, nullifier, public amount/mint, and exact destination account |
 | VALID_INPUT | 4 | owned positive-u64 note with a public commitment/mint at a recent root |

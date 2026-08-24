@@ -54,18 +54,6 @@ try {
     assertProof(name, proof, publicInputs);
   };
   const fixtures = config.fixtures;
-  const wallet = fixtures.wallet_create.input;
-  await run("wallet_create", 1, () =>
-    suite.walletCreate.prove({
-      userCommitment: bigint(wallet.userCommitment),
-      rootKey: bigints(wallet.rootKey),
-      spendingKey: bigint(wallet.spendingKey),
-      viewingKey: bigint(wallet.viewingKey),
-      r0: bigint(wallet.r0),
-      r1: bigint(wallet.r1),
-      r2: bigint(wallet.r2),
-    }),
-  );
   const deposit = fixtures.deposit.input;
   await run("deposit", 5, () =>
     suite.deposit.prove({

@@ -168,7 +168,6 @@ circuits**:
 
 | Circuit | Instruction | Public inputs |
 |---|---|--:|
-| VALID_WALLET_CREATE | `create_wallet` | 1 |
 | VALID_INPUT | `lock_note` (settle-lock) | 4 |
 | VALID_DEPOSIT | `deposit` | 5 |
 | VALID_SPEND | `withdraw` | 6 |

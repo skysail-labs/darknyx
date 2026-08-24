@@ -12,12 +12,10 @@
  * them. The accurate statement is the one further down: keys never leave the
  * process, and the passphrase-sealed file is what protects them at rest.
  *
- * Holds the account's {@link AccountIdentity} (the 64-byte master seed + the
- * blinding/`r`-values + root-key pubkey that pin the owner + user commitments)
- * and derives everything an order needs, all locally:
+ * Holds the account's {@link AccountIdentity} (only the 64-byte master seed)
+ * and derives everything the live protocol needs locally:
  *
- *   - `spendingKey` / `viewingKey`            (BN254 scalars, from the seed)
- *   - `ownerCommitment` / `userCommitment`    (the account's on-chain identity)
+ *   - `spendingKey` / `ownerCommitment`       (the shielded-note identity)
  *   - a per-order Ed25519 **trading key** at the order's `seedIndex`
  *     (`deriveTradingKeyAtOffset`) + a detached signer over a canonical digest
  *
@@ -39,79 +37,46 @@ import { basename, dirname, join } from "node:path";
 import nacl from "tweetnacl";
 import {
   deriveSpendingKey,
-  deriveMasterViewingKey,
   deriveTradingKeyAtOffset,
-  deriveBlindingFactor,
   deriveOwnerCommitmentBlinding,
-  ACCOUNT_OWNER_BLINDING_COUNTER,
   generateMasterSeed,
   ownerCommitment,
-  userCommitmentFromKeys,
 } from "@darknyx/sdk";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
 /**
- * Account-blinding domain. The owner/user-commitment blindings derive from the
- * seed at these high counters, away from the small leaf-counter range that note
- * (`deriveBlindingFactor`) blindings use — so the WHOLE identity is recoverable
- * from the seed alone (the keystore file is just an encrypted convenience).
+ * Build the persisted identity from a master seed. Every operational key and
+ * blinding is derived after unlock, so the encrypted file has one root secret
+ * and no redundant state that can drift.
  */
-const ACCOUNT_BLINDING_BASE = ACCOUNT_OWNER_BLINDING_COUNTER;
-
-/**
- * Deterministically derive an {@link AccountIdentity} from a master seed + the
- * operator's root (payer) key. Same `(seed, rootKey)` always yields the same
- * on-chain identity, so a lost keystore is recoverable from the backed-up seed.
- */
-export function deriveAccountIdentity(
-  masterSeed: Uint8Array,
-  rootKeyPubkey: Uint8Array,
-): AccountIdentity {
+export function deriveAccountIdentity(masterSeed: Uint8Array): AccountIdentity {
   return {
-    masterSeed,
-    ownerBlinding: deriveOwnerCommitmentBlinding(masterSeed),
-    r0: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 1n),
-    r1: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 2n),
-    r2: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 3n),
-    rootKeyPubkey,
+    masterSeed: Uint8Array.from(masterSeed),
   };
 }
 
-/** Generate a fresh identity (random 64-byte seed) for a root key. */
-export function generateAccountIdentity(
-  rootKeyPubkey: Uint8Array,
-): AccountIdentity {
-  return deriveAccountIdentity(generateMasterSeed(), rootKeyPubkey);
+/** Generate a fresh identity from a random 64-byte seed. */
+export function generateAccountIdentity(): AccountIdentity {
+  return deriveAccountIdentity(generateMasterSeed());
 }
 
 /** The account's persisted crypto identity. All else derives from this. */
 export interface AccountIdentity {
   /** 64-byte master seed (the root secret). */
   masterSeed: Uint8Array;
-  /** Owner-commitment blinding: `ownerCommitment(spendingKey, ownerBlinding)`. */
-  ownerBlinding: bigint;
-  /** User-commitment per-leaf blindings. */
-  r0: bigint;
-  r1: bigint;
-  r2: bigint;
-  /** 32-byte Ed25519 pubkey of the root/vault (payer) key. */
-  rootKeyPubkey: Uint8Array;
 }
 
 export class Keystore {
   private readonly spend: bigint;
-  private readonly view: bigint;
+  private readonly ownerBlind: bigint;
 
   constructor(private readonly identity: AccountIdentity) {
     if (identity.masterSeed.length !== 64) {
       throw new Error("master seed must be 64 bytes");
     }
-    if (identity.rootKeyPubkey.length !== 32) {
-      throw new Error("rootKeyPubkey must be 32 bytes");
-    }
     this.spend = deriveSpendingKey(identity.masterSeed);
-    this.view = deriveMasterViewingKey(identity.masterSeed);
+    this.ownerBlind = deriveOwnerCommitmentBlinding(identity.masterSeed);
   }
 
   get masterSeed(): Uint8Array {
@@ -120,44 +85,13 @@ export class Keystore {
   get spendingKey(): bigint {
     return this.spend;
   }
-  get viewingKey(): bigint {
-    return this.view;
-  }
   get ownerBlinding(): bigint {
-    return this.identity.ownerBlinding;
+    return this.ownerBlind;
   }
 
   /** The account's owner commitment (Poseidon — async). */
   ownerCommitment(): Promise<bigint> {
-    return ownerCommitment(this.spend, this.identity.ownerBlinding);
-  }
-
-  /** The account's 32-byte big-endian user commitment (Poseidon — async).
-   *
-   *  This is the genuine `create_wallet` Poseidon output: the identity a
-   *  `WalletEntry` is registered under on-chain. The order path does NOT send
-   *  it — see `build-place-request.ts`.
-   *
-   *  Canonicality is guaranteed by the field reduction inside
-   *  `userCommitmentFromKeys` — the Poseidon output IS a BN254 element — not by
-   *  any property of the leading byte. A first-byte bound is not a sufficient
-   *  test at the modulus boundary, where the remaining 31 bytes still decide.
-   *
-   *  This is worth stating because the value used to be returned with its top
-   *  byte forced to 0, to satisfy a TEE intake rule that rejected any
-   *  `user_commitment` whose top byte was non-zero. Audit 2026-07-25 (T-07)
-   *  removed that rule: it was not Fr-safety, and it guarded a hash that no
-   *  longer happened. The zeroing had made this value un-matchable against any
-   *  registered `WalletEntry`, which is the one thing it exists for. */
-  async userCommitment(): Promise<Uint8Array> {
-    return userCommitmentFromKeys({
-      rootKeyPubkey: this.identity.rootKeyPubkey,
-      spendingKey: this.spend,
-      viewingKey: this.view,
-      r0: this.identity.r0,
-      r1: this.identity.r1,
-      r2: this.identity.r2,
-    });
+    return ownerCommitment(this.spend, this.ownerBlind);
   }
 
   /** The Ed25519 keypair for the order at `index` (deterministic from the seed).
@@ -224,6 +158,17 @@ interface KeystoreFileV2 {
   tag: string; // lowercase hex, 16 bytes
 }
 
+interface KeystoreFileV3 {
+  version: 3;
+  kdf: "scrypt";
+  profile: "scrypt-n17-r8-p1-v1";
+  cipher: "aes-256-gcm";
+  salt: string;
+  iv: string;
+  ciphertext: string;
+  tag: string;
+}
+
 const LEGACY_SCRYPT = {
   N: 1 << 14,
   r: 8,
@@ -242,6 +187,7 @@ const V2_SCRYPT = {
 const V2_KDF_PROFILE = "scrypt-n17-r8-p1-v1" as const;
 const V2_CIPHER = "aes-256-gcm" as const;
 const V2_AAD_DOMAIN = Buffer.from("darknyx-daemon-keystore/v2\0", "utf8");
+const V3_AAD_DOMAIN = Buffer.from("darknyx-daemon-keystore/v3\0", "utf8");
 const MAX_KEYSTORE_FILE_BYTES = 32 * 1024;
 const MAX_CIPHERTEXT_BYTES = 8 * 1024;
 const BN254_SCALAR_MODULUS =
@@ -312,40 +258,47 @@ function parseFieldDecimal(value: unknown, field: string): bigint {
   return parsed;
 }
 
-function serializeIdentity(id: AccountIdentity): string {
+function serializeIdentityV3(id: AccountIdentity): string {
   return JSON.stringify({
     seed: toHex(id.masterSeed),
-    ownerBlinding: id.ownerBlinding.toString(),
-    r0: id.r0.toString(),
-    r1: id.r1.toString(),
-    r2: id.r2.toString(),
-    rootKeyPubkey: toHex(id.rootKeyPubkey),
   });
 }
 
-function deserializeIdentity(json: string): AccountIdentity {
+function parsePlaintextObject(json: string): JsonObject {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
     throw new Error("keystore plaintext is not valid JSON");
   }
-  const o = asObject(parsed, "keystore identity");
+  return asObject(parsed, "keystore identity");
+}
+
+function deserializeIdentityV3(json: string): AccountIdentity {
+  const o = parsePlaintextObject(json);
+  requireExactKeys(o, ["seed"], "keystore v3 identity");
+  return deriveAccountIdentity(
+    Uint8Array.from(decodeFixedHex(o.seed, "seed", 64)),
+  );
+}
+
+/** Parse the redundant v1/v2 plaintext once, validate every historical field,
+ * then deliberately retain only the master seed for the v3 identity. */
+function deserializeLegacyIdentity(json: string): AccountIdentity {
+  const o = parsePlaintextObject(json);
   requireExactKeys(
     o,
     ["seed", "ownerBlinding", "r0", "r1", "r2", "rootKeyPubkey"],
     "keystore identity",
   );
-  return {
-    masterSeed: Uint8Array.from(decodeFixedHex(o.seed, "seed", 64)),
-    ownerBlinding: parseFieldDecimal(o.ownerBlinding, "ownerBlinding"),
-    r0: parseFieldDecimal(o.r0, "r0"),
-    r1: parseFieldDecimal(o.r1, "r1"),
-    r2: parseFieldDecimal(o.r2, "r2"),
-    rootKeyPubkey: Uint8Array.from(
-      decodeFixedHex(o.rootKeyPubkey, "rootKeyPubkey", 32),
-    ),
-  };
+  parseFieldDecimal(o.ownerBlinding, "ownerBlinding");
+  parseFieldDecimal(o.r0, "r0");
+  parseFieldDecimal(o.r1, "r1");
+  parseFieldDecimal(o.r2, "r2");
+  decodeFixedHex(o.rootKeyPubkey, "rootKeyPubkey", 32);
+  return deriveAccountIdentity(
+    Uint8Array.from(decodeFixedHex(o.seed, "seed", 64)),
+  );
 }
 
 function deriveV2Key(passphrase: string, salt: Buffer): Buffer {
@@ -371,26 +324,37 @@ function v2Aad(salt: Buffer, iv: Buffer): Buffer {
   ]);
 }
 
-function sealV2(
+function v3Aad(salt: Buffer, iv: Buffer): Buffer {
+  return Buffer.concat([
+    V3_AAD_DOMAIN,
+    Buffer.from("scrypt\0", "utf8"),
+    Buffer.from(`${V2_KDF_PROFILE}\0`, "utf8"),
+    Buffer.from(`${V2_CIPHER}\0`, "utf8"),
+    salt,
+    iv,
+  ]);
+}
+
+function sealV3(
   identity: AccountIdentity,
   passphrase: string,
   salt = randomBytes(16),
   iv = randomBytes(12),
-): KeystoreFileV2 {
-  const validated = deserializeIdentity(serializeIdentity(identity));
+): KeystoreFileV3 {
+  const validated = deserializeIdentityV3(serializeIdentityV3(identity));
   new Keystore(validated);
   const key = deriveV2Key(passphrase, salt);
   try {
     const cipher = createCipheriv(V2_CIPHER, key, iv);
-    cipher.setAAD(v2Aad(salt, iv));
-    const plaintext = Buffer.from(serializeIdentity(validated), "utf8");
+    cipher.setAAD(v3Aad(salt, iv));
+    const plaintext = Buffer.from(serializeIdentityV3(validated), "utf8");
     const ciphertext = Buffer.concat([
       cipher.update(plaintext),
       cipher.final(),
     ]);
     const tag = cipher.getAuthTag();
     return {
-      version: 2,
+      version: 3,
       kdf: "scrypt",
       profile: V2_KDF_PROFILE,
       cipher: V2_CIPHER,
@@ -488,6 +452,7 @@ function decryptIdentity(
   iv: Buffer,
   ciphertext: Buffer,
   tag: Buffer,
+  deserialize: (json: string) => AccountIdentity,
   aad?: Buffer,
 ): AccountIdentity {
   try {
@@ -507,7 +472,7 @@ function decryptIdentity(
         "keystore decrypt failed (wrong passphrase or corrupt file)",
       );
     }
-    const identity = deserializeIdentity(plaintext.toString("utf8"));
+    const identity = deserialize(plaintext.toString("utf8"));
     // Constructor validation is part of the migration boundary: never replace
     // a legacy file until the decrypted identity is demonstrably usable.
     new Keystore(identity);
@@ -540,7 +505,36 @@ function openV2(file: JsonObject, passphrase: string): AccountIdentity {
     iv,
     ciphertext,
     tag,
+    deserializeLegacyIdentity,
     v2Aad(salt, iv),
+  );
+}
+
+function openV3(file: JsonObject, passphrase: string): AccountIdentity {
+  requireExactKeys(
+    file,
+    ["version", "kdf", "profile", "cipher", "salt", "iv", "ciphertext", "tag"],
+    "keystore v3",
+  );
+  if (
+    file.version !== 3 ||
+    file.kdf !== "scrypt" ||
+    file.profile !== V2_KDF_PROFILE ||
+    file.cipher !== V2_CIPHER
+  ) {
+    throw new Error("unsupported keystore v3 profile");
+  }
+  const salt = decodeFixedHex(file.salt, "salt", 16);
+  const iv = decodeFixedHex(file.iv, "iv", 12);
+  const ciphertext = decodeCiphertext(file.ciphertext);
+  const tag = decodeFixedHex(file.tag, "tag", 16);
+  return decryptIdentity(
+    deriveV2Key(passphrase, salt),
+    iv,
+    ciphertext,
+    tag,
+    deserializeIdentityV3,
+    v3Aad(salt, iv),
   );
 }
 
@@ -568,10 +562,11 @@ function openV1(file: JsonObject, passphrase: string): AccountIdentity {
     iv,
     ciphertext,
     tag,
+    deserializeLegacyIdentity,
   );
 }
 
-/** Seal an identity to disk under `passphrase` using the fixed v2 profile. */
+/** Seal an identity to disk under `passphrase` using the fixed v3 profile. */
 /**
  * Minimum passphrase length (SW-16).
  *
@@ -602,28 +597,39 @@ export function saveKeystore(
   passphrase: string,
 ): void {
   assertUsablePassphrase(passphrase);
-  atomicReplace(path, JSON.stringify(sealV2(identity, passphrase)));
+  atomicReplace(path, JSON.stringify(sealV3(identity, passphrase)));
 }
 
 /**
  * Open a sealed keystore.
  *
- * V2 files use the fixed N=2^17/r=8/p=1 profile and authenticated header.
- * A valid v1 file is decrypted with the only profile the old writer emitted,
- * fully validated, then atomically replaced with v2 before this returns.
+ * V3 files use the fixed N=2^17/r=8/p=1 profile and contain only the master
+ * seed. Valid v1/v2 files are fully validated, reduced to that same seed, and
+ * atomically replaced with v3 before this returns.
  */
 export function loadKeystore(path: string, passphrase: string): Keystore {
   const file = parseFile(path);
+  if (file.version === 3) {
+    return new Keystore(openV3(file, passphrase));
+  }
   if (file.version === 2) {
-    return new Keystore(openV2(file, passphrase));
+    const identity = openV2(file, passphrase);
+    try {
+      atomicReplace(path, JSON.stringify(sealV3(identity, passphrase)));
+    } catch {
+      throw new Error(
+        "keystore v2 decrypted but atomic migration to v3 failed; no partial file was exposed",
+      );
+    }
+    return new Keystore(identity);
   }
   if (file.version === 1) {
     const identity = openV1(file, passphrase);
     try {
-      atomicReplace(path, JSON.stringify(sealV2(identity, passphrase)));
+      atomicReplace(path, JSON.stringify(sealV3(identity, passphrase)));
     } catch {
       throw new Error(
-        "keystore v1 decrypted but atomic migration to v2 failed; no partial file was exposed",
+        "keystore v1 decrypted but atomic migration to v3 failed; no partial file was exposed",
       );
     }
     return new Keystore(identity);

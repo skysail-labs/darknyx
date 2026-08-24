@@ -23,8 +23,9 @@ import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import {
   bn254ToBE32,
-  deriveBlindingFactor,
   deriveNoteSecret,
+  generateRecoveryNonce,
+  BN254_R,
 } from "../keys/key-generators.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
@@ -43,9 +44,6 @@ export interface DepositParams {
   /** Which Merkle-tree shard to deposit into (default 0). The note's actual
    *  leaf index is read back from the deposit's `NoteCreated` event. */
   treeId?: number;
-  /** Client-side nonce index. It derives a pseudorandom public recovery nonce;
-   *  the proof derives the hidden inner hash from that nonce + hidden owner. */
-  depositIndex: bigint;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;
   /** Amount in base units. */
@@ -54,7 +52,23 @@ export interface DepositParams {
   depositorTokenAccount: PublicKey;
   /** Override the SPL token program id (for Token-2022). */
   tokenProgramId?: PublicKey;
+  /**
+   * Called synchronously with the freshly generated public nonce before proof
+   * generation or transaction submission. Persist it if the caller intends to
+   * redrive an ambiguous send through `getDepositRetryFunction`.
+   */
+  onRecoveryNonceGenerated?: (recoveryNonce: Uint8Array) => void;
   callbacks?: TransactionCallbacks;
+}
+
+/** Explicit, sharp-edged input used only to redrive an already prepared
+ * deposit. Ordinary deposits must use `getDepositFunction`, which generates a
+ * fresh nonce internally. */
+export interface DepositRetryParams extends Omit<
+  DepositParams,
+  "onRecoveryNonceGenerated"
+> {
+  recoveryNonce: Uint8Array;
 }
 
 export interface DepositReceipt {
@@ -97,138 +111,175 @@ export function getDepositFunction({
   client: DarkPoolClient;
 }): (params: DepositParams) => Promise<DepositReceipt> {
   return async (params) => {
-    if (params.amount <= 0n) {
-      throw new DarkPoolError("parameter", "deposit amount must be > 0");
-    }
-    if (params.tokenMint.length !== 32) {
-      throw new DarkPoolError("parameter", "tokenMint must be 32 bytes");
-    }
+    const recoveryNonceBytes = generateRecoveryNonce();
+    params.onRecoveryNonceGenerated?.(Uint8Array.from(recoveryNonceBytes));
+    return executeDeposit(client, params, recoveryNonceBytes);
+  };
+}
 
-    const { masterSeed, spendingKey, ownerBlinding } =
-      await client.getResolvedKeys();
-    const treeId = params.treeId ?? 0;
+/**
+ * Rebuild the exact same note and public proof statement after an ambiguous
+ * send. The Groth16 proof bytes and transaction envelope may be freshly
+ * randomized. The caller must supply the nonce persisted by
+ * `onRecoveryNonceGenerated`; using this entry point for a fresh deposit
+ * defeats the restart-safety of the normal API.
+ */
+export function getDepositRetryFunction({
+  client,
+}: {
+  client: DarkPoolClient;
+}): (params: DepositRetryParams) => Promise<DepositReceipt> {
+  return async ({ recoveryNonce, ...params }) => {
+    assertCanonicalRecoveryNonce(recoveryNonce);
+    return executeDeposit(client, params, Uint8Array.from(recoveryNonce));
+  };
+}
 
-    // --- Stage: merkle-position-fetch ---
-    await params.callbacks?.pre?.("merkle-position-fetch");
-    // Guard: the target shard must be initialised (the deposit ix appends to
-    // its MerkleTree account). We no longer read leaf_count to PREDICT the
-    // index — the actual index is read back from the NoteCreated event after
-    // confirm, which is immune to concurrent appends.
-    const [treePda] = await merkleTreePda(client.programId, treeId);
-    const info =
-      await client.providers.accountInfoProvider.getAccountInfo(treePda);
-    if (!info) {
-      throw new DarkPoolError(
-        "merkle-position-fetch",
-        `merkle_tree shard ${treeId} not initialised — run initialize_tree(${treeId}) first`,
-      );
-    }
+async function executeDeposit(
+  client: DarkPoolClient,
+  params: DepositParams,
+  recoveryNonceBytes: Uint8Array,
+): Promise<DepositReceipt> {
+  if (params.amount <= 0n) {
+    throw new DarkPoolError("parameter", "deposit amount must be > 0");
+  }
+  if (params.tokenMint.length !== 32) {
+    throw new DarkPoolError("parameter", "tokenMint must be 32 bytes");
+  }
 
-    // --- Stage: note-build ---
-    await params.callbacks?.pre?.("note-build");
-    const recoveryNonce = deriveBlindingFactor(masterSeed, params.depositIndex);
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const ownerBytes = bn254ToBE32(owner);
-    const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
-    // The per-note secret is keyed on the PUBLIC recovery nonce, so cold
-    // recovery re-derives it from seed + chain with nothing extra persisted.
-    // It is what stops the inner — and the note-use tag derived from it — being
-    // a function of on-chain data plus one wallet-wide owner commitment.
-    const noteSecretBytes = bn254ToBE32(
-      deriveNoteSecret(masterSeed, recoveryNonceBytes),
+  const { masterSeed, spendingKey, ownerBlinding } =
+    await client.getResolvedKeys();
+  const treeId = params.treeId ?? 0;
+
+  // --- Stage: merkle-position-fetch ---
+  await params.callbacks?.pre?.("merkle-position-fetch");
+  // Guard: the target shard must be initialised (the deposit ix appends to
+  // its MerkleTree account). We no longer read leaf_count to PREDICT the
+  // index — the actual index is read back from the NoteCreated event after
+  // confirm, which is immune to concurrent appends.
+  const [treePda] = await merkleTreePda(client.programId, treeId);
+  const info =
+    await client.providers.accountInfoProvider.getAccountInfo(treePda);
+  if (!info) {
+    throw new DarkPoolError(
+      "merkle-position-fetch",
+      `merkle_tree shard ${treeId} not initialised — run initialize_tree(${treeId}) first`,
     );
-    const innerBytes = await deriveDepositInnerHash(
-      ownerBytes,
+  }
+
+  // --- Stage: note-build ---
+  await params.callbacks?.pre?.("note-build");
+  const recoveryNonce = bytesToBigIntBE(recoveryNonceBytes);
+  const owner = await ownerCommitment(spendingKey, ownerBlinding);
+  const ownerBytes = bn254ToBE32(owner);
+  // The per-note secret is keyed on the PUBLIC recovery nonce, so cold
+  // recovery re-derives it from seed + chain with nothing extra persisted.
+  // It is what stops the inner — and the note-use tag derived from it — being
+  // a function of on-chain data plus one wallet-wide owner commitment.
+  const noteSecretBytes = bn254ToBE32(
+    deriveNoteSecret(masterSeed, recoveryNonceBytes),
+  );
+  const innerBytes = await deriveDepositInnerHash(
+    ownerBytes,
+    recoveryNonceBytes,
+    noteSecretBytes,
+  );
+  const innerHash = bytesToBigIntBE(innerBytes);
+
+  const commitment = await noteCommitmentV2({
+    tokenMint: params.tokenMint,
+    amount: params.amount,
+    ownerCommitment: owner,
+    innerHash,
+  });
+
+  // --- Stage: proof-generation ---
+  await params.callbacks?.pre?.("proof-generation");
+  let proof;
+  try {
+    const [mintLo, mintHi] = pubkeyToFrPair(params.tokenMint);
+    proof = await client.zkProver.deposit.prove({
+      noteCommitment: bytesToBigIntBE(commitment),
+      tokenMint: [mintLo, mintHi],
+      amount: params.amount,
+      recoveryNonce,
+      spendingKey,
+      ownerCommitmentBlinding: ownerBlinding,
+      noteSecret: bytesToBigIntBE(noteSecretBytes),
+    });
+    const expectedPublic = [
+      commitment,
+      bn254ToBE32(mintLo),
+      bn254ToBE32(mintHi),
+      bn254ToBE32(params.amount),
       recoveryNonceBytes,
-      noteSecretBytes,
-    );
-    const innerHash = bytesToBigIntBE(innerBytes);
+    ];
+    assertPublicInputs("VALID_DEPOSIT", proof.publicInputs, expectedPublic);
+  } catch (e) {
+    throw new DarkPoolError("proof-generation", (e as Error).message, e);
+  }
 
-    const commitment = await noteCommitmentV2({
+  // --- Stage: instruction-build ---
+  await params.callbacks?.pre?.("instruction-build");
+  const tokenMintPk = new PublicKey(params.tokenMint);
+  const ix = await buildDepositInstruction({
+    programId: client.programId,
+    treeId,
+    depositor: params.depositor,
+    tokenMint: tokenMintPk,
+    depositorTokenAccount: params.depositorTokenAccount,
+    tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
+    amount: params.amount,
+    noteCommitment: commitment,
+    recoveryNonce: recoveryNonceBytes,
+    proof: { piA: proof.piA, piB: proof.piB, piC: proof.piC },
+  });
+
+  // --- Stage: transaction-send ---
+  await params.callbacks?.pre?.("transaction-send");
+  const signature = await client.providers.transactionForwarder.sendAndConfirm([
+    ix,
+  ]);
+  await params.callbacks?.post?.("transaction-send", signature);
+
+  // Read the ACTUAL leaf index from the confirmed tx's NoteCreated event —
+  // race-proof against appends that landed between build and execution.
+  const leafIndex = await readNoteCreatedLeafIndex(
+    client.connectionProvider.connection,
+    signature,
+    client.programId,
+  );
+
+  return {
+    signature,
+    treeId,
+    leafIndex,
+    noteCommitment: commitment,
+    notePlaintext: {
       tokenMint: params.tokenMint,
       amount: params.amount,
       ownerCommitment: owner,
       innerHash,
-    });
-
-    // --- Stage: proof-generation ---
-    await params.callbacks?.pre?.("proof-generation");
-    let proof;
-    try {
-      const [mintLo, mintHi] = pubkeyToFrPair(params.tokenMint);
-      proof = await client.zkProver.deposit.prove({
-        noteCommitment: bytesToBigIntBE(commitment),
-        tokenMint: [mintLo, mintHi],
-        amount: params.amount,
-        recoveryNonce,
-        spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
-        noteSecret: bytesToBigIntBE(noteSecretBytes),
-      });
-      const expectedPublic = [
-        commitment,
-        bn254ToBE32(mintLo),
-        bn254ToBE32(mintHi),
-        bn254ToBE32(params.amount),
-        recoveryNonceBytes,
-      ];
-      assertPublicInputs("VALID_DEPOSIT", proof.publicInputs, expectedPublic);
-    } catch (e) {
-      throw new DarkPoolError("proof-generation", (e as Error).message, e);
-    }
-
-    // --- Stage: instruction-build ---
-    await params.callbacks?.pre?.("instruction-build");
-    const tokenMintPk = new PublicKey(params.tokenMint);
-    const ix = await buildDepositInstruction({
-      programId: client.programId,
-      treeId,
-      depositor: params.depositor,
-      tokenMint: tokenMintPk,
-      depositorTokenAccount: params.depositorTokenAccount,
-      tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
-      amount: params.amount,
-      noteCommitment: commitment,
-      recoveryNonce: recoveryNonceBytes,
-      proof: { piA: proof.piA, piB: proof.piB, piC: proof.piC },
-    });
-
-    // --- Stage: transaction-send ---
-    await params.callbacks?.pre?.("transaction-send");
-    const signature =
-      await client.providers.transactionForwarder.sendAndConfirm([ix]);
-    await params.callbacks?.post?.("transaction-send", signature);
-
-    // Read the ACTUAL leaf index from the confirmed tx's NoteCreated event —
-    // race-proof against appends that landed between build and execution.
-    const leafIndex = await readNoteCreatedLeafIndex(
-      client.connectionProvider.connection,
-      signature,
-      client.programId,
-    );
-
-    return {
-      signature,
-      treeId,
-      leafIndex,
-      noteCommitment: commitment,
-      notePlaintext: {
-        tokenMint: params.tokenMint,
-        amount: params.amount,
-        ownerCommitment: owner,
-        innerHash,
-        recoveryNonce,
-      },
-    };
+      recoveryNonce,
+    },
   };
+}
+
+function assertCanonicalRecoveryNonce(bytes: Uint8Array): void {
+  if (bytes.length !== 32) {
+    throw new DarkPoolError("parameter", "recoveryNonce must be 32 bytes");
+  }
+  const value = bytesToBigIntBE(bytes);
+  if (value <= 0n || value >= BN254_R) {
+    throw new DarkPoolError(
+      "parameter",
+      "recoveryNonce must be a non-zero canonical BN254 field element",
+    );
+  }
 }
 
 function bytesToBigIntBE(bytes: Uint8Array): bigint {
   let value = 0n;
   for (const byte of bytes) value = (value << 8n) | BigInt(byte);
   return value;
-}
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
 }

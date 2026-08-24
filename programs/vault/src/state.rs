@@ -13,8 +13,8 @@
 //! swapping them also compiles and also fails only on-chain — see
 //! `CRYPTOGRAPHY.md` §2.1.
 //!
-//! Per-leaf PDAs are the replay-protection backbone: `WalletEntry`,
-//! `DepositedNoteEntry`, `ConsumedNoteEntry`, and `NoteLock` all rely on `init`
+//! Per-leaf PDAs are the replay-protection backbone: `DepositedNoteEntry`,
+//! `ConsumedNoteEntry`, and `NoteLock` all rely on `init`
 //! failing when the account already exists. Relaxing one to `init_if_needed`
 //! removes the guard rather than making it more convenient (`CLAUDE.md` §8.1).
 
@@ -194,20 +194,6 @@ impl MerkleTree {
     }
 }
 
-/// PDA marking a registered user commitment (wallet identity).
-#[account]
-pub struct WalletEntry {
-    pub commitment: [u8; 32],
-    pub owner: Address, // the Root Key that signed `create_wallet`
-    pub created_slot: PodU64,
-    pub bump: u8,
-    pub _padding: [u8; 7],
-}
-
-impl WalletEntry {
-    pub const SEED: &'static [u8] = b"wallet";
-}
-
 /// PDA marking a note commitment that has already been DEPOSITED (S-05).
 ///
 /// Existence => that exact commitment is already a leaf, so a second deposit of
@@ -219,12 +205,10 @@ impl WalletEntry {
 /// over-collateralised (so no solvency alarm fires) and the user's second
 /// deposit is silently unrecoverable.
 ///
-/// That is reachable by accident, not just by malice, and it is the DEFAULT
-/// failure mode rather than an exotic one: `recovery_nonce =
-/// deriveBlindingFactor(seed, depositIndex)` is fully deterministic, and
-/// `depositIndex` is a caller-supplied parameter the SDK persists NOWHERE — so
-/// a seed-only restore restarts at 0 and re-derives a byte-identical
-/// commitment for the same (mint, amount).
+/// That remains reachable through an exact retry or a malformed client even
+/// though the ordinary SDK deposit API samples a fresh canonical recovery
+/// nonce. The on-chain guard is therefore still load-bearing: client-side
+/// uniqueness cannot replace consensus-enforced deposit-once semantics.
 ///
 /// Binding the tree position into the commitment instead would make duplicates
 /// impossible for free, but the leaf index is only known at execution time, so

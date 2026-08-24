@@ -88,7 +88,6 @@ export interface InventorySnapshot {
   roots: FinalizedRootRing[];
   orders: BrowserOrderRecord[];
   nextOrderIndex: number;
-  nextDepositIndex: number;
 }
 
 export interface BrowserMarketInventoryConfig {

@@ -75,7 +75,6 @@ const assets = new Map([
   ["/artifacts/manifest.json", [envelope, "application/json"]],
 ]);
 const builds = {
-  wallet_create: "valid_wallet_create",
   deposit: "valid_deposit",
   input: "valid_input",
   spend: "valid_spend",

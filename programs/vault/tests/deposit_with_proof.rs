@@ -365,11 +365,9 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
 /// permanently over-collateralised, so the solvency invariant stays happy and
 /// nothing alarms; the user's second deposit is just silently unrecoverable.
 ///
-/// This is reachable by accident, not only by malice, and it is the DEFAULT
-/// failure mode: `recovery_nonce = deriveBlindingFactor(seed, depositIndex)` is
-/// deterministic and `depositIndex` is a caller-supplied value the SDK persists
-/// nowhere, so a seed-only restore restarts at 0 and re-derives a byte-identical
-/// commitment for the same (mint, amount).
+/// This remains reachable through an exact retry or a malformed client even
+/// though the ordinary SDK deposit API now samples a fresh canonical recovery
+/// nonce, so the on-chain guard remains load-bearing.
 #[test]
 fn duplicate_commitment_deposit_is_rejected() {
     let mut h = Harness::setup();

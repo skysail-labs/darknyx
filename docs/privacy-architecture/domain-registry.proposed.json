@@ -3,11 +3,7 @@
   "schemaVersion": 1,
   "registryStatus": "phase0-provisional",
   "frozenOn": "2026-08-25",
-  "lifecycleValues": [
-    "active",
-    "provisional",
-    "retired"
-  ],
+  "lifecycleValues": ["active", "provisional", "retired"],
   "policy": {
     "domainNumbersAreNeverReused": true,
     "sameArityMeaningChangeRequiresFreshDomain": true,
@@ -76,71 +72,51 @@
       "number": 10,
       "symbol": "DOMAIN_ROOT",
       "arity": 4,
-      "lifecycle": "active",
+      "lifecycle": "retired",
       "version": 1,
-      "meaning": "wallet-create root branch",
+      "meaning": "retired wallet-create root branch",
       "retirementPhase": 1,
-      "consumers": [
-        "crates/darkpool-crypto/src/user_commitment.rs",
-        "packages/sdk/src/keys/user-commitment.ts",
-        "circuits/valid_wallet_create/circuit.circom"
-      ]
+      "consumers": []
     },
     {
       "number": 11,
       "symbol": "DOMAIN_SPEND",
       "arity": 3,
-      "lifecycle": "active",
+      "lifecycle": "retired",
       "version": 1,
-      "meaning": "wallet-create spend branch",
+      "meaning": "retired wallet-create spend branch",
       "retirementPhase": 1,
-      "consumers": [
-        "crates/darkpool-crypto/src/user_commitment.rs",
-        "packages/sdk/src/keys/user-commitment.ts",
-        "circuits/valid_wallet_create/circuit.circom"
-      ]
+      "consumers": []
     },
     {
       "number": 12,
       "symbol": "DOMAIN_VIEW",
       "arity": 3,
-      "lifecycle": "active",
+      "lifecycle": "retired",
       "version": 1,
-      "meaning": "wallet-create BN254 viewing branch",
+      "meaning": "retired wallet-create BN254 viewing branch",
       "retirementPhase": 1,
-      "consumers": [
-        "crates/darkpool-crypto/src/user_commitment.rs",
-        "packages/sdk/src/keys/user-commitment.ts",
-        "circuits/valid_wallet_create/circuit.circom"
-      ]
+      "consumers": []
     },
     {
       "number": 13,
       "symbol": "DOMAIN_LEAF",
       "arity": 3,
-      "lifecycle": "active",
+      "lifecycle": "retired",
       "version": 1,
-      "meaning": "wallet-create root/spend branch fold",
+      "meaning": "retired wallet-create root/spend branch fold",
       "retirementPhase": 1,
-      "consumers": [
-        "crates/darkpool-crypto/src/user_commitment.rs",
-        "packages/sdk/src/keys/user-commitment.ts",
-        "circuits/valid_wallet_create/circuit.circom"
-      ]
+      "consumers": []
     },
     {
       "number": 14,
       "symbol": "DOMAIN_TOP",
       "arity": 3,
-      "lifecycle": "active",
+      "lifecycle": "retired",
       "version": 1,
-      "meaning": "wallet-create top-level commitment",
+      "meaning": "retired wallet-create top-level commitment",
       "retirementPhase": 1,
-      "consumers": [
-        "crates/darkpool-crypto/src/user_commitment.rs",
-        "packages/sdk/src/keys/user-commitment.ts",
-        "circuits/valid_wallet_create/circuit.circom"
-      ]
+      "consumers": []
     },
     {
       "number": 20,

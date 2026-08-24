@@ -24,7 +24,7 @@ funds, replace the program, or rotate a trusted TEE signer.
 |---|---|---|---|---|
 | **Program upgrade authority** | Replacing the on-chain program bytecode (BPFLoaderUpgradeable) | `solana program set-upgrade-authority` | `~/.config/solana/id.json` | Cold root/upgrade 4-of-7 vault PDA |
 | **`VaultConfig.admin`** | TEE signer rotation, global fee config, Merkle-tree and `MarketConfig` administration | `operations_admin` argument at `initialize` (no transfer ix) | `initialize` signer | Operations 3-of-5 vault PDA |
-| **`VaultConfig.root_key`** | `rotate_root_key` (self-signed), is the `create_wallet` owner | `initialize` param, then self-rotating | `root_key` param | Cold root/upgrade 4-of-7 vault PDA |
+| **`VaultConfig.root_key`** | `rotate_root_key` (self-signed) | `initialize` param, then self-rotating | `root_key` param | Cold root/upgrade 4-of-7 vault PDA |
 | **Phala compose-hash allowlist** | Which CVM image the KMS releases keys to | Phala Cloud dashboard | deploy team | deploy team (out of multisig — see §4) |
 
 The point of F-10/N-19: **the program upgrade authority and `admin` are the two
@@ -55,7 +55,7 @@ has already locked on-chain.
   can point `tee_pubkeys` at a key it controls, then forge settle payloads → **this is the
   F-10 attack the attestation gate (§5 of the attestation flow) closes.**
 - **`root_key`** — the protocol "root" governance key. It is the `owner` that
-  signs `create_wallet`, and it self-rotates via `rotate_root_key` (only the
+  is a protocol governance authority and self-rotates via `rotate_root_key` (only the
   *current* `root_key` can install a successor — `admin` cannot override it).
   Distinct lifecycle from `admin`: rarely used, so a good candidate for a
   separate, colder quorum if you want operational separation.

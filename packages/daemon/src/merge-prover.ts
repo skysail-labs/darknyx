@@ -4,7 +4,7 @@
  * Implements the SDK `IDarkPoolZkProverSuite` for the daemon's auto-merge: maps
  * `MergeInputs` (which the SDK `getMergeFunction` assembles) onto the merge
  * circuit's witness, proves k=2/4 in-process via snarkjs, and returns the
- * on-chain proof bytes. walletCreate/spend are stubbed — the daemon's merge
+ * on-chain proof bytes. Deposit/spend are stubbed — the daemon's merge
  * client only ever proves merges.
  *
  * Proof format matches the validated devnet/CVM merge path: `formatGroth16ForOnChain`
@@ -35,7 +35,6 @@ export function nodeMergeProver(
   artifacts: MergeCircuitArtifacts,
 ): IDarkPoolZkProverSuite {
   return {
-    walletCreate: stub("walletCreate"),
     deposit: stub("deposit"),
     spend: stub("spend"),
     merge: {

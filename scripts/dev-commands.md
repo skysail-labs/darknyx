@@ -79,7 +79,7 @@ cd /path/to/repo/root
 ```sh
 npm install                                            # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                          # pot16 (~80 MB) + pot18 (~288 MB)
-bash scripts/build-circuits.sh                         # compile 9 circom circuits; writes vk_*.rs
+bash scripts/build-circuits.sh                         # compile 8 circom circuits; writes vk_*.rs
 cargo build --examples -p darkpool-crypto              # TS↔Rust parity helper binaries
 cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # BPF (litesvm + devnet deploy; F-01/F-02 admin ixs OFF by default for mainnet)
 ```
@@ -112,13 +112,11 @@ cargo test -p darkpool-matcher                    # uniform-price matching + par
 cargo test -p vault                               # vault unit + litesvm integration
 
 # Key litesvm integration files (need `cargo build-sbf` first)
-cargo test -p vault --test zk_roundtrip                       # VALID_WALLET_CREATE on-chain verify
 cargo test -p vault --test zk_spend_roundtrip                 # VALID_SPEND + Merkle parity
 cargo test -p vault --test merge_verify                       # VALID_MERGE(K=2/4) verify roundtrip
 cargo test -p vault --test set_tee_pubkey                     # admin-gated tee_pubkeys (Vec) rotation
 cargo test -p vault --test tee_forced_settle_batched          # 1:N marker + sharding (distinct-shard / multi-key auth / per-shard reset)
 cargo test -p vault --test match_batch_verify                 # N=16 VALID_MATCH_BATCH verify (committed proof fixture)
-cargo test -p vault --test user_commitment_registration       # WalletEntry registration
 cargo test -p vault --test set_protocol_config
 
 # Tree-sharding litesvm coverage lives in tee_forced_settle_batched.rs:
@@ -223,15 +221,13 @@ echo "ALL GREEN — safe to push"
 ## 3. Circuits (circom / snarkjs)
 
 ```sh
-bash scripts/build-circuits.sh                    # compile all 9, run ceremony, write vk_*.rs
+bash scripts/build-circuits.sh                    # compile all 8, run ceremony, write vk_*.rs
 ls circuits/build/valid_deposit/                  # proof-bound private-owner deposit
 ls circuits/build/match_batch_n16/                # the production N=16 batched-validity circuit
 ls circuits/build/valid_merge_k2 valid_merge_k4   # in-pool note merge (K=2/4)
 
 # Regenerate just the Rust VK consts (if you tweaked the parser)
 node scripts/parse-vk-to-rust.js \
-  circuits/build/valid_wallet_create/verification_key.json \
-  programs/vault/src/zk/vk_valid_wallet_create.rs
 ```
 
 If you touch any circuit, Poseidon arity, or the `compute_match_leaf`

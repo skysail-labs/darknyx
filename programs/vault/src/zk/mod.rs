@@ -11,6 +11,5 @@ pub mod vk_valid_input;
 pub mod vk_valid_merge_k2;
 pub mod vk_valid_merge_k4;
 pub mod vk_valid_spend;
-pub mod vk_valid_wallet_create;
 
 pub use verifier::{verify_groth16_proof, Groth16Proof};

@@ -106,10 +106,10 @@ describe("nodeMergeProver (real VALID_MERGE k=2)", () => {
     expect(proof.publicInputs.length).toBe(4 + 2);
   });
 
-  it("stubs walletCreate + spend", async () => {
+  it("stubs deposit + spend", async () => {
     const suite = nodeMergeProver({ k2, k4 });
     await expect(suite.spend.prove({} as never)).rejects.toThrow(/merge-only/);
-    await expect(suite.walletCreate.prove({} as never)).rejects.toThrow(
+    await expect(suite.deposit.prove({} as never)).rejects.toThrow(
       /merge-only/,
     );
   });

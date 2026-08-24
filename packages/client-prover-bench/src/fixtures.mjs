@@ -53,7 +53,6 @@ export async function buildFixtures() {
   const hash = (...values) => fr(poseidon(values));
 
   const spendingKey = 12345678901234567890n;
-  const viewingKey = 998877665544332211n;
   const ownerBlinding = 42n;
   const mint = [
     0x00112233445566778899aabbccddeeffn,
@@ -69,18 +68,6 @@ export async function buildFixtures() {
     hash(29n, commitment, innerHashes[index]),
   );
   const tree = await merkleFixtures(hash, commitments);
-
-  const rootKey = [
-    0x11111111111111111111111111111111n,
-    0x22222222222222222222222222222222n,
-  ];
-  const r0 = 11n;
-  const r1 = 12n;
-  const r2 = 13n;
-  const rootHash = hash(10n, rootKey[0], rootKey[1], r0);
-  const spendHash = hash(11n, spendingKey, r1);
-  const viewHash = hash(12n, viewingKey, r2);
-  const userCommitment = hash(14n, hash(13n, rootHash, spendHash), viewHash);
 
   const recoveryNonce = 112233445566778899n;
   const noteSecret = 998877665544332211n;
@@ -156,18 +143,6 @@ export async function buildFixtures() {
   ];
 
   return {
-    wallet_create: {
-      input: {
-        userCommitment: String(userCommitment),
-        rootKey: strings(rootKey),
-        spendingKey: String(spendingKey),
-        viewingKey: String(viewingKey),
-        r0: String(r0),
-        r1: String(r1),
-        r2: String(r2),
-      },
-      expectedPublic: [String(userCommitment)],
-    },
     deposit: {
       input: {
         noteCommitment: String(depositCommitment),
