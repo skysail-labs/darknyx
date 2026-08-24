@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "status": "phase0-frozen",
+  "encoding": {
+    "inputs": "canonical BN254 field elements written as base-10 strings",
+    "outputs": "32-byte canonical BN254 field elements, big-endian lowercase hex"
+  },
+  "vectors": [
+    {
+      "name": "owner_v2",
+      "formula": "Poseidon2(DOMAIN_OWNER_V2, spending_key)",
+      "domain": 32,
+      "inputs": [
+        "32",
+        "1001"
+      ],
+      "output": "19a60cc2fc6bb80d7e36a941527f46d25403bc24035835e8d8be6b82119022c1"
+    },
+    {
+      "name": "deposit_inner_v2",
+      "formula": "Poseidon3(DOMAIN_DEPOSIT_INNER_V2, public_recovery_nonce, note_secret)",
+      "domain": 33,
+      "inputs": [
+        "33",
+        "2002",
+        "3003"
+      ],
+      "output": "2a0d7bf65498b8f216e0a66fb57cbbb807f54506c9618990fa4d879e322ae6ad"
+    },
+    {
+      "name": "merge_inner_v2",
+      "formula": "Poseidon6(DOMAIN_MERGE_INNER_V2, inner0, inner1, inner2, inner3, active_bitmap)",
+      "domain": 34,
+      "inputs": [
+        "34",
+        "11",
+        "22",
+        "0",
+        "0",
+        "3"
+      ],
+      "output": "29cc149632528880c9b9271d09833b6ee8a12b768b6f32471038f3191c1131f1"
+    },
+    {
+      "name": "fee_key_binding_v1",
+      "formula": "Poseidon2(DOMAIN_FEE_KEY_BINDING, fee_epoch_key)",
+      "domain": 35,
+      "inputs": [
+        "35",
+        "4004"
+      ],
+      "output": "0dea674cc22c4550b60604faaa62edd0ce4fe22ca4b38ebe24506cc9795faa19"
+    },
+    {
+      "name": "fee_inner_v2",
+      "formula": "Poseidon4(DOMAIN_FEE_INNER_V2, fee_epoch_key, consumed_use_tag, role)",
+      "domain": 36,
+      "inputs": [
+        "36",
+        "4004",
+        "5005",
+        "2"
+      ],
+      "output": "25b0e3d61c48456c00303a06d9dcea509389561a8e9f379cb694fec042a769e4"
+    },
+    {
+      "name": "match_config_digest_v2",
+      "formula": "Poseidon10(DOMAIN_MATCH_CONFIG_V2, fee_rate_bps, protocol_owner, base_mint_lo, base_mint_hi, quote_mint_lo, quote_mint_hi, price_scale, fee_key_binding, fee_key_epoch)",
+      "domain": 37,
+      "inputs": [
+        "37",
+        "30",
+        "6006",
+        "101",
+        "102",
+        "201",
+        "202",
+        "100000000",
+        "6294222194019067632681459623071626078544702751129028623721959287585536715289",
+        "7"
+      ],
+      "output": "289db71a716aa072a0f66d8d331b4126909d0c06337d89ebd6bc2248926174b7",
+      "notes": "Input 8 is the decimal value of the fee_key_binding_v1 output above."
+    }
+  ]
+}
