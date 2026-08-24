@@ -487,9 +487,10 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
    */
   async function awaitSupervisedBootRotation(): Promise<void> {
     const before = buyer.getAttestation()?.bootSessionId;
-    expect(before, "restart drill requires strict application attestation").toMatch(
-      /^[0-9a-f]{64}$/,
-    );
+    expect(
+      before,
+      "restart drill requires strict application attestation",
+    ).toMatch(/^[0-9a-f]{64}$/);
     const startedMs = Date.now();
     const rssBeforeMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
     writeFileSync(
@@ -497,9 +498,7 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       `${JSON.stringify({ boot_session_id: before, ready_at_ms: startedMs })}\n`,
       { mode: 0o600 },
     );
-    console.log(
-      `  · CVM_RESTART_READY boot=${before} rss_mb=${rssBeforeMb}`,
-    );
+    console.log(`  · CVM_RESTART_READY boot=${before} rss_mb=${rssBeforeMb}`);
 
     const states = new Set<string>();
     let requestFailures = 0;
@@ -753,8 +752,6 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
     await buyer.start();
     expect(buyer.getAttestation(), "attested").toBeTruthy();
 
-    if (RESTART_DRILL) await awaitSupervisedBootRotation();
-
     // read-surface sanity (utilizes /transparency, /instruments, /account).
     expect(await buyer.tee.transparency()).toBeTruthy();
     expect(await buyer.tee.instruments()).toBeTruthy();
@@ -802,6 +799,14 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       note,
     );
     expect(buyer.getOrder(orderId)?.phase).toBe("open");
+
+    // Rotate only after collateral is reserved by a real resting order. The
+    // recovery must reconcile that exact order without re-signing or silently
+    // rebooking it before any fresh post-recovery action is allowed.
+    if (RESTART_DRILL) {
+      await awaitSupervisedBootRotation();
+      expect(buyer.getOrder(orderId)?.phase).toBe("open");
+    }
 
     // ── crossing ask → partial fill ──
     await sellerAsk(SLICE, askPrice);

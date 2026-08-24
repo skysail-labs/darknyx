@@ -106,6 +106,7 @@ function buildDaemon(
     verifyAttestation,
     verifyRoot: false,
     reconcileOnStart: false,
+    finalizedSlot: async () => 100,
     ...overrides,
   });
   const reconcileSpy = vi.spyOn(daemon, "reconcileNow").mockResolvedValue({

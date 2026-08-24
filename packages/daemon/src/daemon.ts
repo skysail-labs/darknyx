@@ -209,6 +209,9 @@ export interface DaemonDeps {
    *  Defaults to `true`; isolated unit suites that stand up no CVM pass
    *  `false`. */
   reconcileOnStart?: boolean;
+  /** Finalized slot high-water reader for incremental reconciliation.
+   * Defaults to the configured Solana RPC; injectable for tests. */
+  finalizedSlot?: () => Promise<number>;
   /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
   fetchInclusion?: FetchInclusionFn;
   /** SDK deposit fn (`getDepositFunction({ client })`). Enables `deposit`. */
@@ -275,6 +278,11 @@ export class Daemon {
    * opt out rather than every one of them growing a mock chain.
    */
   private readonly reconcileOnStart: boolean;
+  private readonly finalizedSlotFn: () => Promise<number>;
+  /** Inclusive lower bound for the next live-session chain recovery. A true
+   * process restart deliberately starts without one and performs cold
+   * recovery before establishing a new high-water mark. */
+  private reconciliationCursorSlot: number | undefined;
   private teeKeyRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private teeKeyRefreshInFlight = false;
   private transportState: TransportLifecycleState = "ready";
@@ -357,6 +365,19 @@ export class Daemon {
     }
     this.settlementPollMs = deps.settlementPollMs;
     this.reconcileOnStart = deps.reconcileOnStart ?? true;
+    this.finalizedSlotFn =
+      deps.finalizedSlot ??
+      (async () => {
+        const raw = await new Connection(
+          this.config.rpcUrl,
+          "finalized",
+        ).getSlot("finalized");
+        const slot = Number(raw);
+        if (!Number.isSafeInteger(slot) || slot < 0) {
+          throw new Error(`finalized slot is outside the safe range: ${raw}`);
+        }
+        return slot;
+      });
     this.fetchInclusion = deps.fetchInclusion;
     this.depositFn = deps.depositFn;
     this.depositor = deps.depositor;
@@ -659,6 +680,10 @@ export class Daemon {
       // stopped growing.
       this.emitError("reconcile", new Error(`reconciling — ${reason}`));
       try {
+        // Snapshot before scanning. Advancing to the pre-scan high-water mark
+        // is conservative: transactions finalized during the scan are read
+        // again next time instead of falling into a cursor race.
+        const scanThroughSlot = await this.finalizedSlotFn();
         const markets = await this.tee.instruments();
         const market = markets[0];
         if (!market) throw new Error("/instruments returned no market");
@@ -670,6 +695,7 @@ export class Daemon {
           masterSeed: this.keystore.masterSeed,
           baseMint: new PublicKey(market.base_mint).toBytes(),
           quoteMint: new PublicKey(market.quote_mint).toBytes(),
+          sinceSlot: this.reconciliationCursorSlot,
           log: (m) => console.log(m),
         });
         console.log(
@@ -687,6 +713,7 @@ export class Daemon {
         this.reconcileFailureReason =
           result.errors.length > 0 ? result.errors[0] : null;
         if (result.errors.length === 0) {
+          this.reconciliationCursorSlot = scanThroughSlot;
           this.tracker?.retryQuarantined();
           if (
             this.transportState === "paused" &&
@@ -864,6 +891,15 @@ export class Daemon {
       await this.requireFinalizedTeePubkeys(this.expectedTeePubkeys);
     }
     this.resumeTrading();
+
+    // A supervised live session that intentionally skips the cold-start scan
+    // still needs a lower bound before opening its streams. This is used by
+    // focused live drills and isolated embeddings; production's default
+    // `reconcileOnStart=true` leaves the cursor unset until the mandatory full
+    // cold recovery succeeds.
+    if (this.transportSupervisor && !this.reconcileOnStart) {
+      this.reconciliationCursorSlot = await this.finalizedSlotFn();
+    }
 
     this.started = true;
     // One-time migration safety: an existing DB can advance a newly-created
