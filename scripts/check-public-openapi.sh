@@ -2,7 +2,7 @@
 # The published OpenAPI spec must be a faithful, admin-free derivative of the
 # internal wire contract.
 #
-# `docs/gitbook/api-reference/openapi/darknyx-public.yaml` is what the public
+# `docs/mintlify/api-reference/openapi/darknyx-public.yaml` is what the public
 # docs render. It is GENERATED from `docs/tee-api-openapi.yaml`. Two ways that
 # goes wrong, both of which this guard catches:
 #
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ART="$ROOT/docs/gitbook/api-reference/openapi/darknyx-public.yaml"
+ART="$ROOT/docs/mintlify/api-reference/openapi/darknyx-public.yaml"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: python3 is required to verify the public OpenAPI spec" >&2

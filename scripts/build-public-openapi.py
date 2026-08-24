@@ -38,7 +38,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "docs" / "tee-api-openapi.yaml"
-OUT = ROOT / "docs" / "gitbook" / "api-reference" / "openapi" / "darknyx-public.yaml"
+OUT = ROOT / "docs" / "mintlify" / "api-reference" / "openapi" / "darknyx-public.yaml"
 EXCLUDE_TAG = "admin"
 METHODS = ("get", "post", "put", "delete", "patch", "options", "head")
 
