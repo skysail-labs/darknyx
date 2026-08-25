@@ -66,7 +66,14 @@ import {
 import { fetchOrderFills } from "../src/fills/history.js";
 import { recoverNotesFromChain } from "../src/fills/cold-recovery.js";
 import { recoverFillFromChain } from "../src/fills/recover.js";
-import { decodeSettleFills } from "../src/fills/chain-history.js";
+import {
+  decodeSettleFeeCommitments,
+  decodeSettleFills,
+} from "../src/fills/chain-history.js";
+import {
+  MATCH_ROLE_FEE_BASE,
+  MATCH_ROLE_FEE_QUOTE,
+} from "../src/utxo/match-output.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -83,7 +90,12 @@ import {
   loadKeypairRel,
   mintToIx,
   reportSettleTimeline,
+  be32ToBigInt,
 } from "./helpers/e2e-helpers.js";
+import {
+  feeDictionaryCeiling,
+  searchLegacyFeeDictionary,
+} from "./helpers/privacy-observer.js";
 import {
   CvmHarness,
   makePersona,
@@ -716,7 +728,12 @@ maybeDescribe(
             { limit: 20, vaultProgramId: cfg.vaultProgramId },
           );
           let matched:
-            | { wire: Buffer; outputs: Uint8Array[]; signature: string }
+            | {
+                wire: Buffer;
+                outputs: Uint8Array[];
+                fees: { base: Uint8Array; quote: Uint8Array };
+                signature: string;
+              }
             | undefined;
           for (const row of timeline
             .filter((r) => r.stage === "tee_forced_settle_batched")
@@ -744,6 +761,11 @@ maybeDescribe(
               ) {
                 continue;
               }
+              const fees = decodeSettleFeeCommitments(ix.data);
+              expect(
+                fees,
+                "Tx D fee commitments were not decodable",
+              ).toBeTruthy();
               matched = {
                 // The message is the observer-visible signed payload. It
                 // contains every instruction byte (where the old commitments
@@ -752,6 +774,7 @@ maybeDescribe(
                 outputs: fills.map((f) =>
                   Uint8Array.from(Buffer.from(f.tradeNoteCommitment, "hex")),
                 ),
+                fees: fees!,
                 signature: row.signature,
               };
               break;
@@ -775,8 +798,55 @@ maybeDescribe(
               "an output commitment expected in Tx D was absent",
             ).toBe(true);
           }
+
+          // PA-01: under the retired formula, an observer could enumerate the
+          // bounded fee range from each public input commitment. The actual
+          // v2 fee inners also require the governed epoch key and consumed
+          // use tag, so neither real fee commitment may appear in that legacy
+          // dictionary.
+          expect(
+            FEE_RATE_BPS,
+            "observer-negative check requires nonzero fees",
+          ).toBeGreaterThan(0);
+          const protocolOwner = be32ToBigInt(
+            Uint8Array.from(
+              Buffer.from(cfg.protocol.ownerCommitmentHex, "hex"),
+            ),
+          );
+          const [legacyBaseHit, legacyQuoteHit] = await Promise.all([
+            searchLegacyFeeDictionary({
+              inputCommitment: sellerNote.commitment,
+              targetFeeCommitment: matched!.fees.base,
+              tokenMint: baseMint.toBytes(),
+              protocolOwnerCommitment: protocolOwner,
+              role: MATCH_ROLE_FEE_BASE,
+              maxFee: feeDictionaryCeiling(
+                sellerNote.amount,
+                BigInt(FEE_RATE_BPS),
+              ),
+            }),
+            searchLegacyFeeDictionary({
+              inputCommitment: buyerNote.commitment,
+              targetFeeCommitment: matched!.fees.quote,
+              tokenMint: quoteMint.toBytes(),
+              protocolOwnerCommitment: protocolOwner,
+              role: MATCH_ROLE_FEE_QUOTE,
+              maxFee: feeDictionaryCeiling(
+                buyerNote.amount,
+                BigInt(FEE_RATE_BPS),
+              ),
+            }),
+          ]);
+          expect(
+            legacyBaseHit,
+            "legacy public-data dictionary relinked the base fee",
+          ).toBeNull();
+          expect(
+            legacyQuoteHit,
+            "legacy public-data dictionary relinked the quote fee",
+          ).toBeNull();
           console.log(
-            `  · unlinkability OK — inputs absent, outputs present in Tx D ${matched!.signature}`,
+            `  · PA-01 observer-negative OK — legacy fee dictionaries missed Tx D ${matched!.signature}`,
           );
         });
 

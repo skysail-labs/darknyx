@@ -49,6 +49,9 @@ import {
   buildMergeInstruction,
 } from "../src/idl/vault-client.js";
 import { readNoteMergedLeafIndex } from "../src/utxo/leaf-index.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
+import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
+import { decodeSettleFills } from "../src/fills/chain-history.js";
 import {
   orderCanonicalDigest,
   OrderSide,
@@ -60,6 +63,7 @@ import {
   associatedTokenAddress,
   be32ToBigInt,
   createAtaIdempotentIx,
+  fetchSettleTimeline,
   loadKeypairRel,
   mintToIx,
 } from "./helpers/e2e-helpers.js";
@@ -79,6 +83,7 @@ import {
   type Persona,
   type DepositedNote,
 } from "./helpers/cvm-harness.js";
+import { deriveLegacyMergeInner } from "./helpers/privacy-observer.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
@@ -289,6 +294,24 @@ maybeDescribe(
           `  · merged → note ${hex(mergeRes.outputCommitmentBE).slice(0, 12)}… (${mergeRes.outputAmount}) at leaf ${mergedLeaf}`,
         );
 
+        // PA-02 setup: an observer can still derive the retired commitment-
+        // based inner and tag from the two public input leaves. Preserve that
+        // candidate so the later Tx D can prove it is not the handle consumed
+        // by the v2 private-inner-derived merge descendant.
+        const legacyMergeInner = await deriveLegacyMergeInner([
+          sellerNote0.commitment,
+          sellerNote1.commitment,
+        ]);
+        const legacyMergeTag = await deriveNoteUseTag(
+          noteCommitmentFromBytes(mergeRes.outputCommitmentBE),
+          legacyMergeInner,
+        );
+        const actualMergeTag = await deriveNoteUseTag(
+          noteCommitmentFromBytes(mergeRes.outputCommitmentBE),
+          bn254ToBE32(mergeRes.outputInnerHash),
+        );
+        expect(actualMergeTag).not.toEqual(legacyMergeTag);
+
         // The merged note, shaped as an order-collateral note (same owner as the
         // seller's deposits; witnessed against the merge OUTPUT leaf).
         const mergedNote: DepositedNote = {
@@ -429,6 +452,67 @@ maybeDescribe(
           finalCount,
           "merged-note order did not settle — check CVM logs",
         ).toBeGreaterThanOrEqual(before + 2);
+
+        await t.step(
+          "PA-02 observer-negative (later merge use tag)",
+          async () => {
+            const infoRes = await gwFetch(`${GATEWAY}/info`);
+            expect(infoRes.status).toBe(200);
+            const info = (await infoRes.json()) as { tee_pubkey?: string };
+            expect(info.tee_pubkey).toBeTruthy();
+            const timeline = await fetchSettleTimeline(
+              conn,
+              new PublicKey(info.tee_pubkey!),
+              { limit: 20, vaultProgramId: cfg.vaultProgramId },
+            );
+            let observedTag: string | undefined;
+            let settleSignature: string | undefined;
+            for (const row of timeline
+              .filter((entry) => entry.stage === "tee_forced_settle_batched")
+              .reverse()) {
+              const tx = await conn.getTransaction(row.signature, {
+                maxSupportedTransactionVersion: 0,
+                commitment: "confirmed",
+              });
+              if (!tx) continue;
+              const message = tx.transaction.message;
+              const keys = message.getAccountKeys({
+                accountKeysFromLookups: tx.meta?.loadedAddresses ?? undefined,
+              });
+              for (const ix of message.compiledInstructions) {
+                if (
+                  keys.get(ix.programIdIndex)?.toBase58() !== cfg.vaultProgramId
+                ) {
+                  continue;
+                }
+                const fills = decodeSettleFills(
+                  ix.data,
+                  row.signature,
+                  row.slot,
+                );
+                const sellerFill = fills?.find(
+                  (fill) => fill.orderId === sellerOrder.order_id,
+                );
+                if (!sellerFill) continue;
+                observedTag = sellerFill.inputNoteUseTag;
+                settleSignature = row.signature;
+                break;
+              }
+              if (observedTag) break;
+            }
+            expect(
+              observedTag,
+              "could not locate merged note's later use tag",
+            ).toBe(hex(actualMergeTag));
+            expect(
+              observedTag,
+              "public merge leaves reconstructed the later use tag",
+            ).not.toBe(hex(legacyMergeTag));
+            console.log(
+              `  · PA-02 observer-negative OK — retired tag missed Tx D ${settleSignature}`,
+            );
+          },
+        );
         t.report("cvm-merge-then-order: deposit×2 → MERGE → order → settle");
       },
       SETTLE_TIMEOUT_MS + 300_000,

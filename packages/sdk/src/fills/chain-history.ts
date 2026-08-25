@@ -72,6 +72,24 @@ export interface TradeSettledLeaves {
   changeSeller: bigint | null;
 }
 
+export interface SettlementFeeCommitments {
+  base: Uint8Array;
+  quote: Uint8Array;
+}
+
+/** Decode the two observer-visible protocol fee commitments from Tx D. */
+export function decodeSettleFeeCommitments(
+  ixData: Uint8Array,
+): SettlementFeeCommitments | null {
+  if (ixData.length < PAYLOAD_OFFSET + PAYLOAD_LEN) return null;
+  if (!same(ixData.subarray(0, 8), SETTLE_DISCRIMINATOR)) return null;
+  const payload = ixData.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + PAYLOAD_LEN);
+  return {
+    base: Uint8Array.from(payload.subarray(240, 272)),
+    quote: Uint8Array.from(payload.subarray(272, 304)),
+  };
+}
+
 /**
  * Decode every vault-emitted Anchor `TradeSettled` event in a transaction's
  * logs.

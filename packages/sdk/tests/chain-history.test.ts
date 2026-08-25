@@ -19,6 +19,7 @@ import {
 import { anchorDiscriminator } from "../src/idl/vault-client.js";
 import { deriveOrderId } from "../src/keys/key-generators.js";
 import {
+  decodeSettleFeeCommitments,
   decodeSettleFills,
   backfillHistoryFromChain,
   makeConnectionScan,
@@ -115,6 +116,21 @@ describe("decodeSettleFills", () => {
 
   it("returns null when the data is too short", () => {
     expect(decodeSettleFills(fill(100, 0x00), "sig")).toBeNull();
+  });
+});
+
+describe("decodeSettleFeeCommitments", () => {
+  it("decodes both fee commitments with the encoder's exact offsets", () => {
+    const fees = decodeSettleFeeCommitments(ixData);
+    expect(fees).not.toBeNull();
+    expect(fees!.base).toEqual(payload.noteFeeBaseCommitment);
+    expect(fees!.quote).toEqual(payload.noteFeeQuoteCommitment);
+  });
+
+  it("rejects non-settle and truncated instruction data", () => {
+    const notSettle = cat(anchorDiscriminator("deposit"), fill(560, 0x00));
+    expect(decodeSettleFeeCommitments(notSettle)).toBeNull();
+    expect(decodeSettleFeeCommitments(fill(100, 0x00))).toBeNull();
   });
 });
 
