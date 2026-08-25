@@ -29,7 +29,7 @@
       "wasm": {
         "path": "valid_input/circuit.wasm",
         "bytes": 3112246,
-        "sha256": "ff70da22b0ebd1d9031aec10a26f967e8227ca3e61312e485d6c120a73d9e8a4"
+        "sha256": "e9fed1df936dbe12a9d82c9bd9f426e9074a2a517e0f2fb7947af205734fa58f"
       },
       "zkey": {
         "path": "valid_input/circuit_final.zkey",
@@ -48,7 +48,7 @@
       "wasm": {
         "path": "valid_spend/circuit.wasm",
         "bytes": 3111490,
-        "sha256": "a001a7e06177a34fbb2c24e0231a0bfbb792804109e408b70f6def9eed36e81a"
+        "sha256": "d181003ce3c2ecf7095e51d1fddcd19d685f85fcec3647ab5c399b9bc3670787"
       },
       "zkey": {
         "path": "valid_spend/circuit_final.zkey",
@@ -67,7 +67,7 @@
       "wasm": {
         "path": "valid_merge_k2/circuit.wasm",
         "bytes": 3271462,
-        "sha256": "f8c89dcddf8c32ff68f861934dcb847bf5e59ae573eaa33c4156f97893c460aa"
+        "sha256": "5de4f64c5837f50642157b8849838bc24d956217c9716c75a668fe746e65b518"
       },
       "zkey": {
         "path": "valid_merge_k2/circuit_final.zkey",
@@ -86,7 +86,7 @@
       "wasm": {
         "path": "valid_merge_k4/circuit.wasm",
         "bytes": 3368105,
-        "sha256": "57d3cd97f28af76495a74141e9e14745d3fd0479df1d2fe545b01d092a492ac7"
+        "sha256": "bc7667bee4a3500f74afc0c00b030398fb18eccaf86d983770b8a6b01b95a3c4"
       },
       "zkey": {
         "path": "valid_merge_k4/circuit_final.zkey",
