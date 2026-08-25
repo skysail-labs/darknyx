@@ -13,6 +13,8 @@
 //!   1. `merkle_root: [u8; 32]`  — the batch root (first public input)
 //!   2. `proof: Groth16Proof`    — 256 bytes (pi_a 64 + pi_b 128 +
 //!      pi_c 64), produced by the prover
+//!   3. `fee_key_epoch: u64`
+//!   4. `fee_recovery_ciphertext: [u8; 272]`
 //!
 //! **The marker TTL is not an argument — the program derives it.** A
 //! caller-supplied TTL, even one bounded to
@@ -21,9 +23,8 @@
 //! settle in the batch while the locks are already down (audit S-04).
 //!
 //! Accounts (positional, mirror `VerifyMatchBatch<'info>`):
-//!   `[0]` payer            — signer + writable (the TEE keypair;
-//!                            authorization is implicit in the proof,
-//!                            but the TEE pays rent + fee)
+//!   `[0]` payer            — signer + writable; must be one of the finalized
+//!                            authorized TEE keys and pays rent + fee
 //!   `[1]` vault_config     — readonly; supplies fee + owner digest preimage
 //!   `[2]` market_config    — readonly; supplies mint/scale digest preimage
 //!   `[3]` marker           — writable PDA (init), seeds
@@ -57,11 +58,13 @@ pub static VERIFY_MATCH_BATCH_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|
 pub struct VerifyMatchBatchArgs {
     pub merkle_root: [u8; 32],
     pub proof: Groth16ProofBytes,
+    pub fee_key_epoch: u64,
+    pub fee_recovery_ciphertext: [u8; 272],
 }
 
 impl VerifyMatchBatchArgs {
-    /// Borsh-encoded width: 32 + 256 = 288 bytes.
-    pub const WIRE_LEN: usize = 32 + Groth16ProofBytes::WIRE_LEN;
+    /// Borsh-encoded width: 32 + 256 + 8 + 272 = 568 bytes.
+    pub const WIRE_LEN: usize = 32 + Groth16ProofBytes::WIRE_LEN + 8 + 272;
 }
 
 /// Build the `verify_match_batch` instruction. `payer` is the TEE
@@ -101,6 +104,10 @@ pub fn build_verify_match_batch_ix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use solana_hash::Hash;
+    use solana_keypair::Keypair;
+    use solana_signer::Signer;
 
     fn dummy_proof() -> Groth16ProofBytes {
         Groth16ProofBytes {
@@ -114,6 +121,8 @@ mod tests {
         VerifyMatchBatchArgs {
             merkle_root: [0xAB; 32],
             proof: dummy_proof(),
+            fee_key_epoch: 7,
+            fee_recovery_ciphertext: [0x44; 272],
         }
     }
 
@@ -143,7 +152,7 @@ mod tests {
         // 8 disc + 32 root + 256 proof = 296. S-04 removed the 8-byte
         // caller-supplied expiry; a regression that re-adds it grows this.
         assert_eq!(ix.data.len(), 8 + VerifyMatchBatchArgs::WIRE_LEN);
-        assert_eq!(ix.data.len(), 296);
+        assert_eq!(ix.data.len(), 576);
     }
 
     #[test]
@@ -156,7 +165,9 @@ mod tests {
         assert_eq!(&body[32..96], &[0x11; 64]); // pi_a
         assert_eq!(&body[96..224], &[0x22; 128]); // pi_b
         assert_eq!(&body[224..288], &[0x33; 64]); // pi_c
-        assert_eq!(body.len(), 288);
+        assert_eq!(&body[288..296], &7u64.to_le_bytes());
+        assert_eq!(&body[296..568], &[0x44; 272]);
+        assert_eq!(body.len(), 568);
     }
 
     #[test]
@@ -201,5 +212,32 @@ mod tests {
         let ix1 = build_verify_match_batch_ix(&dummy_payer(), &base, &quote, dummy_args());
         let ix2 = build_verify_match_batch_ix(&dummy_payer(), &base, &quote, args2);
         assert_ne!(ix1.accounts[3].pubkey, ix2.accounts[3].pubkey);
+    }
+
+    #[test]
+    fn worst_case_tx_b_retains_packet_headroom() {
+        use crate::settle::pipeline::{budget_ixs, VERIFY_COMPUTE_UNIT_LIMIT};
+        use crate::settle::submit::build_tx_b64;
+
+        let payer = Keypair::new_from_array([0x42; 32]);
+        let (base, quote) = mints();
+        let verify = build_verify_match_batch_ix(&payer.pubkey(), &base, &quote, dummy_args());
+        let mut ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, 10_000);
+        ixs.push(verify);
+        let encoded =
+            build_tx_b64(&payer, &ixs, Hash::new_from_array([0x11; 32])).expect("Tx B compiles");
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("base64 transaction");
+
+        const SOLANA_CAP: usize = 1232;
+        const MIN_HEADROOM: usize = 250;
+        eprintln!(
+            "TX_B_WIRE_SIZE_V2 bytes={} headroom={}",
+            wire.len(),
+            SOLANA_CAP - wire.len()
+        );
+        assert!(wire.len() <= SOLANA_CAP);
+        assert!(SOLANA_CAP - wire.len() >= MIN_HEADROOM);
     }
 }

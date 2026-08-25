@@ -121,20 +121,11 @@ pub mod vault {
         ctx: &mut Context<Withdraw>,
         tree_id: u8,
         note_use_tag: [u8; 32],
-        nullifier: [u8; 32],
         merkle_root: [u8; 32],
         amount: u64,
         proof: Groth16Proof,
     ) -> Result<()> {
-        withdraw::withdraw_handler(
-            ctx,
-            tree_id,
-            note_use_tag,
-            nullifier,
-            merkle_root,
-            amount,
-            proof,
-        )
+        withdraw::withdraw_handler(ctx, tree_id, note_use_tag, merkle_root, amount, proof)
     }
 
     /// Merge K input notes (K=2 or 4) into ONE output note of their sum, using a
@@ -203,11 +194,15 @@ pub mod vault {
         ctx: &mut Context<SetProtocolConfig>,
         protocol_owner_commitment: [u8; 32],
         fee_rate_bps: u16,
+        fee_key_binding: [u8; 32],
+        fee_key_epoch: u64,
     ) -> Result<()> {
         set_protocol_config::set_protocol_config_handler(
             ctx,
             protocol_owner_commitment,
             fee_rate_bps,
+            fee_key_binding,
+            fee_key_epoch,
         )
     }
 
@@ -249,8 +244,16 @@ pub mod vault {
         ctx: &mut Context<VerifyMatchBatch>,
         merkle_root: [u8; 32],
         proof: Groth16Proof,
+        fee_key_epoch: u64,
+        fee_recovery_ciphertext: [u8; 272],
     ) -> Result<()> {
-        verify_match_batch::verify_match_batch_handler(ctx, merkle_root, proof)
+        verify_match_batch::verify_match_batch_handler(
+            ctx,
+            merkle_root,
+            proof,
+            fee_key_epoch,
+            fee_recovery_ciphertext,
+        )
     }
 
     /// Atomic TEE-forced settlement for one match. Reads the batch's

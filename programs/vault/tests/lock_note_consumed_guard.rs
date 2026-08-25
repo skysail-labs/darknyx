@@ -35,13 +35,12 @@ struct ValidLockFixture {
 
 fn prove_valid_lock(h: &mut Harness) -> ValidLockFixture {
     let spending_key = Fr::from(0x1234u64);
-    let owner_blinding = Fr::from(0x5678u64);
     let inner_hash = Fr::from(0x9ABCu64);
     let amount = 5_000_000u64;
     let token_mint = h.test_mint.to_bytes();
     let [mint_lo, mint_hi] = pubkey_to_fr_pair(&token_mint);
     let owner_commitment =
-        poseidon_hash(&[Fr::from(1u64), spending_key, owner_blinding]).expect("owner commitment");
+        poseidon_hash(&[Fr::from(32u64), spending_key]).expect("owner commitment");
     let commitment = poseidon_hash(&[
         Fr::from(2u64),
         mint_lo,
@@ -90,7 +89,6 @@ fn prove_valid_lock(h: &mut Harness) -> ValidLockFixture {
            \"tokenMint\": [\"{mint_lo}\", \"{mint_hi}\"],\n\
            \"amount\": \"{amount}\",\n\
            \"spendingKey\": \"{spending_key}\",\n\
-           \"ownerCommitmentBlinding\": \"{owner_blinding}\",\n\
            \"innerHash\": \"{inner_hash}\",\n\
            \"merklePath\": [{path}],\n\
            \"merkleIndices\": [{indices}]\n\
@@ -100,7 +98,6 @@ fn prove_valid_lock(h: &mut Harness) -> ValidLockFixture {
         mint_lo = fr_to_dec(&mint_lo),
         mint_hi = fr_to_dec(&mint_hi),
         spending_key = fr_to_dec(&spending_key),
-        owner_blinding = fr_to_dec(&owner_blinding),
         inner_hash = fr_to_dec(&inner_hash),
     );
     let build = repo_root().join("circuits/build/valid_input");

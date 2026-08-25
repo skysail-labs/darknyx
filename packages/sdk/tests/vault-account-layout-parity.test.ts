@@ -2,7 +2,7 @@
  * A-3 — pin the SDK's hand-written vault account offsets to the fixture
  * GENERATED from the real on-chain structs.
  *
- * `packages/sdk/src/tee/vault-config.ts` carries `1258`, `1259`, and `1264` as
+ * `packages/sdk/src/tee/vault-config.ts` carries `1298`, `1299`, and `1304` as
  * bare literals. Nothing checked them. The neighbouring test
  * (`tee-vault-config.test.ts`) builds its synthetic account *using those same
  * constants*, so it is self-consistent by construction and passes for any

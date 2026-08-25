@@ -354,9 +354,9 @@ pub(crate) fn generate_matches(
     max_matches: usize,
     // When true, advance BOTH sides after every match so each order
     // fills at most once per batch (no intra-batch relock chain). The
-    // in-TEE matcher needs this: a chained match would consume a change
-    // note (note_e) whose nullifier the TEE can't produce (no spending
-    // key), and the settle assembler has no opening for it. The residual
+    // in-TEE matcher needs this: a chained match would consume a change note
+    // (note_e) for which the client has supplied neither an opening nor a
+    // VALID_INPUT proof. The residual
     // of a partially-filled order still relocks on-chain (note_e) and is
     // dropped from the in-TEE book to await client re-submission. The
     // uncapped compatibility wrapper passes `false` (chaining behaviour).
@@ -393,7 +393,7 @@ pub(crate) fn generate_matches(
 
         // Self-trade prevention: never match two orders from the same owner — a
         // wash trade that would waste a settle on a no-op. Keyed on the
-        // note-BOUND `owner_commitment` (`Poseidon2(spending_key, r_owner)`):
+        // note-BOUND `owner_commitment` (`Poseidon2(32, spending_key)`):
         // intake pins it to the collateral note via `verify_commitment`, so a
         // settling wash CANNOT lie about it (the only way to present two
         // different `owner_commitment`s is two genuinely different note
@@ -413,9 +413,8 @@ pub(crate) fn generate_matches(
         // multi-self-order config may defer one legitimate match to the next tick
         // — acceptable; the safety property, no wash trade, always holds. NOTE:
         // still best-effort in a pseudonymous pool — a user can register a SECOND
-        // wallet (a distinct `owner_commitment`, or deposit notes under a
-        // different `r_owner`) and wash across the two; that Sybil case is out of
-        // scope for any matcher rule.)
+        // wallet (and therefore a distinct `owner_commitment`) and wash across
+        // the two; that Sybil case is out of scope for any matcher rule.)
         let same_owner = bids[bi].owner_commitment != [0u8; 32]
             && bids[bi].owner_commitment == asks[ai].owner_commitment;
         if bids[bi].trading_key == asks[ai].trading_key || same_owner {

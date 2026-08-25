@@ -52,9 +52,9 @@
 //! resistance does the rest.
 //!
 //! The strength of that therefore reduces to the secrecy of `inner_hash`. For a
-//! deposit note the inner is `Poseidon4(27, owner_commitment, recovery_nonce,
-//! note_secret)` — see [`crate::deposit`] for why the fourth input exists and
-//! what breaks without it.
+//! deposit note the inner is `Poseidon3(33, recovery_nonce, note_secret)` — see
+//! [`crate::deposit`] for why the secret input exists and what breaks without
+//! it.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};
@@ -63,8 +63,9 @@ use crate::poseidon::poseidon_hash;
 
 /// Domain tag for the note-use handle.
 ///
-/// 26 is NOT free — it is `DOMAIN_MERGE_INNER`. In use: 1, 2, 3, 5, 10..14,
-/// 22..28. Retired: 20, 21.
+/// Domain numbers are never reused, including retired assignments. The
+/// authoritative lifecycle and consumer list lives in
+/// `docs/privacy-architecture/domain-registry.json`.
 pub const DOMAIN_NOTE_USE: u64 = 29;
 
 /// Circuit-derived public consumption handle. It is intentionally not

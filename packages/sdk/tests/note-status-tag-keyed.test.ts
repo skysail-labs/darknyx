@@ -70,7 +70,6 @@ function makeClient(accountInfoProvider: AccountInfoProvider): DarkPoolClient {
     connectionProvider,
     providers: { accountInfoProvider } as never,
     zkProver: new UnimplementedProverSuite(),
-    ownerCommitmentBlinding: 1234n,
   });
 }
 

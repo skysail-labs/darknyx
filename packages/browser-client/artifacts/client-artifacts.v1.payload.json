@@ -2,101 +2,101 @@
   "schema_version": 1,
   "protocol": "darknyx",
   "protocol_version": 1,
-  "artifact_set_id": "darknyx-client-groth16-phase1-2026-08-25",
+  "artifact_set_id": "darknyx-client-groth16-note-lineage-v2-2026-08-25",
   "circuits": {
     "deposit": {
-      "circuit_version": "valid_deposit-v1",
+      "circuit_version": "valid_deposit-v2",
       "public_inputs": 5,
       "wasm": {
         "path": "valid_deposit/circuit.wasm",
-        "bytes": 3306514,
-        "sha256": "0da4cd4f2d02d1d795acd2c19f061410686e5d7cc6e40e86ca4b1a07e5ffb6c2"
+        "bytes": 3052588,
+        "sha256": "1bd77b4cc5ddafa1fcbd60ffa6623ee15c089746b4a162dcff8b74b1b4062156"
       },
       "zkey": {
         "path": "valid_deposit/circuit_final.zkey",
-        "bytes": 1230947,
-        "sha256": "d109d094a862ade8ca76ce13923150d4bd4799327c36232b7e5f58018b1f25d9"
+        "bytes": 1155531,
+        "sha256": "3b0f1291191bba97ba66e88bd3da80eb487935662be8c5ca2e61e395ccfa9b9f"
       },
       "verification_key": {
         "path": "valid_deposit/verification_key.json",
         "bytes": 3654,
-        "sha256": "31d2f803592ffd6c51c9b7ae3a8ed2f24c38ed1f97e4349843d96c03bf43d958"
+        "sha256": "c8e7e6e2aa37872c4fef349d0b3c2d08ee8ae3417e0110d8d5714f3aa393fd49"
       }
     },
     "input": {
-      "circuit_version": "valid_input-v2",
+      "circuit_version": "valid_input-v3",
       "public_inputs": 4,
       "wasm": {
         "path": "valid_input/circuit.wasm",
-        "bytes": 3112865,
-        "sha256": "7cc2a3af90e14f333485aff3b64e2226afb4a5cfd368832a36a4b94ff67a8ff3"
+        "bytes": 3112246,
+        "sha256": "e9fed1df936dbe12a9d82c9bd9f426e9074a2a517e0f2fb7947af205734fa58f"
       },
       "zkey": {
         "path": "valid_input/circuit_final.zkey",
-        "bytes": 5629973,
-        "sha256": "60443358f00375bb163e15e1659c6c3ea7f8dcb5ef251ba578b3d9d378438ece"
+        "bytes": 5599645,
+        "sha256": "731be5a766036c4f9bfcfa3e50bc1318cf73263231adab9145ce62b00bfc57bf"
       },
       "verification_key": {
         "path": "valid_input/verification_key.json",
-        "bytes": 3474,
-        "sha256": "f26a82f656a0dc9cc0ac50e3967b0a90e0d7630cd12fa33710e73594c3663072"
+        "bytes": 3477,
+        "sha256": "01909a14231a53fad8fbad3b98ea66f5762d45996aaceda6ae1e24582f214406"
       }
     },
     "spend": {
-      "circuit_version": "valid_spend-v2",
-      "public_inputs": 8,
+      "circuit_version": "valid_spend-v3",
+      "public_inputs": 7,
       "wasm": {
         "path": "valid_spend/circuit.wasm",
-        "bytes": 3141268,
-        "sha256": "66fd608943190be2ccd1e740793e272c323e66a9f2f74d96c27fd5d10fe4cb61"
+        "bytes": 3111490,
+        "sha256": "d181003ce3c2ecf7095e51d1fddcd19d685f85fcec3647ab5c399b9bc3670787"
       },
       "zkey": {
         "path": "valid_spend/circuit_final.zkey",
-        "bytes": 5848029,
-        "sha256": "8e07f9dc6720fba2867a053a46851a731bb5501a527ac7acfadc7a3b5feab78f"
+        "bytes": 5600825,
+        "sha256": "79a21aa30fbb7968ba25720c977b1c550cd5cb0a21b66ec454d004fc76e435c1"
       },
       "verification_key": {
         "path": "valid_spend/verification_key.json",
-        "bytes": 4208,
-        "sha256": "fd880ec8b56691cbdeba3e1a618a2b237917cf14a3597a4c66c61a4c8e1fd69a"
+        "bytes": 4026,
+        "sha256": "fce36810c6e725dd161f802623e831471504e2843438c3ad2d796353b1c932a7"
       }
     },
     "merge_k2": {
-      "circuit_version": "valid_merge_k2-v3",
+      "circuit_version": "valid_merge_k2-v4",
       "public_inputs": 6,
       "wasm": {
         "path": "valid_merge_k2/circuit.wasm",
-        "bytes": 3271902,
-        "sha256": "82ea90465a1d2f1f2ca9f16385e3d43d0e6b9471e28a05092c5f610e4de8d4da"
+        "bytes": 3271462,
+        "sha256": "5de4f64c5837f50642157b8849838bc24d956217c9716c75a668fe746e65b518"
       },
       "zkey": {
         "path": "valid_merge_k2/circuit_final.zkey",
-        "bytes": 11758632,
-        "sha256": "f1dc24d9ab84ea452439804b4051c301af47754a66bf68d6a898c831196db279"
+        "bytes": 11728304,
+        "sha256": "f74a332f3e1e204916942976192958d4f61c30888f143a97227c636fd83000c6"
       },
       "verification_key": {
         "path": "valid_merge_k2/verification_key.json",
-        "bytes": 3836,
-        "sha256": "72432a3beb1f3cb26d039cfbcf59e29a2e67e15a5149b002410c7350016ada4d"
+        "bytes": 3839,
+        "sha256": "850f968f7dfbf246391bd22d61f0ec8a31427f64eeea49cab3bf77b741227ee1"
       }
     },
     "merge_k4": {
-      "circuit_version": "valid_merge_k4-v3",
+      "circuit_version": "valid_merge_k4-v4",
       "public_inputs": 8,
       "wasm": {
         "path": "valid_merge_k4/circuit.wasm",
-        "bytes": 3368545,
-        "sha256": "67d9fae7a69148099b0f83404d8fce329baa713d57e222a7824453bbe4f3ccc0"
+        "bytes": 3368105,
+        "sha256": "bc7667bee4a3500f74afc0c00b030398fb18eccaf86d983770b8a6b01b95a3c4"
       },
       "zkey": {
         "path": "valid_merge_k4/circuit_final.zkey",
-        "bytes": 22585512,
-        "sha256": "9dd0023db8aeb95c28161c056a116aafc81a586e4166144bda87fa4ce25c8d30"
+        "bytes": 22555184,
+        "sha256": "3d930b60d7a98bde0745ba74ad59f6426efea216589732d1e85bb1d9f17d2875"
       },
       "verification_key": {
         "path": "valid_merge_k4/verification_key.json",
-        "bytes": 4207,
-        "sha256": "63c205fde31240b142e0728b8e5a9ed1bd2b2aeebe9dbae0fcced940a75e80da"
+        "bytes": 4205,
+        "sha256": "2b66aa9d7f7a94467c3db1f22ec12d4225a2e4518748c804857164bc65bfe064"
       }
     }
   }

@@ -60,10 +60,11 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //   DOMAIN_NOTE       =  2   (note commitment Poseidon6 v2 — inner_hash)
 //   DOMAIN_LEAF_V3    = 31   (single Poseidon(12) leaf: consumed slots carry
 //                             USE TAGS, output slots carry commitments)
-//   DOMAIN_OUTPUT_INNER = 24 (output inner from consumed input inner + role)
-//   DOMAIN_FEE_INNER    = 25 (fee inner from consumed input commitment + role)
+//   DOMAIN_MATCH_OUTPUT_INNER = 24 (output inner from consumed input inner + role)
+//   DOMAIN_FEE_KEY_BINDING = 35 (public binding of the private epoch key)
+//   DOMAIN_FEE_INNER_V2 = 36 (fee inner from epoch key + consumed use tag + role)
 //   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
-//   DOMAIN_MATCH_CONFIG = 28 (governed config digest, Poseidon(8))
+//   DOMAIN_MATCH_CONFIG_V2 = 37 (governed config digest, Poseidon(10))
 //   DOMAIN_NOTE_USE   = 29   (public consume handle, Poseidon3(29, commitment,
 //                             inner_hash) — see darkpool-crypto/src/note_use.rs)
 //   DOMAIN_RELOCK_DIGEST = 30 (Poseidon3(30, tag_e, tag_f); folds the two
@@ -132,6 +133,7 @@ template MatchSlot() {
     signal input b_inner;
     signal input price_scale;
     signal input protocol_owner_commitment;
+    signal input fee_epoch_key;
 
     // ============================================================
     // OUTPUT: leaf hash binding all per-slot fields the on-chain
@@ -168,7 +170,7 @@ template MatchSlot() {
 
     // User output inners are no longer free witnesses. They are derived from
     // the exact consumed input opening and a role tag:
-    //   Poseidon3(DOMAIN_OUTPUT_INNER=24, input_inner, role).
+    //   Poseidon3(DOMAIN_MATCH_OUTPUT_INNER=24, input_inner, role).
     component cInnerHash = Poseidon(3);
     cInnerHash.inputs[0] <== 24;
     cInnerHash.inputs[1] <== a_inner;
@@ -391,12 +393,13 @@ template MatchSlot() {
     sellerFeeCeil.in[1] <== base_amount * fee_rate_bps;
     sellerFeeCeil.out === 1;
 
-    // Per-match protocol fee notes. Their inners are derived from the consumed
-    // commitment, so paging/reboots cannot reuse a slot-derived fee opening.
-    component quoteFeeInner = Poseidon(3);
-    quoteFeeInner.inputs[0] <== 25;
-    quoteFeeInner.inputs[1] <== note_a_commitment;
-    quoteFeeInner.inputs[2] <== 0xFC;
+    // Per-match fee inners preserve private lineage entropy through the
+    // governed epoch key while binding the exact proof-derived consumed tag.
+    component quoteFeeInner = Poseidon(4);
+    quoteFeeInner.inputs[0] <== 36; // DOMAIN_FEE_INNER_V2
+    quoteFeeInner.inputs[1] <== fee_epoch_key;
+    quoteFeeInner.inputs[2] <== note_a_use_tag;
+    quoteFeeInner.inputs[3] <== 0xFC;
     component buyerFeeIsZero = IsZero();
     buyerFeeIsZero.in <== buyer_fee_amt;
     component feeQuoteHash = Poseidon(6);
@@ -410,10 +413,11 @@ template MatchSlot() {
     expectedFeeQuote <== (1 - buyerFeeIsZero.out) * feeQuoteHash.out;
     is_active * (note_fee_quote_commitment - expectedFeeQuote) === 0;
 
-    component baseFeeInner = Poseidon(3);
-    baseFeeInner.inputs[0] <== 25;
-    baseFeeInner.inputs[1] <== note_b_commitment;
-    baseFeeInner.inputs[2] <== 0xFB;
+    component baseFeeInner = Poseidon(4);
+    baseFeeInner.inputs[0] <== 36; // DOMAIN_FEE_INNER_V2
+    baseFeeInner.inputs[1] <== fee_epoch_key;
+    baseFeeInner.inputs[2] <== note_b_use_tag;
+    baseFeeInner.inputs[3] <== 0xFB;
     component sellerFeeIsZero = IsZero();
     sellerFeeIsZero.in <== seller_fee_amt;
     component feeBaseHash = Poseidon(6);
@@ -562,6 +566,9 @@ template MatchBatch(N) {
     // VaultConfig.protocol_owner_commitment so the minted fee notes can only
     // pay the protocol's owner.
     signal input protocol_owner_commitment;
+    signal input fee_key_binding;
+    signal input fee_key_epoch;
+    signal input fee_epoch_key;
     // Governed MarketConfig values, bound through config_digest.
     signal input base_mint_lo;
     signal input base_mint_hi;
@@ -574,11 +581,19 @@ template MatchBatch(N) {
     priceScaleIsZero.in <== price_scale;
     priceScaleIsZero.out === 0;
 
-    // Public-statement compression: the vault recomputes this Poseidon8 from
+    component feeKeyHash = Poseidon(2);
+    feeKeyHash.inputs[0] <== 35; // DOMAIN_FEE_KEY_BINDING
+    feeKeyHash.inputs[1] <== fee_epoch_key;
+    fee_key_binding === feeKeyHash.out;
+
+    component feeEpochBits = Num2Bits(64);
+    feeEpochBits.in <== fee_key_epoch;
+
+    // Public-statement compression: the vault recomputes this Poseidon10 from
     // VaultConfig + MarketConfig before Groth16 verification. This preserves
     // exact binding while shrinking the verifier MSM from eight inputs to two.
-    component configHash = Poseidon(8);
-    configHash.inputs[0] <== 28; // DOMAIN_MATCH_CONFIG
+    component configHash = Poseidon(10);
+    configHash.inputs[0] <== 37; // DOMAIN_MATCH_CONFIG_V2
     configHash.inputs[1] <== fee_rate_bps;
     configHash.inputs[2] <== protocol_owner_commitment;
     configHash.inputs[3] <== base_mint_lo;
@@ -586,6 +601,8 @@ template MatchBatch(N) {
     configHash.inputs[5] <== quote_mint_lo;
     configHash.inputs[6] <== quote_mint_hi;
     configHash.inputs[7] <== price_scale;
+    configHash.inputs[8] <== fee_key_binding;
+    configHash.inputs[9] <== fee_key_epoch;
     config_digest === configHash.out;
 
     // ----- Per-slot root-bound fields -----
@@ -653,6 +670,7 @@ template MatchBatch(N) {
         slot[i].fee_rate_bps      <== fee_rate_bps;
         slot[i].price_scale       <== price_scale;
         slot[i].protocol_owner_commitment <== protocol_owner_commitment;
+        slot[i].fee_epoch_key     <== fee_epoch_key;
         slot[i].a_owner_commit    <== a_owner_commit[i];
         slot[i].b_owner_commit    <== b_owner_commit[i];
         slot[i].a_amount          <== a_amount[i];

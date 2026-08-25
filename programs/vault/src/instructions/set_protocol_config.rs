@@ -32,8 +32,12 @@ pub fn set_protocol_config_handler(
     ctx: &mut Context<SetProtocolConfig>,
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
+    fee_key_binding: [u8; 32],
+    fee_key_epoch: u64,
 ) -> Result<()> {
     require!(fee_rate_bps <= MAX_FEE_RATE_BPS, VaultError::InvalidFeeRate);
+    require!(fee_key_binding != [0u8; 32], VaultError::FeeKeyBindingUnset);
+    require!(fee_key_epoch > 0, VaultError::InvalidFeeKeyEpoch);
 
     let cfg = &mut ctx.accounts.vault_config;
     require!(
@@ -43,8 +47,25 @@ pub fn set_protocol_config_handler(
 
     let old_commitment = cfg.protocol_owner_commitment;
     let old_rate = cfg.fee_rate_bps.get();
+    let old_fee_key_binding = cfg.fee_key_binding;
+    let old_fee_key_epoch = cfg.fee_key_epoch.get();
+    if old_fee_key_epoch != 0 {
+        if fee_key_binding == old_fee_key_binding {
+            require!(
+                fee_key_epoch == old_fee_key_epoch,
+                VaultError::InvalidFeeKeyEpoch
+            );
+        } else {
+            require!(
+                fee_key_epoch > old_fee_key_epoch,
+                VaultError::InvalidFeeKeyEpoch
+            );
+        }
+    }
     cfg.protocol_owner_commitment = protocol_owner_commitment;
     cfg.fee_rate_bps = fee_rate_bps.into();
+    cfg.fee_key_binding = fee_key_binding;
+    cfg.fee_key_epoch = fee_key_epoch.into();
 
     emit!(ProtocolConfigUpdated {
         admin: *ctx.accounts.admin.address(),
@@ -52,6 +73,10 @@ pub fn set_protocol_config_handler(
         new_protocol_owner_commitment: protocol_owner_commitment,
         old_fee_rate_bps: old_rate,
         new_fee_rate_bps: fee_rate_bps,
+        old_fee_key_binding,
+        new_fee_key_binding: fee_key_binding,
+        old_fee_key_epoch,
+        new_fee_key_epoch: fee_key_epoch,
     });
     Ok(())
 }
@@ -63,4 +88,8 @@ pub struct ProtocolConfigUpdated {
     pub new_protocol_owner_commitment: [u8; 32],
     pub old_fee_rate_bps: u16,
     pub new_fee_rate_bps: u16,
+    pub old_fee_key_binding: [u8; 32],
+    pub new_fee_key_binding: [u8; 32],
+    pub old_fee_key_epoch: u64,
+    pub new_fee_key_epoch: u64,
 }

@@ -2,7 +2,7 @@
 name = "vault"
 version.workspace = true
 edition.workspace = true
-description = "Darknyx dark pool custody vault: UTXO note Merkle tree, nullifier set, consumed-notes set, note locks, Groth16 verification of spend + wallet-create proofs."
+description = "Darknyx dark pool custody vault: UTXO note Merkle tree, consumed-note set, note locks, and Groth16 verification."
 
 [lib]
 crate-type = ["cdylib", "lib"]

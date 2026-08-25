@@ -694,7 +694,7 @@ components:
           type: string
           description: '32-byte hex — the collateral note''s owner commitment
 
-            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
+            `Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`. Part of the
 
             input-note opening the in-TEE VALID_MATCH_BATCH prover needs
 
@@ -720,7 +720,9 @@ components:
           type: string
           description: '32-byte hex — the collateral note''s amount-independent
 
-            `inner_hash`, which anchors both its commitment and nullifier.
+            `inner_hash`, which anchors both its commitment and unlinkable
+
+            note-use tag.
 
             '
         merkle_root:

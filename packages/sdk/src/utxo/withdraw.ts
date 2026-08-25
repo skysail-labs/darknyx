@@ -11,7 +11,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
+import { noteCommitmentV2 } from "./note.js";
 import { deriveNoteUseTag } from "./note-use.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { bn254ToBE32 } from "../keys/key-generators.js";
@@ -47,7 +47,6 @@ export interface WithdrawParams {
 
 export interface WithdrawReceipt {
   signature: string;
-  nullifier: Uint8Array;
   merkleRoot: Uint8Array;
 }
 
@@ -128,14 +127,9 @@ export function getWithdrawFunction({
       commitment,
       bn254ToBE32(params.notePlaintext.innerHash),
     );
-    const nullifierBytes = await computeNullifierV2(
-      spendingKey,
-      params.notePlaintext.innerHash,
-    );
 
     // --- Stage: proof-generation (delegated to injected prover) ---
     await params.callbacks?.pre?.("proof-generation");
-    const { ownerBlinding } = await client.getResolvedKeys();
     let proof;
     try {
       const [mintLo, mintHi] = pubkeyPairBE(params.tokenMint);
@@ -147,11 +141,9 @@ export function getWithdrawFunction({
       );
       proof = await client.zkProver.spend.prove({
         merkleRoot: uint8ArrayToBigIntBE(mProof.root),
-        nullifier: uint8ArrayToBigIntBE(nullifierBytes),
         tokenMint: [mintLo, mintHi],
         amount: params.amount,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         innerHash: params.notePlaintext.innerHash,
         merklePath: mProof.siblings.map(uint8ArrayToBigIntBE),
         merkleIndices: mProof.pathIndices,
@@ -161,7 +153,7 @@ export function getWithdrawFunction({
       // Validate the prover's public signals against a locally computed vector
       // (SW-26). Order mirrors
       // `programs/vault/src/instructions/withdraw.rs`:
-      //   [note_use_tag, merkle_root, nullifier, mint_lo, mint_hi,
+      //   [note_use_tag, merkle_root, mint_lo, mint_hi,
       //    amount, dest_lo, dest_hi]
       //
       // The destination halves matter most here. S-01 made the recipient a
@@ -172,7 +164,6 @@ export function getWithdrawFunction({
       assertPublicInputs("VALID_SPEND", proof.publicInputs, [
         noteUseTag,
         mProof.root,
-        nullifierBytes,
         bn254ToBE32(mintLo),
         bn254ToBE32(mintHi),
         bn254ToBE32(params.amount),
@@ -194,7 +185,6 @@ export function getWithdrawFunction({
       destinationTokenAccount: params.destinationTokenAccount,
       tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
       noteUseTag,
-      nullifier: nullifierBytes,
       merkleRoot: mProof.root,
       amount: params.amount,
       proof: {
@@ -218,7 +208,6 @@ export function getWithdrawFunction({
 
     return {
       signature,
-      nullifier: nullifierBytes,
       merkleRoot: mProof.root,
     };
   };

@@ -13,11 +13,11 @@ include "../../node_modules/circomlib/circuits/comparators.circom";
 // Public inputs:
 //   noteCommitment, tokenMint[2], amount, recoveryNonce
 // Private inputs:
-//   spendingKey, ownerCommitmentBlinding
+//   spendingKey, noteSecret
 //
-// owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, r_owner)
-// inner_hash       = Poseidon3(DOMAIN_DEPOSIT_INNER=27,
-//                              owner_commitment, recoveryNonce)
+// owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spendingKey)
+// inner_hash       = Poseidon3(DOMAIN_DEPOSIT_INNER_V2=33,
+//                              recoveryNonce, noteSecret)
 // note_commitment  = Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount,
 //                              owner_commitment, inner_hash)
 //
@@ -34,7 +34,6 @@ template ValidDeposit() {
 
     // ----- Private -----
     signal input spendingKey;
-    signal input ownerCommitmentBlinding;
     // Seed-derived, keyed on the PUBLIC recoveryNonce so cold recovery can
     // rebuild it from seed + chain with nothing persisted. Without it the inner
     // hash — and therefore the note-use tag derived from it downstream — would
@@ -57,18 +56,14 @@ template ValidDeposit() {
     amountIsZero.in <== amount;
     amountIsZero.out === 0;
 
-    component ownerHash = Poseidon(3);
-    ownerHash.inputs[0] <== 1;  // DOMAIN_OWNER
+    component ownerHash = Poseidon(2);
+    ownerHash.inputs[0] <== 32; // DOMAIN_OWNER_V2
     ownerHash.inputs[1] <== spendingKey;
-    ownerHash.inputs[2] <== ownerCommitmentBlinding;
 
-    // Arity 4, tag unchanged at 27 — Poseidon is a different permutation per
-    // arity, so the 3-input and 4-input forms cannot collide under one tag.
-    component innerHash = Poseidon(4);
-    innerHash.inputs[0] <== 27; // DOMAIN_DEPOSIT_INNER
-    innerHash.inputs[1] <== ownerHash.out;
-    innerHash.inputs[2] <== recoveryNonce;
-    innerHash.inputs[3] <== noteSecret;
+    component innerHash = Poseidon(3);
+    innerHash.inputs[0] <== 33; // DOMAIN_DEPOSIT_INNER_V2
+    innerHash.inputs[1] <== recoveryNonce;
+    innerHash.inputs[2] <== noteSecret;
 
     component noteHash = Poseidon(6);
     noteHash.inputs[0] <== 2;   // DOMAIN_NOTE

@@ -102,7 +102,7 @@ pub struct MatchPair {
     pub pyth_at_match: u64,
     /// Solana slot at which this match was generated.
     pub batch_slot: u64,
-    /// Monotonic per-market match id. Seed input for nullifier
+    /// Monotonic per-market match id. Stable settlement identifier input.
     /// derivation + change-note nonce/blinding.
     pub match_id: u64,
 

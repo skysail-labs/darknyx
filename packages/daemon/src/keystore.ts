@@ -38,7 +38,6 @@ import nacl from "tweetnacl";
 import {
   deriveSpendingKey,
   deriveTradingKeyAtOffset,
-  deriveOwnerCommitmentBlinding,
   generateMasterSeed,
   ownerCommitment,
 } from "@darknyx/sdk";
@@ -69,14 +68,12 @@ export interface AccountIdentity {
 
 export class Keystore {
   private readonly spend: bigint;
-  private readonly ownerBlind: bigint;
 
   constructor(private readonly identity: AccountIdentity) {
     if (identity.masterSeed.length !== 64) {
       throw new Error("master seed must be 64 bytes");
     }
     this.spend = deriveSpendingKey(identity.masterSeed);
-    this.ownerBlind = deriveOwnerCommitmentBlinding(identity.masterSeed);
   }
 
   get masterSeed(): Uint8Array {
@@ -85,13 +82,9 @@ export class Keystore {
   get spendingKey(): bigint {
     return this.spend;
   }
-  get ownerBlinding(): bigint {
-    return this.ownerBlind;
-  }
-
   /** The account's owner commitment (Poseidon — async). */
   ownerCommitment(): Promise<bigint> {
-    return ownerCommitment(this.spend, this.ownerBlind);
+    return ownerCommitment(this.spend);
   }
 
   /** The Ed25519 keypair for the order at `index` (deterministic from the seed).

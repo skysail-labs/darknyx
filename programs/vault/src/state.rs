@@ -88,6 +88,11 @@ pub struct VaultConfig {
     /// `owner_commitment = protocol_owner_commitment` and is issued atomically
     /// by the Tx D that consumes that match's inputs.
     pub protocol_owner_commitment: [u8; 32],
+    /// Poseidon2(35, fee_epoch_key). The secret key is injected into the TEE;
+    /// only this binding is public and proof-bound.
+    pub fee_key_binding: [u8; 32],
+    /// Monotonic governance epoch selecting the fee-recovery key.
+    pub fee_key_epoch: PodU64,
     /// Protocol fee rate in basis points of notional (e.g. `30 = 0.30 %`).
     pub fee_rate_bps: PodU16,
     /// Number of live entries in `tee_pubkeys`.

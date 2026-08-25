@@ -172,7 +172,6 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
           amount: String(inputs.amount),
           recoveryNonce: String(inputs.recoveryNonce),
           spendingKey: String(inputs.spendingKey),
-          ownerCommitmentBlinding: String(inputs.ownerCommitmentBlinding),
           noteSecret: String(inputs.noteSecret),
         },
         strings([
@@ -190,11 +189,9 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
         "spend",
         {
           merkleRoot: String(inputs.merkleRoot),
-          nullifier: String(inputs.nullifier),
           tokenMint: strings(inputs.tokenMint),
           amount: String(inputs.amount),
           spendingKey: String(inputs.spendingKey),
-          ownerCommitmentBlinding: String(inputs.ownerCommitmentBlinding),
           innerHash: String(inputs.innerHash),
           merklePath: strings(inputs.merklePath),
           merkleIndices: strings(inputs.merkleIndices),
@@ -203,7 +200,6 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
         [
           null,
           String(inputs.merkleRoot),
-          String(inputs.nullifier),
           ...strings(inputs.tokenMint),
           String(inputs.amount),
           ...strings(inputs.recipient),
@@ -222,7 +218,6 @@ export class BrowserProverSuite implements IDarkPoolZkProverSuite {
           merkleRoot: String(inputs.merkleRoot),
           tokenMint: strings(inputs.tokenMint),
           spendingKey: String(inputs.spendingKey),
-          ownerCommitmentBlinding: String(inputs.ownerCommitmentBlinding),
           isActive: strings(inputs.isActive),
           amount: strings(inputs.amount),
           innerHash: strings(inputs.innerHash),

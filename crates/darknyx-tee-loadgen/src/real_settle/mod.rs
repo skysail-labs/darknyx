@@ -439,7 +439,6 @@ impl ValidDepositProver {
     pub fn prove(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         token_mint: &[u8; 32],
         amount: u64,
         recovery_nonce: &[u8; 32],
@@ -447,7 +446,6 @@ impl ValidDepositProver {
     ) -> Result<ValidDepositProof, RealSettleError> {
         let generated = self.prove_ark(
             spending_key,
-            owner_blinding,
             token_mint,
             amount,
             recovery_nonce,
@@ -464,7 +462,6 @@ impl ValidDepositProver {
     fn prove_ark(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         token_mint: &[u8; 32],
         amount: u64,
         recovery_nonce: &[u8; 32],
@@ -475,9 +472,9 @@ impl ValidDepositProver {
                 "VALID_DEPOSIT amount must be positive".to_string(),
             ));
         }
-        let owner = owner_commitment(spending_key, owner_blinding)
-            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
-        let inner_hash = deposit_inner_hash(&owner, recovery_nonce, note_secret)
+        let owner =
+            owner_commitment(spending_key).map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let inner_hash = deposit_inner_hash(recovery_nonce, note_secret)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, &inner_hash)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
@@ -490,7 +487,6 @@ impl ValidDepositProver {
             "recoveryNonce": decimal_be32(recovery_nonce),
             "noteSecret": decimal_be32(note_secret),
             "spendingKey": decimal_fr(spending_key),
-            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
         }))
         .map_err(|e| RealSettleError::Prove(format!("encode deposit native inputs: {e}")))?;
         let proof = native_ark_proof(
@@ -550,26 +546,19 @@ impl ValidInputProver {
         })
     }
 
-    /// Prove that the note `(token_mint, amount, owner(spending_key, blinding),
+    /// Prove that the note `(token_mint, amount, owner(spending_key),
     /// inner_hash)` sits at `witness` under `witness.root`. Returns the 256-byte
     /// on-chain proof + the note commitment.
     pub fn prove(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         inner_hash: &[u8; 32],
         token_mint: &[u8; 32],
         amount: u64,
         witness: &MerkleWitness,
     ) -> Result<ValidInputProof, RealSettleError> {
-        let (proof, note_commitment, note_use_tag) = self.prove_ark(
-            spending_key,
-            owner_blinding,
-            inner_hash,
-            token_mint,
-            amount,
-            witness,
-        )?;
+        let (proof, note_commitment, note_use_tag) =
+            self.prove_ark(spending_key, inner_hash, token_mint, amount, witness)?;
         Ok(ValidInputProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             note_commitment,
@@ -584,14 +573,13 @@ impl ValidInputProver {
     fn prove_ark(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         inner_hash: &[u8; 32],
         token_mint: &[u8; 32],
         amount: u64,
         witness: &MerkleWitness,
     ) -> Result<(Proof<Bn254>, [u8; 32], [u8; 32]), RealSettleError> {
-        let owner = owner_commitment(spending_key, owner_blinding)
-            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let owner =
+            owner_commitment(spending_key).map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, inner_hash)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let note_use_tag = note_use_tag(&note_commitment, inner_hash)
@@ -604,7 +592,6 @@ impl ValidInputProver {
             "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
             "amount": decimal_u64(amount),
             "spendingKey": decimal_fr(spending_key),
-            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
             "innerHash": decimal_be32(inner_hash),
             "merklePath": decimal_array(witness.path_elements.iter().map(be32_to_bigint)),
             "merkleIndices": decimal_array(
@@ -679,9 +666,9 @@ pub struct MergeInput {
 /// A built VALID_MERGE proof + the merged output note it produces.
 pub struct MergeProof {
     pub proof_bytes: [u8; 256],
-    /// The merged note's commitment (Σ input amounts, commitment-derived inner).
+    /// The merged note's commitment (Σ input amounts, private-inner-derived inner).
     pub output_commitment: [u8; 32],
-    /// `Poseidon6(26, c0, c1, c2, c3, active_bitmap)` derived by the circuit.
+    /// `Poseidon6(34, inner0, inner1, inner2, inner3, active_bitmap)`.
     pub output_inner_hash: [u8; 32],
     /// The merged note's amount (Σ active input amounts).
     pub output_amount: u64,
@@ -724,17 +711,16 @@ impl MergeProver {
 
     /// Prove a K-slot merge of `inputs` (M ≤ K real notes, same owner + mint, all
     /// under `inputs[0].witness.root`) into one output note carrying their sum.
-    /// The output inner is derived from the consumed commitments, exactly as the
+    /// The output inner is derived from the consumed private inners, exactly as the
     /// circuit does. Returns the 256-byte on-chain proof + the merged note.
     pub fn prove(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         token_mint: &[u8; 32],
         inputs: &[MergeInput],
     ) -> Result<MergeProof, RealSettleError> {
         let (proof, output_commitment, output_inner_hash, output_amount, input_use_tags) =
-            self.prove_ark(spending_key, owner_blinding, token_mint, inputs)?;
+            self.prove_ark(spending_key, token_mint, inputs)?;
         Ok(MergeProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             output_commitment,
@@ -748,7 +734,6 @@ impl MergeProver {
     fn prove_ark(
         &self,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         token_mint: &[u8; 32],
         inputs: &[MergeInput],
     ) -> Result<(Proof<Bn254>, [u8; 32], [u8; 32], u64, Vec<[u8; 32]>), RealSettleError> {
@@ -759,8 +744,8 @@ impl MergeProver {
                 inputs.len()
             )));
         }
-        let owner = owner_commitment(spending_key, owner_blinding)
-            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let owner =
+            owner_commitment(spending_key).map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let merkle_root = inputs[0].witness.root;
         if inputs.iter().any(|input| input.amount == 0) {
             return Err(RealSettleError::Prove(
@@ -789,7 +774,11 @@ impl MergeProver {
                 .into_bytes();
         }
         let active_bitmap = (1u8 << inputs.len()) - 1;
-        let output_inner_hash = merge_output_inner_hash(&input_commitments, active_bitmap)
+        let mut input_inners = [[0u8; 32]; 4];
+        for (slot, input) in input_inners.iter_mut().zip(inputs) {
+            *slot = input.inner_hash;
+        }
+        let output_inner_hash = merge_output_inner_hash(&input_inners, active_bitmap)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let output_commitment =
             commitment_from_fields_v2(token_mint, sum, &owner, &output_inner_hash)
@@ -835,7 +824,6 @@ impl MergeProver {
             "merkleRoot": decimal_be32(&merkle_root),
             "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
             "spendingKey": decimal_fr(spending_key),
-            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
             "isActive": decimal_array(is_active),
             "amount": decimal_array(amounts),
             "innerHash": decimal_array(inner_hashes),
@@ -904,7 +892,6 @@ mod tests {
         }
         let prover = ValidDepositProver::load(&dir).expect("load valid_deposit prover");
         let spending_key = Fr::from(12_345u64);
-        let owner_blinding = Fr::from(67_890u64);
         let recovery_nonce = fr_to_be_bytes(&Fr::from(2468u64));
         let note_secret = fr_to_be_bytes(&Fr::from(1357u64));
         let mut token_mint = [0u8; 32];
@@ -915,17 +902,16 @@ mod tests {
         let generated = prover
             .prove_ark(
                 &spending_key,
-                &owner_blinding,
                 &token_mint,
                 amount,
                 &recovery_nonce,
                 &note_secret,
             )
             .expect("prove");
-        let owner = owner_commitment(&spending_key, &owner_blinding).unwrap();
+        let owner = owner_commitment(&spending_key).unwrap();
         assert_eq!(
             generated.inner_hash,
-            deposit_inner_hash(&owner, &recovery_nonce, &note_secret).unwrap()
+            deposit_inner_hash(&recovery_nonce, &note_secret).unwrap()
         );
         assert_eq!(
             generated.note_commitment,
@@ -956,7 +942,6 @@ mod tests {
         let prover = ValidInputProver::load(&dir).expect("load valid_input prover");
 
         let spending_key = Fr::from(12_345u64);
-        let owner_blinding = Fr::from(67_890u64);
         let inner_hash = fr_to_be_bytes(&Fr::from(99u64)); // Fr-safe by construction
         let mut token_mint = [0u8; 32];
         token_mint[0] = 1;
@@ -964,7 +949,7 @@ mod tests {
         let amount = 1_000_000u64;
 
         // Deposit the note into a fresh tree at leaf 0, build its witness.
-        let owner = owner_commitment(&spending_key, &owner_blinding).unwrap();
+        let owner = owner_commitment(&spending_key).unwrap();
         let commitment: [u8; 32] =
             commitment_from_fields_v2(&token_mint, amount, &owner, &inner_hash).unwrap();
         let mut tree = IncrementalTree::new().unwrap();
@@ -974,14 +959,7 @@ mod tests {
         // Prove (raw ark) and verify against the zkey's own VK — a full,
         // CVM-free check that the witness + signals + circuit all agree.
         let (proof, note_commitment, note_use_tag) = prover
-            .prove_ark(
-                &spending_key,
-                &owner_blinding,
-                &inner_hash,
-                &token_mint,
-                amount,
-                &witness,
-            )
+            .prove_ark(&spending_key, &inner_hash, &token_mint, amount, &witness)
             .expect("prove");
         assert_eq!(note_commitment, commitment);
 
@@ -1022,7 +1000,6 @@ mod tests {
 
         let deposit_prover = ValidDepositProver::load(&dir).expect("load valid_deposit prover");
         let spending_key = Fr::from(12_345u64);
-        let owner_blinding = Fr::from(67_890u64);
         let mut token_mint = [0u8; 32];
         token_mint[0] = 1;
         token_mint[31] = 0xb1;
@@ -1039,7 +1016,6 @@ mod tests {
                 deposit_prover
                     .prove(
                         &spending_key,
-                        &owner_blinding,
                         &token_mint,
                         amount,
                         &recovery_nonce,
@@ -1058,7 +1034,6 @@ mod tests {
             input_prover
                 .prove(
                     &spending_key,
-                    &owner_blinding,
                     &deposit.inner_hash,
                     &token_mint,
                     amount,
@@ -1081,8 +1056,7 @@ mod tests {
         let prover = MergeProver::load(&dir, 2).expect("load merge prover");
 
         let sk = Fr::from(123u64);
-        let ob = Fr::from(456u64);
-        let owner = owner_commitment(&sk, &ob).unwrap();
+        let owner = owner_commitment(&sk).unwrap();
         let mut mint = [0u8; 32];
         mint[0] = 1;
         mint[31] = 0xb1;
@@ -1107,11 +1081,10 @@ mod tests {
                 witness: tree.witness(1).unwrap(),
             },
         ];
-        let (proof, out_commit, out_ih, sum, input_use_tags) = prover
-            .prove_ark(&sk, &ob, &mint, &inputs)
-            .expect("merge prove");
+        let (proof, out_commit, out_ih, sum, input_use_tags) =
+            prover.prove_ark(&sk, &mint, &inputs).expect("merge prove");
         assert_eq!(sum, a0 + a1);
-        let expected_inner = merge_output_inner_hash(&[c0, c1, [0u8; 32], [0u8; 32]], 3)
+        let expected_inner = merge_output_inner_hash(&[ih0, ih1, [0u8; 32], [0u8; 32]], 3)
             .expect("derive output inner");
         assert_eq!(out_ih, expected_inner);
 

@@ -88,6 +88,8 @@ fn args() -> VerifyMatchBatchArgs {
             pi_b: [0x22; 128],
             pi_c: [0x33; 64],
         },
+        fee_key_epoch: 1,
+        fee_recovery_ciphertext: [0x44; 272],
     }
 }
 

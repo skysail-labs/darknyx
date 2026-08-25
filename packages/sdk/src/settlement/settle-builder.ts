@@ -191,7 +191,7 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   // appended. The hash order is NOT the Borsh order — the fee commitments sit
   // ahead of the order ids here — so both were changed independently against
   // `tee_forced_settle::canonical_payload_hash`.
-  h.update(Buffer.from("darknyx-match-v11"));
+  h.update(Buffer.from("darknyx-match-v12"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAuseTag, 32));
   h.update(fixed(p.noteBuseTag, 32));

@@ -10,8 +10,8 @@ description: "Move value out of the pool back to an SPL token account, proven in
 
 Withdrawing spends a note out of the vault and releases the tokens to an SPL token
 account. It is an on-chain action gated by a zero-knowledge proof: you prove the
-note is in the tree and yours, the program publishes the note's **nullifier** so
-it cannot be spent again, and it transfers the tokens out. The withdrawal does not
+note is in the tree and yours, the proof derives its unlinkable **note-use tag**
+so it cannot be spent again, and the program transfers the tokens out. The withdrawal does not
 reveal which deposit the value came from.
 {% endhint %}
 
@@ -20,7 +20,7 @@ reveal which deposit the value came from.
 A withdrawal is a zero-knowledge spend (see [Shielded Pool](../how-it-works/shielded-pool.md)).
 You produce a proof that the note exists under a recent Merkle root, that you
 own it, **and that it is being paid to one specific destination**; the vault
-program verifies the proof, publishes the note's nullifier, and releases the
+program verifies the proof, records the note's use tag as consumed, and releases the
 tokens to that account. Like a deposit, it is a direct **on-chain** action and
 does not involve the matching engine.
 
@@ -67,7 +67,7 @@ const receipt = await withdraw({
   leafIndex,                      // the note's Merkle leaf index
   treeId: 0,                      // the shard the note lives in (default 0)
 });
-// receipt: { signature, nullifier, merkleRoot }
+// receipt: { signature, merkleRoot }
 ```
 
 ## What a withdrawal reveals
@@ -75,7 +75,7 @@ const receipt = await withdraw({
 A withdrawal is a real token transfer out of the pool, so the **amount** and the
 **destination account** are visible on-chain, as they must be for the tokens to
 land. What stays hidden is the link to the rest of your activity: the published
-nullifier is unlinkable to the note commitment, so an observer cannot tie the
+note-use tag is unlinkable to the note commitment, so an observer cannot tie the
 withdrawal back to the deposit or trade that produced the note.
 
 {% hint style="warning" %}

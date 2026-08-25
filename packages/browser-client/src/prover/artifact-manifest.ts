@@ -54,7 +54,7 @@ export interface ManifestTrustPolicy {
 const EXPECTED_PUBLIC_INPUTS: Record<ClientCircuitId, number> = {
   deposit: 5,
   input: 4,
-  spend: 8,
+  spend: 7,
   merge_k2: 6,
   merge_k4: 8,
 };

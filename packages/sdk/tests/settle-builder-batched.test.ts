@@ -91,7 +91,7 @@ function fourSiblings(): [Uint8Array, Uint8Array, Uint8Array, Uint8Array] {
 }
 
 describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
-  it("[hash_cross_env_parity] payload v11 canonical hash matches Rust and on-chain", () => {
+  it("[hash_cross_env_parity] payload v12 canonical hash matches Rust and on-chain", () => {
     // Preserve the historical cross-language byte vector exactly. Its filled
     // test tags predate checked semantic constructors and are intentionally
     // not passed into a PDA/instruction builder.
@@ -102,7 +102,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     };
     expect(
       Buffer.from(canonicalPayloadHash(pinnedVector)).toString("hex"),
-    ).toBe("039828e122696147495ba9df91daae71cc5289657ad7ec66c74659d0d00d8f65");
+    ).toBe("20effaee478abdc2d051974d0d9cc534cf244427251cd09f931feefee14ba7e2");
   });
 
   it("[settle_batched_accounts_layout] account ordering matches TeeForcedSettleBatched", async () => {

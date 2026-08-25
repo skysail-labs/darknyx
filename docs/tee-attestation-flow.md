@@ -456,7 +456,7 @@ recapping the flow for completeness.
 [TEE constructs MatchResultPayload (v11, 552 B Borsh)]
     │
     │ msg = canonical_payload_hash(payload)
-    │     = SHA-256("darknyx-match-v11" || field_bytes...)
+    │     = SHA-256("darknyx-match-v12" || field_bytes...)
     │
     ▼
 [TEE signs with Ed25519 signer key]

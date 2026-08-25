@@ -3,16 +3,18 @@
   "_note": "Offsets INCLUDE the 8-byte Anchor discriminator. Derived from the structs, never hand-written. Consumers assert against this file.",
   "accounts": {
     "VaultConfig": {
-      "account_len": 1264,
+      "account_len": 1304,
       "admin": { "offset": 8, "size": 32 },
       "tee_pubkeys": { "offset": 40, "size": 512 },
       "root_key": { "offset": 552, "size": 32 },
       "zero_subtree_roots": { "offset": 584, "size": 640 },
       "protocol_owner_commitment": { "offset": 1224, "size": 32 },
-      "fee_rate_bps": { "offset": 1256, "size": 2 },
-      "num_tee_keys": { "offset": 1258, "size": 1 },
-      "num_trees": { "offset": 1259, "size": 1 },
-      "bump": { "offset": 1260, "size": 1 }
+      "fee_key_binding": { "offset": 1256, "size": 32 },
+      "fee_key_epoch": { "offset": 1288, "size": 8 },
+      "fee_rate_bps": { "offset": 1296, "size": 2 },
+      "num_tee_keys": { "offset": 1298, "size": 1 },
+      "num_trees": { "offset": 1299, "size": 1 },
+      "bump": { "offset": 1300, "size": 1 }
     },
     "MerkleTree": {
       "account_len": 2744,

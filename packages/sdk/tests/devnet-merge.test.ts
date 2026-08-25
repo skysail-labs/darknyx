@@ -34,7 +34,6 @@ import {
 } from "../src/keys/key-generators.js";
 import {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "../src/utxo/note.js";
@@ -134,8 +133,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
     );
     const spendingKey = deriveSpendingKey(masterSeed);
-    const ownerBlinding = 0xabcdef12n;
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const owner = await ownerCommitment(spendingKey);
 
     const t = new StepTimer();
 
@@ -176,7 +174,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
       const innerHash = be32ToBigInt(
         await deriveDepositInnerHash(
-          bn254ToBE32(owner),
           recoveryNonceBytes,
           bn254ToBE32(deriveNoteSecret(masterSeed, recoveryNonceBytes)),
         ),
@@ -194,7 +191,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         amount,
         recoveryNonce,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
       });
       await t.step(`deposit note ${i}`, async () =>
@@ -244,7 +240,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         tokenMint: mint.toBytes(),
         merkleRootBE: root,
         slots,
@@ -284,7 +279,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const mergedLeaf = 2;
     const w = await tree.witness(mergedLeaf);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
-    const mergedNull = await nullifierV2(spendingKey, mergeRes.outputInnerHash);
     // S-01: the destination is a public input, so the proof only authorises a
     // withdraw into this exact token account. Must be the same `ata` the
     // withdraw ix passes as `destinationTokenAccount` below, or the on-chain
@@ -295,11 +289,9 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       snarkjsFullProve(
         {
           merkleRoot: be32ToDec(w.root),
-          nullifier: be32ToDec(mergedNull),
           tokenMint: [mintLo.toString(), mintHi.toString()],
           amount: SUM.toString(),
           spendingKey: spendingKey.toString(),
-          ownerCommitmentBlinding: ownerBlinding.toString(),
           innerHash: mergeRes.outputInnerHash.toString(),
           merklePath: w.siblings.map((s) => be32ToDec(s)),
           merkleIndices: w.indices.map((i) => i.toString()),
@@ -331,7 +323,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
             destinationTokenAccount: ata,
             tokenProgramId: TOKEN_PROGRAM_ID,
             noteUseTag: mergedUseTag,
-            nullifier: mergedNull,
             merkleRoot: w.root,
             amount: SUM,
             proof,

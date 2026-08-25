@@ -18,12 +18,23 @@ baseMint[31] = 0xb1;
 const quoteMint = new Uint8Array(32);
 quoteMint[0] = 1;
 quoteMint[31] = 0x9e;
+const feeKeyBinding = new Uint8Array(32);
+feeKeyBinding[31] = 9;
+const feeKeyEpoch = 3n;
 
 describe("VALID_MATCH_BATCH config digest", () => {
   it.skipIf(!existsSync(rustHelper))("matches Rust byte-for-byte", async () => {
     const rust = spawnSync(
       rustHelper,
-      ["30", hex(owner), hex(baseMint), hex(quoteMint), "100000000"],
+      [
+        "30",
+        hex(owner),
+        hex(baseMint),
+        hex(quoteMint),
+        "100000000",
+        hex(feeKeyBinding),
+        feeKeyEpoch.toString(),
+      ],
       { encoding: "utf8" },
     );
     expect(rust.status, rust.stderr).toBe(0);
@@ -34,10 +45,12 @@ describe("VALID_MATCH_BATCH config digest", () => {
         baseMint,
         quoteMint,
         priceScale: 100_000_000n,
+        feeKeyBinding,
+        feeKeyEpoch,
       }),
     );
     expect(sdkDigest).toBe(
-      "053d4a1e1aa0c604c482f58e4afb9327ac4793922fc6be567c2120459be10758",
+      "2d607161c111d6f733115990f913f4556a4d02279d19f1b0abff624d6ced9d3a",
     );
     expect(rust.stdout.trim()).toBe(sdkDigest);
   });
@@ -49,6 +62,8 @@ describe("VALID_MATCH_BATCH config digest", () => {
       baseMint,
       quoteMint,
       priceScale: 100_000_000n,
+      feeKeyBinding,
+      feeKeyEpoch,
     });
     expect(
       await matchConfigDigest({
@@ -57,6 +72,8 @@ describe("VALID_MATCH_BATCH config digest", () => {
         baseMint: quoteMint,
         quoteMint: baseMint,
         priceScale: 100_000_000n,
+        feeKeyBinding,
+        feeKeyEpoch,
       }),
     ).not.toEqual(digest);
     await expect(
@@ -66,6 +83,8 @@ describe("VALID_MATCH_BATCH config digest", () => {
         baseMint,
         quoteMint,
         priceScale: 100_000_000n,
+        feeKeyBinding,
+        feeKeyEpoch,
       }),
     ).rejects.toThrow(/canonical BN254 scalar/);
   });

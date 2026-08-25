@@ -49,7 +49,6 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import { nullifierV2 } from "../src/utxo/note.js";
 import {
   authToken,
   CvmHarness,
@@ -411,9 +410,6 @@ maybeDescribe(
             trading_key_signature: hex(signature),
             owner_commitment: hex(bn254ToBE32(persona.ownerCommit)),
             note_inner_hash: hex(bn254ToBE32(note.innerHash)),
-            nullifier: hex(
-              await nullifierV2(persona.spendingKey, note.innerHash),
-            ),
             merkle_root: hex(proof.root),
             valid_input_proof: hex(proof.proofBytes),
             collateral_amount: Number(note.amount),

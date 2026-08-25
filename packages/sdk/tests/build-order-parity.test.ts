@@ -26,12 +26,11 @@ describe("buildOrder", () => {
     // Fixed, reproducible inputs.
     const masterSeed = new Uint8Array(64).map((_, i) => i + 1);
     const spendingKey = 12_345_678_901_234_567_890n;
-    const blinding = 99n;
     const innerHash = 0x1234n;
     const amount = 10_000_000n;
     const tokenMint = new Uint8Array(32).fill(7);
 
-    const ownerCommit = await ownerCommitment(spendingKey, blinding);
+    const ownerCommit = await ownerCommitment(spendingKey);
     const note = {
       commitment: await noteCommitmentV2({
         tokenMint,

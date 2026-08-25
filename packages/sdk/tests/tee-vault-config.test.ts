@@ -26,9 +26,9 @@ function buildVaultConfig(pubkeys: Uint8Array[]): Uint8Array {
 describe("vaultConfigTeePubkeys", () => {
   it("pins the on-chain offsets (mirror of VaultConfig)", () => {
     expect(TEE_PUBKEYS_OFFSET).toBe(40);
-    expect(NUM_TEE_KEYS_OFFSET).toBe(1258);
-    expect(NUM_TREES_OFFSET).toBe(1259);
-    expect(VAULT_CONFIG_ACCOUNT_LEN).toBe(1264);
+    expect(NUM_TEE_KEYS_OFFSET).toBe(1298);
+    expect(NUM_TREES_OFFSET).toBe(1299);
+    expect(VAULT_CONFIG_ACCOUNT_LEN).toBe(1304);
   });
 
   it("reads exactly num_tee_keys pubkeys in order", async () => {

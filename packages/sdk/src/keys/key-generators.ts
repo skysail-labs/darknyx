@@ -28,11 +28,6 @@ const INFO_NOTE_SECRET = new TextEncoder().encode("darknyx/note-secret/v1");
 const INFO_ORDER_ID = new TextEncoder().encode("darknyx-order-id-v2");
 const INFO_VIEWING_ENC = new TextEncoder().encode("darknyx-viewing-enc-v2");
 
-/** Wallet-level owner blinding counter, separated from ordinary deposit-note
- * counters. This value was established by the daemon keystore and is now the
- * canonical SDK derivation so seed-only recovery has no external secret. */
-export const ACCOUNT_OWNER_BLINDING_COUNTER = 0xacc0_0000_0000n;
-
 /** BN254 scalar field modulus r. */
 export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -168,11 +163,6 @@ export function deriveBlindingFactor(
   info.set(new Uint8Array(offsetBuf), INFO_BLINDING.length);
   const okm = darknyxShakeKdfV1(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
-}
-
-/** Deterministic `r_owner` used by `ownerCommitment`. */
-export function deriveOwnerCommitmentBlinding(seed: Uint8Array): bigint {
-  return deriveBlindingFactor(seed, ACCOUNT_OWNER_BLINDING_COUNTER);
 }
 
 /**

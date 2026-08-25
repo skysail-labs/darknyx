@@ -69,7 +69,6 @@ async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
   const wallet = dummyAddress();
   const root = new Uint8Array(32).fill(3);
   const tag = new Uint8Array(32).fill(4);
-  const nullifier = new Uint8Array(32).fill(5);
   const destination = await associatedTokenAddress(mint, wallet);
   const commitment = "06".repeat(32);
   const note = {
@@ -86,11 +85,9 @@ async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
   };
   const witness = {
     merkleRoot: 3n,
-    nullifier: 5n,
     tokenMint: pubkeyToFrPair(mint.toBytes()),
     amount: 17n,
     spendingKey: 12n,
-    ownerCommitmentBlinding: 13n,
     innerHash: 9n,
     merklePath: Array<bigint>(20).fill(0n),
     merkleIndices: Array<number>(20).fill(0),
@@ -101,7 +98,6 @@ async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
       new ReplyWorker({
         witness,
         noteUseTag: tag,
-        nullifier,
         merkleRoot: root,
       }) as unknown as Worker,
   });
@@ -148,7 +144,6 @@ async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
           publicInputs: [
             tag,
             root,
-            nullifier,
             be32(witness.tokenMint[0]),
             be32(witness.tokenMint[1]),
             be32(witness.amount),
@@ -185,7 +180,6 @@ describe("browser account operations", () => {
     const wallet = dummyAddress();
     const root = new Uint8Array(32).fill(3);
     const tag = new Uint8Array(32).fill(4);
-    const nullifier = new Uint8Array(32).fill(5);
     const destination = await associatedTokenAddress(mint, wallet);
     const commitment = "06".repeat(32);
     const note = {
@@ -202,11 +196,9 @@ describe("browser account operations", () => {
     };
     const witness = {
       merkleRoot: 3n,
-      nullifier: 5n,
       tokenMint: pubkeyToFrPair(mint.toBytes()),
       amount: 17n,
       spendingKey: 12n,
-      ownerCommitmentBlinding: 13n,
       innerHash: 9n,
       merklePath: Array<bigint>(20).fill(0n),
       merkleIndices: Array<number>(20).fill(0),
@@ -215,7 +207,6 @@ describe("browser account operations", () => {
     const worker = new ReplyWorker({
       witness,
       noteUseTag: tag,
-      nullifier,
       merkleRoot: root,
     });
     const vault = new BrowserVault({
@@ -280,7 +271,6 @@ describe("browser account operations", () => {
             publicInputs: [
               tag,
               root,
-              nullifier,
               be32(witness.tokenMint[0]),
               be32(witness.tokenMint[1]),
               be32(witness.amount),

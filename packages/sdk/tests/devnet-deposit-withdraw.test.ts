@@ -33,7 +33,6 @@ import {
 } from "../src/keys/key-generators.js";
 import {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "../src/utxo/note.js";
@@ -147,8 +146,7 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
         (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
     );
     const spendingKey = deriveSpendingKey(masterSeed);
-    const ownerBlinding = 0xabcdef12n;
-    const ownerCommit = await ownerCommitment(spendingKey, ownerBlinding);
+    const ownerCommit = await ownerCommitment(spendingKey);
 
     // ── 1. reset the tree so we deposit at a known leaf 0 ──
     const resetSig = await sendAndConfirmTransaction(
@@ -187,7 +185,6 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
     const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
     const innerHash = be32ToBigInt(
       await deriveDepositInnerHash(
-        bn254ToBE32(ownerCommit),
         recoveryNonceBytes,
         bn254ToBE32(deriveNoteSecret(masterSeed, recoveryNonceBytes)),
       ),
@@ -208,7 +205,6 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
       amount: AMOUNT,
       recoveryNonce,
       spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
       noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
     });
 
@@ -288,7 +284,6 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
       zkeyPath: INPUT_ZKEY,
     })({
       spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
       innerHash,
       tokenMint: mint.toBytes(),
       amount: AMOUNT,
@@ -452,18 +447,15 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
 
       // ── 5. VALID_SPEND withdraw through the expired lock ──
       const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
-      const nulli = await nullifierV2(spendingKey, innerHash);
       // S-01: the destination is a public input, so the proof only authorises
       // this exact token account.
       const [destLo, destHi] = pubkeyToFrPair(ata.toBytes());
       const { proof } = snarkjsFullProve(
         {
           merkleRoot: be32ToDec(w.root),
-          nullifier: be32ToDec(nulli),
           tokenMint: [mintLo.toString(), mintHi.toString()],
           amount: AMOUNT.toString(),
           spendingKey: spendingKey.toString(),
-          ownerCommitmentBlinding: ownerBlinding.toString(),
           innerHash: innerHash.toString(),
           merklePath: w.siblings.map((s) => be32ToDec(s)),
           merkleIndices: w.indices.map((i) => i.toString()),
@@ -491,7 +483,6 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
             // VALID_SPEND's public output 0 is now the tag; the commitment
             // stays a private intermediate inside the proof.
             noteUseTag,
-            nullifier: nulli,
             merkleRoot: w.root,
             amount: AMOUNT,
             proof,

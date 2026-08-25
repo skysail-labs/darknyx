@@ -217,6 +217,18 @@ async fn main() -> Result<()> {
         for (match_config, snapshot) in match_configs.iter_mut().zip(&snapshots) {
             apply_governance_snapshot(match_config, snapshot);
         }
+        anyhow::ensure!(
+            cfg.fee_epoch_key != [0u8; 32],
+            "DARKNYX_TEE_FEE_EPOCH_KEY is required for real-market settlement"
+        );
+        let configured_fee_binding = darkpool_crypto::fee_key_binding(&cfg.fee_epoch_key)
+            .context("DARKNYX_TEE_FEE_EPOCH_KEY is not a canonical BN254 scalar")?;
+        anyhow::ensure!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.vault.fee_key_binding == configured_fee_binding),
+            "DARKNYX_TEE_FEE_EPOCH_KEY does not match finalized VaultConfig fee_key_binding"
+        );
 
         let derived_keys = tee_signer_pubkeys
             .as_deref()
@@ -335,6 +347,17 @@ async fn main() -> Result<()> {
             base_mint: match_config.base_mint,
             quote_mint: match_config.quote_mint,
             protocol_owner_commitment: match_config.protocol_owner_commitment,
+            fee_epoch_key: cfg.fee_epoch_key,
+            fee_key_binding: governance_snapshots
+                .as_ref()
+                .map(|snapshots| snapshots[market_index].vault.fee_key_binding)
+                .unwrap_or_else(|| {
+                    darkpool_crypto::fee_key_binding(&cfg.fee_epoch_key).unwrap_or([0u8; 32])
+                }),
+            fee_key_epoch: governance_snapshots
+                .as_ref()
+                .map(|snapshots| snapshots[market_index].vault.fee_key_epoch)
+                .unwrap_or(1),
             fee_rate_bps: match_config.fee_rate_bps as u64,
             price_scale: match_config.price_scale,
             circuit_n: PRODUCTION_BATCH_N,
@@ -459,6 +482,17 @@ async fn main() -> Result<()> {
                     primary.3.base_mint,
                     primary.3.quote_mint,
                     primary.3.protocol_owner_commitment,
+                    cfg.fee_epoch_key,
+                    governance_snapshots
+                        .as_ref()
+                        .expect("governed settle has snapshot")[0]
+                        .vault
+                        .fee_key_binding,
+                    governance_snapshots
+                        .as_ref()
+                        .expect("governed settle has snapshot")[0]
+                        .vault
+                        .fee_key_epoch,
                     primary.3.fee_rate_bps,
                     primary.3.price_scale,
                     boot_session_id,
@@ -908,6 +942,9 @@ async fn build_settle_driver(
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
     protocol_owner_commitment: [u8; 32],
+    fee_epoch_key: [u8; 32],
+    fee_key_binding: [u8; 32],
+    fee_key_epoch: u64,
     fee_rate_bps: u64,
     price_scale: u64,
     boot_session_id: [u8; 32],
@@ -1236,6 +1273,9 @@ async fn build_settle_driver(
             base_mint,
             quote_mint,
             protocol_owner_commitment,
+            fee_epoch_key,
+            fee_key_binding,
+            fee_key_epoch,
             fee_rate_bps,
             price_scale,
             circuit_n: PRODUCTION_BATCH_N,
@@ -1305,6 +1345,16 @@ impl GovernanceSnapshot {
             "VaultConfig protocol_owner_commitment is zero while fees are enabled"
         );
         anyhow::ensure!(
+            self.vault.fee_key_binding != [0u8; 32],
+            "VaultConfig fee_key_binding is zero"
+        );
+        anyhow::ensure!(
+            self.vault.fee_key_epoch > 0,
+            "VaultConfig fee_key_epoch is zero"
+        );
+        darkpool_crypto::fr_from_be_bytes(&self.vault.fee_key_binding)
+            .context("VaultConfig fee_key_binding is not a canonical BN254 field element")?;
+        anyhow::ensure!(
             self.vault.num_trees == num_trees,
             "VaultConfig num_trees {} does not match DARKNYX_TEE_NUM_TREES {}",
             self.vault.num_trees,
@@ -1349,6 +1399,8 @@ impl GovernanceSnapshot {
     fn runtime_params_match(&self, expected: &Self) -> bool {
         self.vault.protocol_owner_commitment == expected.vault.protocol_owner_commitment
             && self.vault.fee_rate_bps == expected.vault.fee_rate_bps
+            && self.vault.fee_key_binding == expected.vault.fee_key_binding
+            && self.vault.fee_key_epoch == expected.vault.fee_key_epoch
             && self.vault.num_trees == expected.vault.num_trees
             && self.market == expected.market
     }
@@ -1565,6 +1617,12 @@ mod governance_tests {
             vault: OnChainVaultConfig {
                 tee_pubkeys,
                 protocol_owner_commitment: [0x03; 32],
+                fee_key_binding: {
+                    let mut value = [0x06; 32];
+                    value[0] = 0;
+                    value
+                },
+                fee_key_epoch: 1,
                 fee_rate_bps: 30,
                 num_tee_keys: 2,
                 num_trees: 2,

@@ -470,6 +470,8 @@ export interface BuildSetProtocolConfigParams {
   admin: PublicKey;
   protocolOwnerCommitment: Uint8Array; // 32B Poseidon commitment
   feeRateBps: number; // 0..=10_000
+  feeKeyBinding: Uint8Array;
+  feeKeyEpoch: bigint;
 }
 
 function u16LE(v: number): Uint8Array {
@@ -490,6 +492,8 @@ export async function buildSetProtocolConfigInstruction(
     anchorDiscriminator("set_protocol_config"),
     fixed32(p.protocolOwnerCommitment),
     u16LE(p.feeRateBps),
+    fixed32(p.feeKeyBinding),
+    u64LE(p.feeKeyEpoch),
   );
   return new TransactionInstruction({
     programId: p.programId,
@@ -691,7 +695,6 @@ export interface BuildWithdrawParams {
    * the commitment. Derive it with `deriveNoteUseTag(commitment, innerHash)`.
    */
   noteUseTag: NoteUseTag;
-  nullifier: Uint8Array;
   merkleRoot: Uint8Array;
   amount: bigint;
   proof: Groth16OnChainProof;
@@ -881,7 +884,6 @@ export async function buildWithdrawInstruction(
     anchorDiscriminator("withdraw"),
     new Uint8Array([p.treeId & 0xff]),
     fixed32(p.noteUseTag),
-    fixed32(p.nullifier),
     fixed32(p.merkleRoot),
     u64LE(p.amount),
     serializeProof(p.proof),
@@ -923,7 +925,7 @@ export async function buildWithdrawInstruction(
 
 export interface BuildVerifyMatchBatchParams {
   programId: PublicKey;
-  /** Anyone can pay rent / submit the proof. Authorization is the proof itself. */
+  /** Authorized TEE signer and fee payer. */
   payer: PublicKey;
   /** Ordered governed market pair bound into public inputs 4..7. */
   baseMint: PublicKey;
@@ -931,6 +933,8 @@ export interface BuildVerifyMatchBatchParams {
   /** Merkle root over the N=16 per-slot leaves — public input 1. */
   merkleRoot: Uint8Array;
   proof: Groth16OnChainProof;
+  feeKeyEpoch: bigint;
+  feeRecoveryCiphertext: Uint8Array;
 }
 
 export async function buildVerifyMatchBatchInstruction(
@@ -938,6 +942,9 @@ export async function buildVerifyMatchBatchInstruction(
 ): Promise<TransactionInstruction> {
   if (p.merkleRoot.length !== 32) {
     throw new Error("merkleRoot must be 32 bytes");
+  }
+  if (p.feeRecoveryCiphertext.length !== 272) {
+    throw new Error("feeRecoveryCiphertext must be 272 bytes");
   }
   const [marker] = await batchValidityMarkerPda(p.programId, p.merkleRoot);
   const [vaultConfig] = await vaultConfigPda(p.programId);
@@ -955,6 +962,8 @@ export async function buildVerifyMatchBatchInstruction(
     anchorDiscriminator("verify_match_batch"),
     fixed32(p.merkleRoot),
     serializeProof(p.proof),
+    u64LE(p.feeKeyEpoch),
+    p.feeRecoveryCiphertext,
   );
 
   return new TransactionInstruction({

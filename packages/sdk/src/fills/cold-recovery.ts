@@ -15,7 +15,6 @@ import { anchorDiscriminator } from "../idl/vault-client.js";
 import { programEventPayloads } from "../idl/log-scope.js";
 import {
   bn254ToBE32,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   deriveNoteSecret,
 } from "../keys/key-generators.js";
@@ -197,9 +196,6 @@ export interface ColdRecoveryOptions {
   masterSeed: Uint8Array;
   baseMint: Uint8Array;
   quoteMint: Uint8Array;
-  /** Optional non-standard identity override. Canonical wallets derive this
-   * value from the seed and need no extra recovery secret. */
-  ownerCommitmentBlinding?: bigint;
   sinceSlot?: number;
   scan?: ChainScan;
 }
@@ -226,12 +222,7 @@ export async function recoverNotesFromChain(
   const txs = (await scan({ sinceSlot: opts.sinceSlot })).sort(
     (a, b) => a.slot - b.slot,
   );
-  const owner = await ownerCommitment(
-    deriveSpendingKey(opts.masterSeed),
-    opts.ownerCommitmentBlinding ??
-      deriveOwnerCommitmentBlinding(opts.masterSeed),
-  );
-  const ownerBytes = bn254ToBE32(owner);
+  const owner = await ownerCommitment(deriveSpendingKey(opts.masterSeed));
   const notes = new Map<string, StoredNote>();
   const recovered = { deposits: 0, trade: 0, change: 0, merges: 0 };
 
@@ -241,7 +232,6 @@ export async function recoverNotesFromChain(
     // the deposit instruction. This is the whole reason the secret is keyed on
     // the nonce rather than a counter: cold recovery needs no persisted state.
     const innerBytes = await deriveDepositInnerHash(
-      ownerBytes,
       deposit.recoveryNonce,
       bn254ToBE32(deriveNoteSecret(opts.masterSeed, deposit.recoveryNonce)),
     );
@@ -362,15 +352,12 @@ export async function recoverNotesFromChain(
         continue;
       }
       const amount = resolved.reduce((sum, note) => sum + note.amount, 0n);
-      // The circuit derives the output inner over input COMMITMENTS (they stay
-      // private witnesses there), so rebuild that vector in slot order from the
-      // notes the tags resolved to — zero for the pad slots.
-      const inputCommitments = slots.map((slot) =>
-        slot === null
-          ? ZERO32_BYTES
-          : (fromHex(slot.commitment) ?? ZERO32_BYTES),
+      // VALID_MERGE v2 derives the output inner from private input inners, so
+      // recovery must preserve the exact K-slot ordering and zero padding.
+      const inputInners = slots.map((slot) =>
+        slot === null ? ZERO32_BYTES : bn254ToBE32(slot.innerHash),
       );
-      const innerHash = await deriveMergeOutputInnerHash(inputCommitments);
+      const innerHash = await deriveMergeOutputInnerHash(inputInners);
       const commitment = await noteCommitmentV2({
         tokenMint: merge.tokenMint,
         amount,

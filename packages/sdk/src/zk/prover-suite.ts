@@ -15,11 +15,9 @@ export interface Groth16ProofBytes {
 
 export interface SpendInputs {
   merkleRoot: bigint;
-  nullifier: bigint;
   tokenMint: [bigint, bigint];
   amount: bigint;
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
   innerHash: bigint;
   merklePath: bigint[]; // length 20
@@ -43,7 +41,6 @@ export interface DepositInputs {
   amount: bigint;
   recoveryNonce: bigint;
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   /**
    * Seed-derived per-note entropy (`deriveNoteSecret`), PRIVATE. The public
    * input count is unchanged at 5 — this only enters the inner hash.
@@ -66,7 +63,6 @@ export interface MergeInputs {
   // carries no `nullifiers` field.
   // ── shared owner ──
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   // ── per-slot (length K; dummy slots zeroed) ──
   isActive: number[]; // 1 | 0
   amount: bigint[];

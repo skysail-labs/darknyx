@@ -17,6 +17,7 @@ use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
+use vault::state::VaultConfig;
 
 type Pubkey = Address;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
@@ -53,6 +54,8 @@ struct InitializeArgs {
 struct SetProtocolConfigArgs {
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
+    fee_key_binding: [u8; 32],
+    fee_key_epoch: u64,
 }
 
 fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey {
@@ -94,11 +97,15 @@ fn build_set_protocol_config_ix(
     vault_pda: &Pubkey,
     commitment: [u8; 32],
     fee_rate_bps: u16,
+    fee_key_binding: [u8; 32],
+    fee_key_epoch: u64,
 ) -> Instruction {
     let mut data = common::anchor_disc("set_protocol_config").to_vec();
     SetProtocolConfigArgs {
         protocol_owner_commitment: commitment,
         fee_rate_bps,
+        fee_key_binding,
+        fee_key_epoch,
     }
     .serialize(&mut data)
     .unwrap();
@@ -131,8 +138,16 @@ fn set_protocol_config_happy_path_writes_all_fields() {
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
     let new_commitment = [0xCD; 32];
-    let ix =
-        build_set_protocol_config_ix(&program_id, &admin.pubkey(), &vault_pda, new_commitment, 42);
+    let new_fee_key_binding = [0x11; 32];
+    let ix = build_set_protocol_config_ix(
+        &program_id,
+        &admin.pubkey(),
+        &vault_pda,
+        new_commitment,
+        42,
+        new_fee_key_binding,
+        7,
+    );
     let tx = Transaction::new(
         &[&admin],
         Message::new(&[ix], Some(&admin.pubkey())),
@@ -141,15 +156,37 @@ fn set_protocol_config_happy_path_writes_all_fields() {
     svm.send_transaction(tx)
         .expect("set_protocol_config failed");
 
-    // Re-read the account raw and check the tail. VaultConfig layout tail is
-    // owner(32) + fee(2) + key/tree/bump(3) + explicit padding(3) = 40 bytes.
+    // Re-read the zero-copy account through authoritative field offsets.
     let acct = svm.get_account(&vault_pda).expect("vault config");
     let d = &acct.data;
-    let len = d.len();
-    let tail_commitment = &d[len - 40..len - 8];
-    let tail_rate = u16::from_le_bytes(d[len - 8..len - 6].try_into().unwrap());
-    assert_eq!(tail_commitment, new_commitment);
-    assert_eq!(tail_rate, 42);
+    let field = |offset: usize, len: usize| &d[8 + offset..8 + offset + len];
+    assert_eq!(
+        field(
+            core::mem::offset_of!(VaultConfig, protocol_owner_commitment),
+            32
+        ),
+        new_commitment
+    );
+    assert_eq!(
+        field(core::mem::offset_of!(VaultConfig, fee_key_binding), 32),
+        new_fee_key_binding
+    );
+    assert_eq!(
+        u64::from_le_bytes(
+            field(core::mem::offset_of!(VaultConfig, fee_key_epoch), 8)
+                .try_into()
+                .unwrap()
+        ),
+        7
+    );
+    assert_eq!(
+        u16::from_le_bytes(
+            field(core::mem::offset_of!(VaultConfig, fee_rate_bps), 2)
+                .try_into()
+                .unwrap()
+        ),
+        42
+    );
 }
 
 #[test]
@@ -170,8 +207,15 @@ fn set_protocol_config_rejects_non_admin_signer() {
     svm.airdrop(&impostor.pubkey(), 1_000_000_000).unwrap();
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
-    let ix =
-        build_set_protocol_config_ix(&program_id, &impostor.pubkey(), &vault_pda, [0x99; 32], 10);
+    let ix = build_set_protocol_config_ix(
+        &program_id,
+        &impostor.pubkey(),
+        &vault_pda,
+        [0x99; 32],
+        10,
+        [0x11; 32],
+        1,
+    );
     let tx = Transaction::new(
         &[&impostor],
         Message::new(&[ix], Some(&impostor.pubkey())),
@@ -206,6 +250,8 @@ fn set_protocol_config_rejects_fee_rate_above_max() {
         &vault_pda,
         [0xAB; 32],
         10_001, // MAX + 1
+        [0x11; 32],
+        1,
     );
     let tx = Transaction::new(
         &[&admin],

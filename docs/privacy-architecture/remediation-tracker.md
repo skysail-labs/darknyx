@@ -13,8 +13,9 @@
 **Frozen formula vectors:**
 [`phase0-vectors.json`](phase0-vectors.json)
 
-**Current phase:** Phase 2 merged; hosted replay and lock lifecycle evidence is
-complete. Phase 3 is next; a full CVM settlement remains a Phase 5 gate.
+**Current phase:** Phase 3 implementation and local evidence are complete on
+`privacy/note-lineage-v2`; its PR is pending. Phase 4 recovery operations are
+next. Devnet and a full CVM settlement remain Phase 5 gates.
 
 **Mainnet status:** blocked on mandatory implementation, devnet/CVM evidence,
 independent circuit/privacy review, and Phase-2 ceremony
@@ -47,18 +48,18 @@ review, and ceremony.
 
 | ID | Severity | Status | Phase | Invariant restored | Circuit/wire impact | Next action |
 |---|---|---|---:|---|---|---|
-| PA-01 | High privacy | **Validated** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Implement v2 circuit/config/recovery bundle atomically in Phase 3. |
-| PA-02 | High privacy | **Validated** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Replace public commitments with private input inners in Phase 3. |
+| PA-01 | High privacy | **Validated** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Phase 3 cryptography/wire is code complete; implement the finalized-chain collector, rotation tooling, and recovery drills in Phase 4. |
+| PA-02 | High privacy | **Code complete** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Exercise devnet merge and Phase 5 merge-then-order/recovery evidence. |
 | PA-03 | Medium privacy/architecture | **Code complete** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Retain as code complete pending final external/release assurance. |
 | PA-04 | Low security / High volume cost | **Hosted validated** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Retain for final release assurance; hosted replay and exact 8-byte layouts passed. |
 | PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Exercise settlement-created continuation locks in the Phase 5 CVM run. |
 | PA-06 | Medium recoverability | **Hosted validated** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Retain for final release assurance; exact devnet retry is recorded. |
-| PA-07 | Low privacy/complexity | **Validated** | 3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier. | VALID_SPEND public inputs/instruction/event shrink | Remove in atomic Phase 3 proof cutover. |
-| PA-08 | Design simplification | **Design frozen** | 3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent. | All note circuits/formulas change under domain 32 | Implement `Poseidon2(32, spending_key)` in Phase 3. |
-| PA-09 | Design/documentation | **Design frozen** | 3 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner. | VALID_DEPOSIT/formula change under domain 33 | Implement in Phase 3 and prove canonical-client recovery. |
+| PA-07 | Low privacy/complexity | **Code complete** | 3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier. | VALID_SPEND public inputs/instruction/event shrink | Retain pending hosted proof verification and external release assurance. |
+| PA-08 | Design simplification | **Code complete** | 3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent. | All note circuits/formulas change under domain 32 | Retain pending hosted proof verification and external release assurance. |
+| PA-09 | Design/documentation | **Code complete** | 3 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner. | VALID_DEPOSIT/formula change under domain 33 | Prove canonical seed-plus-chain recovery in the Phase 4/5 drills. |
 | PA-10 | Low product coherence | **Code complete** | 1 | Active key documentation/code contains the live X25519 recovery key only; unwired BN254 compliance hierarchy is deferred as a fresh future design. | Keystore/SDK/Rust deletion; no live fill wire change | Retain as code complete pending final external/release assurance. |
-| PA-11 | Medium correctness | **Validated** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment. | Internal newtypes/brands; no wire change; CI registry becomes authoritative in Phase 3 | Clean builds and semantic types are complete; implement the authoritative domain registry in Phase 3. |
-| PA-12 | Medium review/documentation | **Validated** | 3 | Every descendant note identifies its observer-secret inner input, recovery owner, and constraining circuit accurately. | Documentation/comments only after formulas change | Update with Phase 3 implementation, not before. |
+| PA-11 | Medium correctness | **Code complete** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment. | Internal newtypes/brands; no wire change; CI registry is authoritative | Retain registry CI and semantic-boundary checks through release assurance. |
+| PA-12 | Medium review/documentation | **Code complete** | 3 | Every descendant note identifies its observer-secret inner input, recovery owner, and constraining circuit accurately. | Documentation/comments changed with formulas | Revalidate public/internal prose after Phase 4 recovery operations. |
 
 ---
 
@@ -69,7 +70,7 @@ review, and ceremony.
 | 0 | `privacy/coherence-measurements` | PoCs, benchmark, reader inventory, design/domain freeze | **Merged** | PR #202 / `ef111b1b` | Complete; no production behavior changed |
 | 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0` | complete; final external/release assurance remains |
 | 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
-| 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | Not started | — | all artifacts/vectors/parity, SBF, serializer sizes, negative mutation tests |
+| 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | **Code complete; PR pending** | pending | local artifacts/vectors/parity, SBF, serializer sizes, and negative tests complete; hosted/external gates remain |
 | 4 | `privacy/fee-recovery-v2` | protocol/user recovery operations if not wire-coupled into Phase 3 | Not started | — | journal-loss and epoch-rotation recovery drills |
 | 5 | `privacy/release-assurance` | devnet/CVM evidence, docs, external gates | Not started | — | final evidence table, independent review, ceremony, mainnet build/deploy checks |
 
@@ -91,13 +92,15 @@ config, wire encoders/decoders, and recovery logic land as one flag day.
 - Fixed encrypted N=16 Tx B recovery record selected: 256-byte plaintext,
   272-byte ciphertext, explicit 8-byte epoch.
 - Projected Tx B size: 931 bytes with priority fee, 301 bytes headroom.
-- Production implementation and negative v2 test remain open.
+- Phase 3 cryptography, proof binding, Tx B wire, and negative tests are code
+  complete; the Phase 4 finalized-chain collector and rotation drill remain.
 
 ### PA-02
 
 - Legacy K=2 candidate commitments reconstruct later output use tag exactly.
 - Frozen domain 34 uses private input inners at unchanged Poseidon6 arity.
-- Production circuit/parity/recovery implementation remains open.
+- Production K2/K4 circuit, parity, and cold-recovery implementation is code
+  complete; hosted merge evidence remains.
 
 ### PA-03/04/05/07/11/12
 
@@ -131,8 +134,8 @@ instructions as implementation proceeds.
 
 ### PA-01 — fee lineage and durable recovery
 
-- **Owner:** unassigned
-- **PR/commit:** pending Phase 3
+- **Owner:** Phase 3 implementation agent; Phase 4 recovery agent pending
+- **PR/commit:** `privacy/note-lineage-v2`; PR pending
 - **Invariant:** no public-data fee dictionary without the governed epoch key;
   protocol recovers every finalized fee note after online-state loss.
 - **Local evidence required:** fixed vector parity; wrong-key/stale-epoch proof
@@ -146,11 +149,22 @@ instructions as implementation proceeds.
   ceremony.
 - **Rollback:** before tree reset, revert program/image/config together; after
   reset, rollback requires another complete drain/reset/config/image flag day.
+- **Phase 3 implementation:** fee-note inners now use
+  `Poseidon4(36, fee_epoch_key, consumed_use_tag, role)` and proofs bind
+  `Poseidon2(35, fee_epoch_key)` plus the monotonic epoch through config digest
+  domain 37. `verify_match_batch` requires an authorized TEE payer and carries
+  an epoch plus a fixed 272-byte XChaCha20-Poly1305 recovery record. Wrong key,
+  epoch, root, market, mint, ciphertext, and proof binding all fail closed.
+- **Phase 3 local evidence:** worst-case Tx B is 931 bytes (301 bytes
+  headroom); the N=16 verifier consumed 96,221 LiteSVM CU; wrong fee key,
+  stale epoch, and unregistered payer regressions pass. Fee-recovery AEAD and
+  canonical-domain-v12 vectors pass. This does not satisfy the Phase 4
+  finalized-chain collection or epoch-rotation drills.
 
 ### PA-02 — merge lineage
 
-- **Owner:** unassigned
-- **PR/commit:** pending Phase 3
+- **Owner:** Phase 3 implementation agent
+- **PR/commit:** `privacy/note-lineage-v2`; PR pending
 - **Invariant:** public commitments and bitmap cannot derive a merge descendant
   tag; owned private inners recover it byte-for-byte.
 - **Local evidence required:** K2/K4 artifacts and parity; cold recovery;
@@ -160,6 +174,11 @@ instructions as implementation proceeds.
   observer-negative assertion.
 - **External evidence:** independent circuit/privacy review and ceremony.
 - **Rollback:** same atomic flag-day rule as PA-01.
+- **Phase 3 implementation/evidence:** VALID_MERGE K2/K4 derives the output
+  inner from four private input inners plus the active bitmap under domain 34;
+  public-input counts remain 6/8. Regenerated artifacts, Rust/TS parity,
+  malformed/all-dummy rejection, K2/K4 LiteSVM verification, and cold-recovery
+  tests pass.
 
 ### PA-03 / PA-06 / PA-10 — Phase 1 client/identity cleanup
 
@@ -293,8 +312,8 @@ instructions as implementation proceeds.
 
 ### PA-07 / PA-08 / PA-09 / PA-11 / PA-12 — Phase 3 proof cleanup
 
-- **Owner:** unassigned
-- **PR/commit:** pending
+- **Owner:** Phase 3 implementation agent
+- **PR/commit:** `privacy/note-lineage-v2`; PR pending
 - **Invariant:** proof statements contain only live identities, one authoritative
   domain registry, and byte-identical Rust/TS/Circom meanings.
 - **Local evidence required:** all circuit artifacts, public-input order tests,
@@ -303,6 +322,28 @@ instructions as implementation proceeds.
 - **Hosted/external evidence:** SBF/devnet/CVM plus independent review and
   ceremony.
 - **Rollback:** atomic flag-day rule; never mix old notes/proofs with v2.
+- **Implementation:** owner commitments are `Poseidon2(32, spending_key)`;
+  deposit inners are `Poseidon3(33, recovery_nonce, note_secret)`; the dead
+  nullifier is removed from VALID_SPEND, Rust, SDK, instruction data, and
+  events; VALID_SPEND now has seven public signals. The authoritative checked
+  domain registry reserves active and retired assignments, and CI scans
+  production Rust/TypeScript declarations plus named consumers. Canonical
+  settlement signatures moved to v12 and the persistence journal to v3; old
+  proofs, notes, payloads, and journals are intentionally incompatible.
+- **Local evidence:** all eight circuits rebuilt (MATCH_BATCH N=16 uses pot19),
+  every zkey/VK and the 288-byte N=16 fixture regenerated, N=16 proof accepted
+  on-chain, VALID_SPEND/INPUT/DEPOSIT and MERGE K2/K4 proof tests pass, Rust/TS
+  KAT and byte-parity tests pass, and public/internal documentation describes
+  the live formulas. The regenerated N=16 local run recorded witness execution
+  at 4,768 ms and proving at 31,768 ms; these are host measurements, not CVM
+  performance claims.
+- **Final local gate:** devnet-admin SBF fingerprint
+  `2326b4d3c919cd805b337943e64a2575be27553539710101785d06f93b3f75c1`;
+  workspace nextest 901/901; artifact-required TEE nextest 702/702; SDK
+  447/447 active tests; indexer 21/21; daemon 230/230 active; client-core
+  21/21; trader-host 33/33 active; browser 74/74 plus production build. All six
+  test-inclusive TypeScript typechecks, formatting, clippy with warnings
+  denied, repository guards, public OpenAPI check, and dependency audits pass.
 
 ---
 

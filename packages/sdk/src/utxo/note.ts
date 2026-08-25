@@ -10,12 +10,10 @@
  * when both are run with BN254 + CIRCOM parameters.
  *
  * Domain tags (must match circuit.circom and crates/darkpool-crypto exactly).
- * The LIVE construction is v2 (inner_hash) — a single per-note blinding that
- * anchors BOTH the commitment and the nullifier (amount-independent, so a client
- * can pre-supply change-note nullifiers):
- *   DOMAIN_OWNER = 1n  — owner_commitment = Poseidon3(1, spendingKey, r_owner)
+ * The live construction uses a single per-note inner hash that anchors both the
+ * commitment and its unlinkable note-use tag:
+ *   DOMAIN_OWNER_V2 = 32n — owner_commitment = Poseidon2(32, spendingKey)
  *   DOMAIN_NOTE  = 2n  — noteCommitmentV2 = Poseidon6(2, mint_lo, mint_hi, amount, owner, inner_hash)
- *   DOMAIN_NULL  = 3n  — nullifierV2      = Poseidon3(3, spendingKey, inner_hash)
  *
  * (The pre-v2 v1 construction — a Poseidon7 note with separate nonce/blindingR
  * fields + a nullifier over the note commitment — has been fully retired.)
@@ -46,7 +44,7 @@ type PoseidonFn = ((inputs: bigint[]) => Uint8Array) & {
  *   guards.
  * * `Fr::from_be_bytes_mod_order` **reduces** — used deliberately for the
  *   256-bit spending key. Reduction there is the matching behaviour, not a
- *   divergence, and `nullifier-parity.test.ts` pins it. So this must NOT be
+ *   divergence. So this must NOT be
  *   applied blanket inside the Poseidon wrapper; doing that broke that test,
  *   which is how the distinction surfaced.
  *
@@ -125,21 +123,16 @@ export function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
 }
 
 // Domain tags — must match circuits/valid_spend/circuit.circom and
-// crates/darkpool-crypto/src/{note,nullifier}.rs exactly.
-const DOMAIN_OWNER = 1n;
+// crates/darkpool-crypto/src/note.rs exactly.
+export const DOMAIN_OWNER_V2 = 32n;
 const DOMAIN_NOTE = 2n;
-const DOMAIN_NULL = 3n;
 
-/** Compute owner_commitment = Poseidon3(DOMAIN_OWNER, spendingKey, r_owner). */
+/** Compute owner_commitment = Poseidon2(DOMAIN_OWNER_V2, spendingKey). */
 export async function ownerCommitment(
   spendingKey: bigint,
-  blinding: bigint,
 ): Promise<bigint> {
   const p = await getPoseidon();
-  // Both inputs are derived key material that Rust parses with
-  // `Fr::from_be_bytes_mod_order` (`owner_commitment` takes `&Fr`), so reduction
-  // is the matching behaviour here — the same distinction as `nullifierV2`.
-  const packed = p([DOMAIN_OWNER, toField(spendingKey), toField(blinding)]);
+  const packed = p([DOMAIN_OWNER_V2, toField(spendingKey)]);
   return p.F.toObject(packed);
 }
 
@@ -167,25 +160,4 @@ export async function noteCommitmentV2(note: NoteV2): Promise<NoteCommitment> {
       note.innerHash,
     ]),
   );
-}
-
-/**
- * v2 nullifier = Poseidon3(DOMAIN_NULL, spendingKey, innerHash). Mirrors
- * `darkpool_crypto::nullifier::nullifier_v2`. Amount-independent — computable
- * before the change-note amount is known.
- */
-export async function nullifierV2(
-  spendingKey: bigint,
-  innerHash: bigint,
-): Promise<Uint8Array> {
-  const p = await getPoseidon();
-  // The spending key is REDUCED on both sides — Rust's helper uses
-  // `Fr::from_be_bytes_mod_order`. `inner_hash` is already a field element and
-  // Rust rejects it out of range, so it is checked rather than reduced.
-  const packed = p([
-    DOMAIN_NULL,
-    toField(spendingKey),
-    assertInField("nullifier inner_hash", innerHash),
-  ]);
-  return bn254ToBE32(p.F.toObject(packed));
 }

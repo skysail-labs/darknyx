@@ -71,7 +71,7 @@ circuits/
   templates/                    parameterized shared circuit components
   build/                        generated wasm, zkeys, verification keys
 
-crates/darkpool-crypto/         Rust Poseidon/note/nullifier/key primitives
+crates/darkpool-crypto/         Rust Poseidon/note/use-tag/key primitives
 crates/darkpool-matcher/        canonical orders + matching source of truth
 crates/darknyx-tee/             in-CVM API, books, prover, mirrors, settlement
 crates/darknyx-tee-loadgen/     authenticated intake/settlement load driver
@@ -81,7 +81,7 @@ packages/daemon/                non-custodial reference trading daemon
 packages/indexer/               optional by-order-id commitment locator
 
 deploy/                         CPU/GPU compose manifests
-docs/gitbook/                   public documentation source of truth
+docs/mintlify/                  public documentation source of truth
 docs/                           internal architecture, audit, and runbooks
 scripts/                        build, parity, deploy, reset, rotation helpers
 ```
@@ -95,10 +95,10 @@ Every note uses the v2 amount-independent inner:
 ```text
 commitment = Poseidon6(2, mint_lo, mint_hi, amount,
                        owner_commitment, inner_hash)
-nullifier  = Poseidon3(3, spending_key, inner_hash)
+use_tag    = Poseidon3(29, commitment, inner_hash)
 ```
 
-`owner_commitment = Poseidon3(1, spending_key, r_owner)` is wallet-wide but
+`owner_commitment = Poseidon2(32, spending_key)` is wallet-wide but
 private throughout deposit, spend, merge, order lock, and settlement. The
 deposit signer and gross SPL amount remain public; VALID_DEPOSIT hides the
 owner and inner while binding the public mint, amount, commitment, and recovery
@@ -112,7 +112,7 @@ Recovery is seed plus chain:
 
 - deposit openings derive from the public recovery nonce;
 - trade and continuation outputs derive from consumed input inners;
-- merge outputs derive from the active input commitments/bitmap;
+- merge outputs derive from the active private input inners/bitmap;
 - each settlement carries a 128-byte X25519/ChaCha20-Poly1305 recovery
   envelope for both sides' trade/change amounts.
 
@@ -184,7 +184,7 @@ one replay namespace without republishing the Merkle-leaf commitment.
 | Circuit | Public signals | What it proves |
 |---|---:|---|
 | VALID_DEPOSIT | 5 | recoverable note construction for public mint/amount/nonce without exposing owner/inner |
-| VALID_SPEND | 8 | note opening, ownership, inclusion, nullifier, public amount/mint, and exact destination account |
+| VALID_SPEND | 7 | note opening, ownership, inclusion, shared use tag, public amount/mint, and exact destination account |
 | VALID_INPUT | 4 | owned positive-u64 note with a public use tag/mint at a recent root |
 | VALID_MERGE K=2/K=4 | 6/8 | active positive same-owner/same-mint inputs sum to one derived output |
 | VALID_MATCH_BATCH N=16 | 2 | up to 16 matches under one market/config digest and Poseidon batch root |
@@ -192,10 +192,11 @@ one replay namespace without republishing the Merkle-leaf commitment.
 VALID_MATCH_BATCH derives:
 
 - user-output inners from consumed input inners;
-- per-match base/quote fee inners from consumed commitments;
+- per-match base/quote fee inners from the governed epoch key, consumed use
+  tag, and role;
 - `quote = floor(base × clearing_price / price_scale)` with a bounded
   remainder;
-- all output commitments and a commitment-only Poseidon11 leaf per slot.
+- all output commitments and a tag-keyed Poseidon12 leaf per slot.
 
 Only N=16 is wired on-chain. N=2/N=4 are development instances.
 

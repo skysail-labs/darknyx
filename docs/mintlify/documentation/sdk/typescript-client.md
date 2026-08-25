@@ -190,7 +190,6 @@ const order = await proveAndBuildOrder({
   token: client["token"]!,
   fetchImpl: transport.fetch,
   prover: nodeValidInputProver({ wasmPath, zkeyPath }),
-  ownerCommitmentBlinding,
   tokenMint,
   masterSeed,
   spendingKey,

@@ -393,7 +393,6 @@ export interface Persona {
   trading: Keypair; // Ed25519 key that signs the order body
   masterSeed: Uint8Array;
   spendingKey: bigint;
-  ownerBlinding: bigint;
   ownerCommit: bigint;
 }
 
@@ -414,8 +413,7 @@ export async function makePersona(
       (seed0 + i * 7 + Number((RUN_SALT >> BigInt(i % 53)) & 0xffn)) & 0xff;
   }
   const spendingKey = deriveSpendingKey(masterSeed);
-  const ownerBlinding = BigInt(seed0) + 0xfeedn;
-  const ownerCommit = await ownerCommitment(spendingKey, ownerBlinding);
+  const ownerCommit = await ownerCommitment(spendingKey);
   // A `userCommitment` used to live here, zeroed in its top byte to satisfy an
   // intake check that audit 2026-07-25 (T-07) found both wrong and guarding
   // nothing. `ownerCommit` is the identity intake actually verifies.
@@ -425,7 +423,6 @@ export async function makePersona(
     trading,
     masterSeed,
     spendingKey,
-    ownerBlinding,
     ownerCommit,
   };
 }
@@ -508,7 +505,6 @@ export class CvmHarness {
     const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
     const innerHash = be32ToBigInt(
       await deriveDepositInnerHash(
-        bn254ToBE32(p.ownerCommit),
         recoveryNonceBytes,
         bn254ToBE32(deriveNoteSecret(p.masterSeed, recoveryNonceBytes)),
       ),
@@ -526,7 +522,6 @@ export class CvmHarness {
       amount,
       recoveryNonce,
       spendingKey: p.spendingKey,
-      ownerCommitmentBlinding: p.ownerBlinding,
       noteSecret: deriveNoteSecret(p.masterSeed, recoveryNonceBytes),
     });
     const ix = await buildDepositInstruction({
@@ -580,7 +575,6 @@ export class CvmHarness {
     const vi = await proveValidInput({
       repoRoot,
       spendingKey: p.spendingKey,
-      ownerCommitmentBlinding: p.ownerBlinding,
       innerHash: note.innerHash,
       tokenMint: note.mint.toBytes(),
       amount: note.amount,

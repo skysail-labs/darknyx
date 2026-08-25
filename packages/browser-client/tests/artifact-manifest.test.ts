@@ -68,6 +68,7 @@ describe("signed client artifact manifest", () => {
     });
     expect(Object.keys(manifest.circuits)).toHaveLength(5);
     expect(manifest.circuits.input.public_inputs).toBe(4);
+    expect(manifest.circuits.spend.public_inputs).toBe(7);
   });
 
   it("fails closed on a bad signature, rollback id, arity, or unsafe path", async () => {

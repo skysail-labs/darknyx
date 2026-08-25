@@ -4,7 +4,6 @@ export {
   deriveBlindingFactor,
   generateRecoveryNonce,
   deriveNoteSecret,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
 } from "./keys/key-generators.js";
 export { deriveNoteUseTag } from "./utxo/note-use.js";
@@ -14,7 +13,6 @@ export {
 } from "./utxo/note-identity.js";
 export {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "./utxo/note.js";

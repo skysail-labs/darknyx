@@ -140,7 +140,7 @@ Two different keys, two different jobs. Keep them distinct.
 | Key | Used for | Seen by the enclave? |
 |---|---|---|
 | **Trading key** | Signing orders (place / cancel / modify). The cryptographic identity an order is attributed to. | The public key, yes, to verify your signature. |
-| **Spending key** | Deriving note ownership and nullifiers; authorizing withdrawals. | **Never.** It stays on your client. |
+| **Spending key** | Deriving note ownership and authorizing withdrawals. | **Never.** It stays on your client. |
 
 The enclave can verify *who placed an order* (trading key) without ever being
 able to determine *what you hold* (spending key). That split is what lets

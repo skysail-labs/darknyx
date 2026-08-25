@@ -1,19 +1,14 @@
 /**
  * Cross-environment parity for the v2 (inner_hash) note construction.
  *
- * Pins TS ⇄ Rust byte equality for the v2 note primitives:
+ * Pins TS ⇄ Rust byte equality for the v2 note commitment:
  *
  *   1. v2 note commitment
  *        Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, inner_hash)
  *      TS  `noteCommitmentV2`  ⇄  Rust `commitment_from_fields_v2`
  *
- *   2. v2 nullifier
- *        Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)
- *      TS  `nullifierV2`  ⇄  Rust `nullifier_v2`
- *
  * If any of these diverge, change notes minted by the in-TEE matcher become
- * unspendable / unmatchable from the client side. (Sibling files:
- * `note-commitment-parity.test.ts`, `nullifier-parity.test.ts`.)
+ * unspendable / unmatchable from the client side.
  */
 
 import { describe, it, expect } from "vitest";
@@ -22,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
-import { noteCommitmentV2, nullifierV2 } from "../src/utxo/note.js";
+import { noteCommitmentV2 } from "../src/utxo/note.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -30,7 +25,6 @@ const noteV2Helper = resolve(
   repoRoot,
   "target/debug/examples/note-commitment-v2",
 );
-const nullV2Helper = resolve(repoRoot, "target/debug/examples/nullifier-v2");
 
 function run(bin: string, args: string[]): string {
   const res = spawnSync(bin, args, { encoding: "utf8" });
@@ -57,7 +51,7 @@ function bigintFromHex32(hex: string): bigint {
 }
 
 describe("inner_hash v2 parity (TS vs Rust)", () => {
-  const available = existsSync(noteV2Helper) && existsSync(nullV2Helper);
+  const available = existsSync(noteV2Helper);
   const ait = (name: string, fn: () => Promise<void>) =>
     available ? it(name, fn) : it.skip(name, fn);
 
@@ -127,26 +121,5 @@ describe("inner_hash v2 parity (TS vs Rust)", () => {
       }
     },
   );
-
-  ait("v2 nullifier matches + is sensitive to sk and inner_hash", async () => {
-    const sk = 42n;
-    const innerHex = "0c".repeat(32);
-    const ts = hex32(await nullifierV2(sk, bigintFromHex32(innerHex)));
-    const rs = run(nullV2Helper, [sk.toString(), innerHex]);
-    expect(ts).toBe(rs);
-
-    // Different sk → different nullifier (both sides agree).
-    const ts2 = hex32(await nullifierV2(43n, bigintFromHex32(innerHex)));
-    const rs2 = run(nullV2Helper, ["43", innerHex]);
-    expect(ts2).toBe(rs2);
-    expect(ts2).not.toBe(ts);
-
-    // Different inner_hash → different nullifier.
-    const innerHex2 = "0d".repeat(32);
-    const ts3 = hex32(await nullifierV2(sk, bigintFromHex32(innerHex2)));
-    const rs3 = run(nullV2Helper, [sk.toString(), innerHex2]);
-    expect(ts3).toBe(rs3);
-    expect(ts3).not.toBe(ts);
-  });
 
 });

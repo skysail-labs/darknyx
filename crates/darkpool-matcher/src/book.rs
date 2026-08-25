@@ -106,9 +106,9 @@ pub struct Order {
     /// be spoofed for a note the caller doesn't own. Shared by every note
     /// carrying this owner commitment, so it's the identity the self-trade check
     /// keys on (see `algorithm::generate_matches`) and the one output notes
-    /// derive back to. Note the bound: a user who picks a different `r_owner`
-    /// gets a DIFFERENT `owner_commitment`, so this catches wash trades across
-    /// rotated trading keys, not across deliberately split owner identities.
+    /// derive back to. A user can still create a distinct spending key and
+    /// therefore a distinct owner identity, so this catches wash trades across
+    /// rotated trading keys, not across deliberately split wallets.
     /// `generate_matches` also compares `trading_key` independently, as a
     /// cheaper belt-and-suspenders.
     ///

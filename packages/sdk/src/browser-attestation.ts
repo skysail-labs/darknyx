@@ -10,6 +10,10 @@ export {
   type AttestationFailure,
 } from "./tee/verify-core.js";
 export {
+  NUM_TEE_KEYS_OFFSET,
+  NUM_TREES_OFFSET,
+  TEE_PUBKEYS_OFFSET,
+  VAULT_CONFIG_ACCOUNT_LEN,
   assertTeePubkeysMatch,
   vaultConfigTeePubkeys,
   vaultConfigTradingParameters,

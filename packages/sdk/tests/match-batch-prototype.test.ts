@@ -25,9 +25,12 @@ import { existsSync } from "node:fs";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 import { bn254ToBE32 } from "../src/keys/key-generators.js";
 import {
+  deriveFeeKeyBinding,
   deriveMatchFeeInner,
   deriveMatchOutputInner,
 } from "../src/utxo/match-output.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
+import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
 import { matchConfigDigest } from "../src/utxo/match-config.js";
 import {
   proveMatchBatch,
@@ -149,6 +152,11 @@ async function buildSlot(args: {
           innerHash: fInner,
         });
 
+  const defaultFeeEpochKey = 0n;
+  const defaultFeeKeyBinding = bytesToBigIntBE(
+    await deriveFeeKeyBinding(bn254ToBE32(defaultFeeEpochKey)),
+  );
+
   return {
     noteAcommitment: noteA,
     noteBcommitment: noteB,
@@ -184,6 +192,9 @@ async function buildSlot(args: {
     feeRateBps: args.feeRateBps ?? 0n,
     protocolOwnerCommitment: 0n,
     priceScale,
+    feeEpochKey: defaultFeeEpochKey,
+    feeKeyBinding: defaultFeeKeyBinding,
+    feeKeyEpoch: 0n,
     feeBaseInner: 0n,
     feeQuoteInner: 0n,
   };
@@ -198,16 +209,34 @@ async function bindFeeNotes(
     quoteMint: Uint8Array;
     baseMint: Uint8Array;
     protocolOwner: bigint;
+    feeEpochKey?: bigint;
+    feeKeyEpoch?: bigint;
   },
 ): Promise<void> {
   const zero = new Uint8Array(32);
+  const feeEpochKey = args.feeEpochKey ?? 0x0102030405060708n;
+  const feeKeyEpoch = args.feeKeyEpoch ?? 1n;
+  const feeKeyBinding = bytesToBigIntBE(
+    await deriveFeeKeyBinding(bn254ToBE32(feeEpochKey)),
+  );
   for (const s of slots) {
     s.protocolOwnerCommitment = args.protocolOwner;
+    s.feeEpochKey = feeEpochKey;
+    s.feeKeyBinding = feeKeyBinding;
+    s.feeKeyEpoch = feeKeyEpoch;
+    const noteATag = await deriveNoteUseTag(
+      noteCommitmentFromBytes(s.noteAcommitment),
+      bn254ToBE32(s.aInner),
+    );
+    const noteBTag = await deriveNoteUseTag(
+      noteCommitmentFromBytes(s.noteBcommitment),
+      bn254ToBE32(s.bInner),
+    );
     s.feeBaseInner = bytesToBigIntBE(
-      await deriveMatchFeeInner(s.noteBcommitment, 0xfb),
+      await deriveMatchFeeInner(bn254ToBE32(feeEpochKey), noteBTag, 0xfb),
     );
     s.feeQuoteInner = bytesToBigIntBE(
-      await deriveMatchFeeInner(s.noteAcommitment, 0xfc),
+      await deriveMatchFeeInner(bn254ToBE32(feeEpochKey), noteATag, 0xfc),
     );
     s.noteFeeBaseCommitment =
       s.sellerFeeAmt === 0n
@@ -292,6 +321,8 @@ for (const N of [2, 4, 16] as const) {
           baseMint: slots[0].baseMint,
           quoteMint: slots[0].quoteMint,
           priceScale: slots[0].priceScale,
+          feeKeyBinding: bn254ToBE32(slots[0].feeKeyBinding),
+          feeKeyEpoch: slots[0].feeKeyEpoch,
         }),
       );
 
@@ -430,6 +461,8 @@ const ready2 = artefactsReady(2);
         baseMint,
         quoteMint,
         priceScale: 1n,
+        feeKeyBinding: bn254ToBE32(slots[0].feeKeyBinding),
+        feeKeyEpoch: slots[0].feeKeyEpoch,
       }),
     );
   }, 60_000);

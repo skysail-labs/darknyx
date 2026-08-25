@@ -196,6 +196,8 @@ pub fn initialize_handler(
     cfg.zero_subtree_roots = compute_zero_subtree_roots()?;
     cfg.bump = ctx.bumps.vault_config;
     cfg.protocol_owner_commitment = [0u8; 32];
+    cfg.fee_key_binding = [0u8; 32];
+    cfg.fee_key_epoch = 0u64.into();
     cfg.fee_rate_bps = 0u16.into();
     cfg._padding = [0u8; 3];
     let _ = VaultError::ZeroAmount; // keep errors linked in

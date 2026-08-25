@@ -247,6 +247,10 @@ pub struct Config {
     /// rejects a zero owner when fees are enabled. MUST be BN254-Fr-safe (it is
     /// a Poseidon-output commitment).
     pub protocol_owner_commitment: [u8; 32],
+    /// Secret canonical BN254 scalar used for fee-inner derivation and the
+    /// fixed Tx-B recovery record. Real boots require its Poseidon binding to
+    /// equal finalized governance.
+    pub fee_epoch_key: [u8; 32],
     /// Max settle Tx D's the settle worker sends CONCURRENTLY within a batch.
     /// `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16. Concurrent sends let the
     /// leader co-include settles in one block so they confirm together (the
@@ -714,6 +718,7 @@ impl Config {
                 "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT",
                 [0u8; 32],
             )?,
+            fee_epoch_key: parse_hex32_env("DARKNYX_TEE_FEE_EPOCH_KEY", [0u8; 32])?,
             settle_send_concurrency: parse_u64_env("DARKNYX_TEE_SETTLE_SEND_CONCURRENCY", 16)?
                 .max(1),
             settle_batch_concurrency: parse_u64_env("DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY", 1)?

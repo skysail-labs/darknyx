@@ -9,7 +9,6 @@ import type {
 import {
   deriveSpendingKey,
   deriveTradingKeyAtOffset,
-  deriveOwnerCommitmentBlinding,
   resolveMasterSeed,
 } from "./keys/key-generators.js";
 import type { IDarkPoolZkProverSuite } from "./zk/prover-suite.js";
@@ -32,10 +31,6 @@ export interface DarkPoolClientConfig {
     merkleProofProvider: MerkleProofProvider;
   };
   zkProver: IDarkPoolZkProverSuite;
-  /** Blinding factor used for the user's owner_commitment. Omit to derive the
-   * canonical wallet-level value from the master seed (required for seed-only
-   * disaster recovery). An override creates a separately backed-up identity. */
-  ownerCommitmentBlinding?: bigint;
 }
 
 export type NoteStatus = "active" | "locked" | "consumed" | "unknown";
@@ -67,7 +62,6 @@ export class DarkPoolClient {
   private readonly seedMode: MasterSeedMode;
   private readonly tradingOffset: bigint;
   private resolvedSeed: Uint8Array | null = null;
-  private readonly ownerBlinding?: bigint;
 
   constructor(cfg: DarkPoolClientConfig) {
     this.programId = cfg.programId;
@@ -76,7 +70,6 @@ export class DarkPoolClient {
     this.zkProver = cfg.zkProver;
     this.seedMode = cfg.seedMode;
     this.tradingOffset = cfg.tradingOffset ?? 0n;
-    this.ownerBlinding = cfg.ownerCommitmentBlinding;
   }
 
   get perRpcUrl(): string {
@@ -102,8 +95,6 @@ export class DarkPoolClient {
         this.resolvedSeed,
         this.tradingOffset,
       ),
-      ownerBlinding:
-        this.ownerBlinding ?? deriveOwnerCommitmentBlinding(this.resolvedSeed),
     };
   }
 

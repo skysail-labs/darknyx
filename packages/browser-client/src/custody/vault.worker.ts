@@ -14,11 +14,9 @@ import {
   deriveMergeOutputInnerHash,
   deriveNoteSecret,
   deriveNoteUseTag,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   generateRecoveryNonce,
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "@darknyx/sdk/browser-inventory-crypto";
@@ -483,8 +481,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const merkleRoot = fromHex(readyProof.merkleRoot, 32, "Merkle root");
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
-    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
-    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    const expectedOwner = await ownerCommitment(spendingKey);
     if (expectedOwner !== opening.ownerCommitment) {
       throw new Error("reserved note is not owned by this browser vault");
     }
@@ -583,13 +580,11 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       throw new Error("deposit amount must be positive");
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
-    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const owner = await ownerCommitment(spendingKey);
     const nonceBytes = generateRecoveryNonce();
     const recoveryNonce = be32ToBigInt(nonceBytes);
     const noteSecret = deriveNoteSecret(currentSeed, nonceBytes);
     const innerBytes = await deriveDepositInnerHash(
-      bn254ToBE32(owner),
       nonceBytes,
       bn254ToBE32(noteSecret),
     );
@@ -608,7 +603,6 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
         amount: depositAmount,
         recoveryNonce,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         noteSecret,
       } satisfies DepositInputs,
       commitment,
@@ -639,8 +633,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const destinationBytes = fromHex(destination, 32, "withdraw destination");
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
-    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
-    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    const expectedOwner = await ownerCommitment(spendingKey);
     if (expectedOwner !== candidate.ownerCommitment) {
       throw new Error("withdraw note is not owned by this vault");
     }
@@ -659,17 +652,14 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       commitment,
       bn254ToBE32(candidate.innerHash),
     );
-    const nullifier = await nullifierV2(spendingKey, candidate.innerHash);
     const [mintLo, mintHi] = pubkeyToFrPair(candidate.tokenMint);
     const [recipientLo, recipientHi] = pubkeyToFrPair(destinationBytes);
     return {
       witness: {
         merkleRoot: be32ToBigInt(root),
-        nullifier: be32ToBigInt(nullifier),
         tokenMint: [mintLo, mintHi],
         amount: candidate.amount,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         innerHash: candidate.innerHash,
         merklePath: siblings.map((value, index) =>
           be32ToBigInt(fromHex(value, 32, `Merkle sibling ${index}`)),
@@ -678,7 +668,6 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
         recipient: [recipientLo, recipientHi],
       } satisfies SpendInputs,
       noteUseTag: tag,
-      nullifier,
       merkleRoot: root,
     };
   },
@@ -696,8 +685,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const paths = inclusions as Record<string, unknown>[];
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
-    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
-    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    const expectedOwner = await ownerCommitment(spendingKey);
     const k: 2 | 4 = notes.length <= 2 ? 2 : 4;
     const commitments: Uint8Array[] = [];
     const tags: Uint8Array[] = [];
@@ -778,7 +766,9 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const total = amounts.reduce((sum, value) => sum + value, 0n);
     if (total <= 0n || total > U64_MAX)
       throw new Error("merged amount exceeds u64");
-    const outputInnerHash = await deriveMergeOutputInnerHash(commitments);
+    const outputInnerHash = await deriveMergeOutputInnerHash(
+      inners.map((inner) => bn254ToBE32(inner)),
+    );
     const outputCommitment = await noteCommitmentV2({
       tokenMint,
       amount: total,
@@ -792,7 +782,6 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
         merkleRoot: be32ToBigInt(root),
         tokenMint: [mintLo, mintHi],
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         isActive: amounts.map((value) => (value > 0n ? 1 : 0)),
         amount: amounts,
         innerHash: inners,
@@ -901,8 +890,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     );
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
-    const ownerBlinding = deriveOwnerCommitmentBlinding(currentSeed);
-    const expectedOwner = await ownerCommitment(spendingKey, ownerBlinding);
+    const expectedOwner = await ownerCommitment(spendingKey);
     if (expectedOwner !== candidate.ownerCommitment) {
       throw new Error("inventory note is not owned by this vault");
     }
@@ -928,7 +916,6 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       tokenMint: [mintLo.toString(), mintHi.toString()],
       amount: candidate.amount.toString(),
       spendingKey: spendingKey.toString(),
-      ownerCommitmentBlinding: ownerBlinding.toString(),
       innerHash: candidate.innerHash.toString(),
       merklePath: siblingValues.map(String),
       merkleIndices: (pathIndices as number[]).map(String),

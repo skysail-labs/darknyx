@@ -23,57 +23,46 @@ const hex = (value: Uint8Array): string => Buffer.from(value).toString("hex");
 
 describe("VALID_DEPOSIT recoverable inner hash", () => {
   it("is deterministic and input separated", async () => {
-    const owner = scalar(7);
     const nonce = scalar(9);
     const secret = scalar(11);
-    const first = await deriveDepositInnerHash(owner, nonce, secret);
-    expect(await deriveDepositInnerHash(owner, nonce, secret)).toEqual(first);
-    expect(await deriveDepositInnerHash(owner, scalar(10), secret)).not.toEqual(
-      first,
-    );
-    expect(await deriveDepositInnerHash(scalar(8), nonce, secret)).not.toEqual(
+    const first = await deriveDepositInnerHash(nonce, secret);
+    expect(await deriveDepositInnerHash(nonce, secret)).toEqual(first);
+    expect(await deriveDepositInnerHash(scalar(10), secret)).not.toEqual(first);
+    expect(await deriveDepositInnerHash(nonce, scalar(12))).not.toEqual(
       first,
     );
   });
 
   /**
-   * Why the fourth input exists. `recoveryNonce` is a PUBLIC deposit
-   * instruction argument and `ownerCommitment` is wallet-wide and reused, so
-   * under the old 3-input form the inner — and therefore the public note-use
-   * tag derived from it — was a function of on-chain data plus one long-lived
-   * value. Anyone who learned that value could recompute a user's entire
-   * history retroactively.
+   * The public recovery nonce alone cannot derive the inner. The seed-derived
+   * note secret is the observer-secret input that keeps the later use tag
+   * unlinkable while preserving seed-plus-chain recovery.
    */
   it("separates deposits that agree on every public input", async () => {
-    const owner = scalar(7);
     const nonce = scalar(9);
-    expect(await deriveDepositInnerHash(owner, nonce, scalar(1))).not.toEqual(
-      await deriveDepositInnerHash(owner, nonce, scalar(2)),
+    expect(await deriveDepositInnerHash(nonce, scalar(1))).not.toEqual(
+      await deriveDepositInnerHash(nonce, scalar(2)),
     );
   });
 
   it.skipIf(!existsSync(rustHelper))("matches Rust byte-for-byte", async () => {
-    const owner = scalar(7);
     const nonce = scalar(9);
     const secret = scalar(11);
-    const rust = spawnSync(rustHelper, [hex(owner), hex(nonce), hex(secret)], {
+    const rust = spawnSync(rustHelper, [hex(nonce), hex(secret)], {
       encoding: "utf8",
     });
     expect(rust.status, rust.stderr).toBe(0);
     expect(rust.stdout.trim()).toBe(
-      hex(await deriveDepositInnerHash(owner, nonce, secret)),
+      hex(await deriveDepositInnerHash(nonce, secret)),
     );
   });
 
   it("rejects malformed byte inputs", async () => {
     expect(() =>
-      deriveDepositInnerHash(new Uint8Array(31), scalar(1), scalar(1)),
-    ).toThrow(/ownerCommitment/);
-    expect(() =>
-      deriveDepositInnerHash(scalar(1), new Uint8Array(33), scalar(1)),
+      deriveDepositInnerHash(new Uint8Array(31), scalar(1)),
     ).toThrow(/recoveryNonce/);
     expect(() =>
-      deriveDepositInnerHash(scalar(1), scalar(1), new Uint8Array(31)),
+      deriveDepositInnerHash(scalar(1), new Uint8Array(31)),
     ).toThrow(/noteSecret/);
   });
 });

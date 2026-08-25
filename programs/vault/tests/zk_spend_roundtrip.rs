@@ -4,14 +4,13 @@
 //!
 //!   1. Merkle-tree construction in Rust (via `append_leaf`) producing the same
 //!      root the circom `MerkleTreeChecker` verifies.
-//!   2. Owner commitment: Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
+//!   2. Owner commitment: Poseidon2(DOMAIN_OWNER_V2=32, sk)
 //!   3. Note commitment: Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amt, owner, inner_hash)
-//!   4. Nullifier:       Poseidon3(DOMAIN_NULL=3,  sk, inner_hash)
-//!   5. noteUseTag = Poseidon3(DOMAIN_NOTE_USE=29, commitment, inner_hash) is
+//!   4. noteUseTag = Poseidon3(DOMAIN_NOTE_USE=29, commitment, inner_hash) is
 //!      the circuit's public output at wire index 0 — the commitment itself is
 //!      now a private intermediate and never appears in a public signal.
-//!   6. snarkjs Groth16 proof generation.
-//!   7. `groth16-solana` verification producing `Ok(())`.
+//!   5. snarkjs Groth16 proof generation.
+//!   6. `groth16-solana` verification producing `Ok(())`.
 //!
 //! A pass means this fixture round-trips and the tampering cases below are
 //! rejected — not that VALID_SPEND holds for all inputs.
@@ -176,10 +175,8 @@ fn valid_spend_roundtrip() {
     let amount_fr = u64_to_fr(amount_u64);
 
     let spending_key = fr_from_uniform_bytes(&[0x41u8; 32]);
-    let owner_commit_blinding = fr_from_uniform_bytes(&[0x42u8; 32]);
-    // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, r_owner)
-    let owner_commitment =
-        poseidon_hash(&[Fr::from(1u64), spending_key, owner_commit_blinding]).unwrap();
+    // owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spendingKey)
+    let owner_commitment = poseidon_hash(&[Fr::from(32u64), spending_key]).unwrap();
     let inner_hash = fr_from_uniform_bytes(&[0x43u8; 32]);
 
     // note_commitment = Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, inner_hash)
@@ -210,9 +207,6 @@ fn valid_spend_roundtrip() {
          indicates our Merkle algorithm diverges from expected"
     );
 
-    // nullifier = Poseidon3(DOMAIN_NULL=3, spendingKey, inner_hash)
-    let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, inner_hash]).unwrap();
-
     // ----- Write snarkjs input.json -----
     // Per-process scratch dir. A FIXED name is safe only while exactly one
     // test ever uses it in one process; it breaks silently the moment a second
@@ -238,25 +232,21 @@ fn valid_spend_roundtrip() {
     let input_json = format!(
         "{{\n\
            \"merkleRoot\": \"{mr}\",\n\
-           \"nullifier\": \"{nl}\",\n\
            \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
            \"amount\": \"{amt}\",\n\
            \"spendingKey\": \"{sk}\",\n\
-           \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"innerHash\": \"{ih}\",\n\
            \"merklePath\": [{sibs}],\n\
            \"merkleIndices\": [{idxs}],\n\
            \"recipient\": [\"{dlo}\", \"{dhi}\"]\n\
          }}",
         mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&witness_root)),
-        nl = fr_to_dec(&nullifier),
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
         dlo = fr_to_dec(&dest_lo),
         dhi = fr_to_dec(&dest_hi),
         amt = amount_u64,
         sk = fr_to_dec(&spending_key),
-        ocb = fr_to_dec(&owner_commit_blinding),
         ih = fr_to_dec(&inner_hash),
         sibs = siblings_dec
             .iter()
@@ -302,10 +292,11 @@ fn valid_spend_roundtrip() {
     // Public signal wire order (from circuit.sym — circom places outputs before inputs):
     //   wire 1: noteUseTag      (signal output — appears first)
     //   wire 2: merkleRoot
-    //   wire 3: nullifier
-    //   wire 4: tokenMint[0]
-    //   wire 5: tokenMint[1]
-    //   wire 6: amount
+    //   wire 3: tokenMint[0]
+    //   wire 4: tokenMint[1]
+    //   wire 5: amount
+    //   wire 6: recipient[0]
+    //   wire 7: recipient[1]
     // groth16-solana IC array: IC[0] is the constant term, IC[i] corresponds to wire i.
     // public.json from snarkjs lists them in this same wire-index order.
     let amount_be32 = {
@@ -316,10 +307,9 @@ fn valid_spend_roundtrip() {
     // Order mirrors `withdraw.rs` exactly, which in turn mirrors the circom
     // public-signal order (output first, then public inputs in template
     // declaration order).
-    let public_inputs: [[u8; 32]; 8] = [
+    let public_inputs: [[u8; 32]; 7] = [
         fr_to_be_bytes(&note_use_tag),
         witness_root,
-        fr_to_be_bytes(&nullifier),
         fr_to_be_bytes(&mint_lo),
         fr_to_be_bytes(&mint_hi),
         amount_be32,
@@ -334,31 +324,31 @@ fn valid_spend_roundtrip() {
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)
+    verify_groth16_proof::<7>(&vk, &proof, &public_inputs)
         .expect("VALID_SPEND proof verification failed");
 
     // ----- Negative: mutated proof must be rejected (ZK soundness) -----
     let mut tampered = proof.clone();
     tampered.pi_c[0] ^= 0x01;
-    let res = verify_groth16_proof::<8>(&vk, &tampered, &public_inputs);
+    let res = verify_groth16_proof::<7>(&vk, &tampered, &public_inputs);
     assert!(res.is_err(), "mutated proof must not verify");
 
-    // ----- Negative: wrong public input (amount, index 5) must be rejected -----
+    // ----- Negative: wrong public input (amount, index 4) must be rejected -----
     let mut bad_inputs = public_inputs;
-    bad_inputs[5][31] ^= 0x01;
-    let res2 = verify_groth16_proof::<8>(&vk, &proof, &bad_inputs);
+    bad_inputs[4][31] ^= 0x01;
+    let res2 = verify_groth16_proof::<7>(&vk, &proof, &bad_inputs);
     assert!(res2.is_err(), "mutated amount must not verify");
 
     // ----- Negative: stale Merkle root (index 1) must be rejected -----
     let mut stale_inputs = public_inputs;
     stale_inputs[1][0] ^= 0x01;
-    let res3 = verify_groth16_proof::<8>(&vk, &proof, &stale_inputs);
+    let res3 = verify_groth16_proof::<7>(&vk, &proof, &stale_inputs);
     assert!(res3.is_err(), "stale Merkle root must not verify");
 
     // ----- Negative: wrong note_use_tag (index 0) must be rejected -----
     let mut bad_nc = public_inputs;
     bad_nc[0][0] ^= 0x01;
-    let res4 = verify_groth16_proof::<8>(&vk, &proof, &bad_nc);
+    let res4 = verify_groth16_proof::<7>(&vk, &proof, &bad_nc);
     assert!(res4.is_err(), "tampered note_use_tag must not verify");
 
     // ----- S-01: substituted destination must be rejected -----
@@ -370,16 +360,16 @@ fn valid_spend_roundtrip() {
     // pubkey spans two field elements, and binding only one would leave 128
     // bits free.
     let mut redirected_lo = public_inputs;
-    redirected_lo[6][31] ^= 0x01;
+    redirected_lo[5][31] ^= 0x01;
     assert!(
-        verify_groth16_proof::<8>(&vk, &proof, &redirected_lo).is_err(),
+        verify_groth16_proof::<7>(&vk, &proof, &redirected_lo).is_err(),
         "a proof must not verify against a different destination (lo half)"
     );
 
     let mut redirected_hi = public_inputs;
-    redirected_hi[7][31] ^= 0x01;
+    redirected_hi[6][31] ^= 0x01;
     assert!(
-        verify_groth16_proof::<8>(&vk, &proof, &redirected_hi).is_err(),
+        verify_groth16_proof::<7>(&vk, &proof, &redirected_hi).is_err(),
         "a proof must not verify against a different destination (hi half)"
     );
 }

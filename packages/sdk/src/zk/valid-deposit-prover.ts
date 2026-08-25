@@ -31,8 +31,6 @@ export function nodeValidDepositProver(
         amount: inputs.amount.toString(),
         recoveryNonce: inputs.recoveryNonce.toString(),
         spendingKey: inputs.spendingKey.toString(),
-        ownerCommitmentBlinding:
-          inputs.ownerCommitmentBlinding.toString(),
         noteSecret: inputs.noteSecret.toString(),
       };
       const specifier = "snarkjs";

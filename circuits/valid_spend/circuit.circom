@@ -4,47 +4,39 @@ include "../../node_modules/circomlib/circuits/poseidon.circom";
 include "../../node_modules/circomlib/circuits/bitify.circom";
 include "../templates/merkle.circom";
 
-// VALID_SPEND  (v2 — inner_hash note construction)
+// VALID_SPEND
 //
 // Proves:
 //   1. Prover knows a note plaintext whose commitment is in the on-chain Merkle tree.
 //   2. Prover knows the spending key that owns the note.
-//   3. Nullifier is correctly derived from (spendingKey, innerHash).
-//   4. Amount is in [0, 2^64) — enforced by Num2Bits(64).
-//   5. noteUseTag is exposed as a public output so the on-chain withdraw
+//   3. Amount is in [0, 2^64) — enforced by Num2Bits(64).
+//   4. noteUseTag is exposed as a public output so the on-chain withdraw
 //      instruction can bind the caller-supplied handle to this proof, closing
 //      the "arbitrary note_commitment bypass" vulnerability. The tag, not the
 //      commitment: publishing the commitment here would relink the withdrawal
 //      to the note's Merkle leaf and to every earlier use of that note.
 //
-// Public inputs/outputs: EIGHT signals, with `noteUseTag` FIRST (it is an
+// Public inputs/outputs: SEVEN signals, with `noteUseTag` FIRST (it is an
 // output, and circom emits outputs ahead of inputs). The canonical, numbered
 // ordering lives beside the `component main` declaration at the bottom of this
 // file — see it there rather than trusting a second copy here, because a
 // duplicate list is exactly what went stale when S-01 added `recipient`.
 //
 // Private witnesses:
-//   spendingKey, ownerCommitmentBlinding, innerHash,
+//   spendingKey, innerHash,
 //   merklePath[depth], merkleIndices[depth]
 //
 // Domain tags — each Poseidon role gets a distinct constant first-input
 // to prevent cross-context second-preimage collisions.
 // Tag values are arbitrary non-zero field constants; they are committed
 // in the circuit so swapping roles would change the VK.
-//   DOMAIN_OWNER  = 1   (owner_commitment = Poseidon3(DOMAIN_OWNER, sk, r_owner))
+//   DOMAIN_OWNER_V2 = 32 (owner_commitment = Poseidon2(32, sk))
 //   DOMAIN_NOTE   = 2   (noteCommitment   = Poseidon6(DOMAIN_NOTE,  mint_lo, mint_hi, amount, owner, innerHash))
-//   DOMAIN_NULL   = 3   (nullifier        = Poseidon3(DOMAIN_NULL,  sk, innerHash))
 //   DOMAIN_NOTE_USE = 29 (noteUseTag      = Poseidon3(29, noteCommitment, innerHash))
-//
-// v2 change: the per-note (nonce, blindingR) pair collapses into a single
-// `innerHash`, and the nullifier anchors on `innerHash` (amount-independent)
-// rather than the commitment. Keeps the mint binding. See
-// crates/darkpool-crypto/src/{note,nullifier}.rs `*_v2`.
 
 template ValidSpend(merkleDepth) {
     // ----- Public inputs / outputs -----
     signal input  merkleRoot;
-    signal input  nullifier;
     signal input  tokenMint[2];     // [lo_u128, hi_u128]
     signal input  amount;
     // Destination the withdrawn SPL tokens must land in, as [lo_u128, hi_u128]
@@ -60,7 +52,6 @@ template ValidSpend(merkleDepth) {
 
     // ----- Private witnesses -----
     signal input spendingKey;
-    signal input ownerCommitmentBlinding;  // r_owner
     signal input innerHash;
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
@@ -72,11 +63,10 @@ template ValidSpend(merkleDepth) {
     component amtBits = Num2Bits(64);
     amtBits.in <== amount;
 
-    // ── owner_commitment = Poseidon(DOMAIN_OWNER, spendingKey, r_owner) ─────
-    component ownerHash = Poseidon(3);
-    ownerHash.inputs[0] <== 1;   // DOMAIN_OWNER
+    // ── owner_commitment = Poseidon2(DOMAIN_OWNER_V2, spendingKey) ──────────
+    component ownerHash = Poseidon(2);
+    ownerHash.inputs[0] <== 32;  // DOMAIN_OWNER_V2
     ownerHash.inputs[1] <== spendingKey;
-    ownerHash.inputs[2] <== ownerCommitmentBlinding;
     signal ownerCommit;
     ownerCommit <== ownerHash.out;
 
@@ -112,19 +102,12 @@ template ValidSpend(merkleDepth) {
         merkle.pathIndices[i]  <== merkleIndices[i];
     }
 
-    // ── nullifier = Poseidon(DOMAIN_NULL, spendingKey, innerHash) ───────────
-    component nullifierHash = Poseidon(3);
-    nullifierHash.inputs[0] <== 3;   // DOMAIN_NULL
-    nullifierHash.inputs[1] <== spendingKey;
-    nullifierHash.inputs[2] <== innerHash;
-    nullifier === nullifierHash.out;
-
     // ── Recipient binding (S-01) ────────────────────────────────────────────
     //
     // WHY THIS EXISTS. Before it, a VALID_SPEND proof authorised "destroy this
     // note for this amount of this mint" and said NOTHING about where the money
     // goes; the vault sent it wherever the instruction's account list pointed.
-    // The tuple (note_commitment, nullifier, merkle_root, amount, proof) was
+    // The tuple (note-use tag, merkle root, amount, proof) would otherwise be
     // therefore a BEARER INSTRUMENT — possession was authorisation, and the
     // legitimate owner held no cryptographic advantage over anyone else holding
     // the same bytes. Exploitable by front-running, and — needing no privileged
@@ -154,14 +137,13 @@ template ValidSpend(merkleDepth) {
 //
 //   0 noteUseTag  (output)
 //   1 merkleRoot
-//   2 nullifier
-//   3 tokenMint[0]  (lo)
-//   4 tokenMint[1]  (hi)
-//   5 amount
-//   6 recipient[0]  (lo)
-//   7 recipient[1]  (hi)
+//   2 tokenMint[0]  (lo)
+//   3 tokenMint[1]  (hi)
+//   4 amount
+//   5 recipient[0]  (lo)
+//   6 recipient[1]  (hi)
 //
 // `withdraw.rs` builds its public-input array in exactly this order and
 // `zk_spend_roundtrip.rs` pins it. Reordering the declarations above silently
 // permutes what the on-chain verifier checks.
-component main { public [merkleRoot, nullifier, tokenMint, amount, recipient] } = ValidSpend(20);
+component main { public [merkleRoot, tokenMint, amount, recipient] } = ValidSpend(20);

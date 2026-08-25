@@ -36,7 +36,6 @@ export {
 export {
   bn254ToBE32,
   deriveOrderId,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   deriveTradingKeyAtOffset,
   deriveViewingEncKeypair,

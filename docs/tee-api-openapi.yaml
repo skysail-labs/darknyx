@@ -28,9 +28,9 @@ openapi: 3.1.0
 #   * Transparency: `/transparency` is an unauthenticated convenience snapshot;
 #     clients independently verify its chain-derived and attestation fields.
 #
-# Versioning: this is the canonical-order-v5 / settlement-payload-v11 contract.
+# Versioning: this is the canonical-order-v5 / settlement-signature-v12 contract.
 # (order v5 dropped the dead `user_commitment` — audit 2026-07-25 T-07/PF-10.)
-# (payload v11 consumes inputs by unlinkable note-use tags and binds relock tags.)
+# (v12 rejects stale signatures across the note-lineage cryptographic cutover.)
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
@@ -605,7 +605,7 @@ components:
           type: string
           description: |
             32-byte hex — the collateral note's owner commitment
-            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
+            `Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`. Part of the
             input-note opening the in-TEE VALID_MATCH_BATCH prover needs
             (the circuit re-derives `note_commitment` from the opening).
             This is the only NOTE-BOUND owner identity an order carries, and
@@ -620,7 +620,8 @@ components:
           type: string
           description: |
             32-byte hex — the collateral note's amount-independent
-            `inner_hash`, which anchors both its commitment and nullifier.
+            `inner_hash`, which anchors both its commitment and unlinkable
+            note-use tag.
         merkle_root:
           type: string
           description: |

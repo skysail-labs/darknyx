@@ -164,7 +164,6 @@ function makeClient(
     connectionProvider: conn,
     providers,
     zkProver: prover,
-    ownerCommitmentBlinding: 1234n,
   });
 }
 

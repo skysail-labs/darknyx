@@ -2,7 +2,7 @@
 
 import { poseidonHashBytesBE } from "./note.js";
 
-export const DOMAIN_DEPOSIT_INNER = 27n;
+export const DOMAIN_DEPOSIT_INNER_V2 = 33n;
 
 function be32ToBigInt(value: Uint8Array, label: string): bigint {
   if (value.length !== 32) throw new Error(`${label} must be 32 bytes`);
@@ -12,7 +12,7 @@ function be32ToBigInt(value: Uint8Array, label: string): bigint {
 }
 
 /**
- * `Poseidon4(27, hidden_owner_commitment, public_recovery_nonce, note_secret)`.
+ * `Poseidon3(33, public_recovery_nonce, note_secret)`.
  *
  * The fourth input is what keeps the inner — and therefore the public note-use
  * tag derived from it — from being a function of on-chain data plus one
@@ -29,13 +29,11 @@ function be32ToBigInt(value: Uint8Array, label: string): bigint {
  * Poseidon is a different permutation per arity.
  */
 export function deriveDepositInnerHash(
-  ownerCommitment: Uint8Array,
   recoveryNonce: Uint8Array,
   noteSecret: Uint8Array,
 ): Promise<Uint8Array> {
   return poseidonHashBytesBE([
-    DOMAIN_DEPOSIT_INNER,
-    be32ToBigInt(ownerCommitment, "ownerCommitment"),
+    DOMAIN_DEPOSIT_INNER_V2,
     be32ToBigInt(recoveryNonce, "recoveryNonce"),
     be32ToBigInt(noteSecret, "noteSecret"),
   ]);

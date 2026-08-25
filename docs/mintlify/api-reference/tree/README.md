@@ -22,7 +22,7 @@ Two of the things you do on Darknyx require proving a note exists in the tree:
   the input proof you attach to a place-order request is generated against an
   inclusion path.
 - **Withdrawing.** Spending a note out of the pool proves its inclusion and
-  publishes its nullifier.
+  publishes its unlinkable note-use tag.
 
 The tree is sharded for settlement throughput; each shard has its own root.
 Reads take an optional `tree_id` (default `0`).

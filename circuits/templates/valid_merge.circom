@@ -18,12 +18,13 @@ include "./merkle.circom";
 // a Poseidon6 output, never 0). So K=4 can merge 2–4 notes, and the wallet pads;
 // orders larger than K notes chain merges.
 //
-// SHARED OWNER. A single (spendingKey, ownerCommitmentBlinding) proves all
-// active inputs belong to the same owner. Each slot has its own
+// SHARED OWNER. A single spendingKey proves all active inputs belong to the
+// same owner. Each slot has its own
 // (amount, innerHash, Merkle path).
 //
 // Domain tags (match VALID_SPEND / darkpool-crypto):
-//   DOMAIN_OWNER = 1, DOMAIN_NOTE = 2, DOMAIN_NOTE_USE = 29.
+//   DOMAIN_OWNER_V2 = 32, DOMAIN_NOTE = 2, DOMAIN_NOTE_USE = 29,
+//   DOMAIN_MERGE_INNER_V2 = 34.
 //
 // Public signals (snarkjs order: outputs first, then public inputs):
 //   outputCommitment, inputUseTags[0..K-1], merkleRoot, tokenMint[0], tokenMint[1]
@@ -62,18 +63,16 @@ template ValidMerge(K, merkleDepth) {
 
     // ----- Private witnesses -----
     signal input spendingKey;             // shared owner
-    signal input ownerCommitmentBlinding; // r_owner (shared)
     signal input isActive[K];             // 1 = real note, 0 = dummy padding
     signal input amount[K];
     signal input innerHash[K];
     signal input merklePath[K][merkleDepth];
     signal input merkleIndices[K][merkleDepth];
 
-    // ── Shared owner commitment = Poseidon(DOMAIN_OWNER, sk, r_owner) ──────────
-    component ownerHash = Poseidon(3);
-    ownerHash.inputs[0] <== 1; // DOMAIN_OWNER
+    // ── Shared owner commitment = Poseidon2(DOMAIN_OWNER_V2, sk) ──────────────
+    component ownerHash = Poseidon(2);
+    ownerHash.inputs[0] <== 32; // DOMAIN_OWNER_V2
     ownerHash.inputs[1] <== spendingKey;
-    ownerHash.inputs[2] <== ownerCommitmentBlinding;
     signal ownerCommit;
     ownerCommit <== ownerHash.out;
 
@@ -89,7 +88,7 @@ template ValidMerge(K, merkleDepth) {
     // is pinned by `merge_output_inner_hash` on the Rust and TS sides. Keeping
     // that derivation on commitments rather than tags is deliberate — it keeps
     // the change confined to what is published.
-    signal maskedCommitment[K];
+    signal maskedInner[K];
     signal computedRoot[K];
     signal contrib[K];
     signal sumAcc[K + 1];
@@ -133,7 +132,7 @@ template ValidMerge(K, merkleDepth) {
         computedRoot[i] <== rootFromLeaf[i].root;
         isActive[i] * (computedRoot[i] - merkleRoot) === 0;
 
-        maskedCommitment[i] <== isActive[i] * computedNote[i];
+        maskedInner[i] <== isActive[i] * innerHash[i];
 
         // useTag = Poseidon3(DOMAIN_NOTE_USE=29, noteCommitment, innerHash).
         // The commitment is an input, not just the inner: it is what binds
@@ -170,14 +169,14 @@ template ValidMerge(K, merkleDepth) {
     outputIsZero.out === 0;
 
     // CS-12: the merged note's inner is a pure function of the consumed
-    // commitments and active-slot bitmap, so restarts cannot reuse a daemon
-    // counter. K=2 is zero-padded to the same four-commitment domain as K=4.
-    //   Poseidon6(DOMAIN_MERGE_INNER=26, c0, c1, c2, c3, active_bitmap)
+    // private input inners and active-slot bitmap, so the descendant retains
+    // observer-secret entropy. K=2 is zero-padded to the same four-slot domain.
+    //   Poseidon6(DOMAIN_MERGE_INNER_V2=34, i0, i1, i2, i3, active_bitmap)
     component outputInner = Poseidon(6);
-    outputInner.inputs[0] <== 26;
+    outputInner.inputs[0] <== 34;
     for (var i = 0; i < 4; i++) {
         if (i < K) {
-            outputInner.inputs[i + 1] <== maskedCommitment[i];
+            outputInner.inputs[i + 1] <== maskedInner[i];
         } else {
             outputInner.inputs[i + 1] <== 0;
         }

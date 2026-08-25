@@ -4,7 +4,7 @@
 //!
 //! Only the role BYTES. They are consumed by VALID_MATCH_BATCH v3's Poseidon
 //! derivations — user outputs are `Poseidon3(24, consumed_input_inner, role)`
-//! and fee outputs are `Poseidon3(25, consumed_input_commitment, role)` — so
+//! and fee outputs are `Poseidon4(36, epoch_key, consumed_use_tag, role)` — so
 //! the tags themselves are still very much live protocol constants.
 //!
 //! # What was removed (audit 2026-07-25, S-06)

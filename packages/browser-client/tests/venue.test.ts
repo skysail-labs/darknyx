@@ -1,6 +1,10 @@
 import { sha256 } from "@noble/hashes/sha2";
 import { PublicKey } from "@solana/web3.js";
 import {
+  NUM_TEE_KEYS_OFFSET,
+  NUM_TREES_OFFSET,
+  TEE_PUBKEYS_OFFSET,
+  VAULT_CONFIG_ACCOUNT_LEN,
   marketConfigPda,
   vaultConfigPda,
   type TeeAttestation,
@@ -26,11 +30,11 @@ function u64(data: Uint8Array, offset: number, value: bigint): void {
 }
 
 function vaultConfig(): Uint8Array {
-  const data = new Uint8Array(1_264);
+  const data = new Uint8Array(VAULT_CONFIG_ACCOUNT_LEN);
   data.set(discriminator("VaultConfig"));
-  data.set(SIGNER.toBytes(), 40);
-  data[1_258] = 1;
-  data[1_259] = 1;
+  data.set(SIGNER.toBytes(), TEE_PUBKEYS_OFFSET);
+  data[NUM_TEE_KEYS_OFFSET] = 1;
+  data[NUM_TREES_OFFSET] = 1;
   return data;
 }
 

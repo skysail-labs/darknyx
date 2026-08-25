@@ -67,7 +67,6 @@ maybeDescribe("CVM API/WS surface", () => {
       trading_key_signature: "00".repeat(64),
       owner_commitment: z32,
       note_inner_hash: z32,
-      nullifier: z32,
       merkle_root: z32,
       valid_input_proof: "00".repeat(256),
       viewing_pubkey: hex(

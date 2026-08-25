@@ -29,7 +29,7 @@ The public transaction carries:
 - a field-safe recovery nonce; and
 - the Groth16 proof.
 
-The spending key, owner blinding, owner commitment, and inner hash remain private
+The spending key, owner commitment, note secret, and inner hash remain private
 proof witnesses. This closes the old deposit-boundary link where publishing one
 wallet-wide owner commitment could cluster every note made by that wallet.
 
@@ -83,11 +83,10 @@ semantics against retries or malformed clients.
 Deposits are recoverable from the encrypted master-seed backup plus finalized
 chain history. During recovery, the client:
 
-1. re-derives the wallet's hidden owner commitment from the seed;
+1. re-derives the wallet's hidden owner commitment from the spending key;
 2. reads the public recovery nonce from the deposit instruction;
 3. re-derives the note-specific secret from the seed and recovery nonce;
-4. derives the hidden deposit inner hash from the owner commitment, nonce, and
-   note secret; and
+4. derives the hidden deposit inner hash from the nonce and note secret; and
 5. reconstructs and verifies the note commitment.
 
 Keep a local note store for fast startup, but it is a cache rather than the only

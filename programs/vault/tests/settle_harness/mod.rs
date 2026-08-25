@@ -391,7 +391,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"darknyx-match-v11");
+    h.update(b"darknyx-match-v12");
     h.update(p.match_id);
     h.update(p.note_a_use_tag);
     h.update(p.note_b_use_tag);
@@ -600,18 +600,41 @@ pub mod vault_layout {
         + 32 * MAX_TEE_KEYS   // tee_pubkeys
         + 32                  // root_key
         + 32 * MERKLE_DEPTH; // zero_subtree_roots
+    pub const FEE_KEY_BINDING_OFFSET: usize = PROTOCOL_OWNER_OFFSET + 32;
+    pub const FEE_KEY_EPOCH_OFFSET: usize = FEE_KEY_BINDING_OFFSET + 32;
+    pub const FEE_RATE_BPS_OFFSET: usize = FEE_KEY_EPOCH_OFFSET + 8;
 }
 
 /// Overwrite `protocol_owner_commitment` + `fee_rate_bps` directly in the
 /// VaultConfig account. The on-chain program exposes no setter yet —
 /// tests use this to simulate governance having set the fee rate.
 pub fn set_vault_fee_config(h: &mut Harness, owner_commitment: [u8; 32], fee_rate_bps: u16) {
-    use vault_layout::PROTOCOL_OWNER_OFFSET;
+    use vault_layout::{
+        FEE_KEY_BINDING_OFFSET, FEE_KEY_EPOCH_OFFSET, FEE_RATE_BPS_OFFSET, PROTOCOL_OWNER_OFFSET,
+    };
     let (pda, _) = vault_config_pda(&h.vault_id);
     let mut acct = h.svm.get_account(&pda).expect("vault_config");
     acct.data[PROTOCOL_OWNER_OFFSET..PROTOCOL_OWNER_OFFSET + 32].copy_from_slice(&owner_commitment);
-    acct.data[PROTOCOL_OWNER_OFFSET + 32..PROTOCOL_OWNER_OFFSET + 34]
+    let mut fee_epoch_key = [0x08u8; 32];
+    fee_epoch_key[0] = 0;
+    let fee_key_binding = darkpool_crypto::fee_key_binding(&fee_epoch_key).unwrap();
+    acct.data[FEE_KEY_BINDING_OFFSET..FEE_KEY_BINDING_OFFSET + 32]
+        .copy_from_slice(&fee_key_binding);
+    acct.data[FEE_KEY_EPOCH_OFFSET..FEE_KEY_EPOCH_OFFSET + 8].copy_from_slice(&1u64.to_le_bytes());
+    acct.data[FEE_RATE_BPS_OFFSET..FEE_RATE_BPS_OFFSET + 2]
         .copy_from_slice(&fee_rate_bps.to_le_bytes());
+    h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Override only the governed fee-key binding/epoch in an initialized config.
+/// Proof-binding tests use this to separate fee-key failures from owner/rate
+/// failures.
+pub fn set_vault_fee_key_config(h: &mut Harness, binding: [u8; 32], epoch: u64) {
+    use vault_layout::{FEE_KEY_BINDING_OFFSET, FEE_KEY_EPOCH_OFFSET};
+    let (pda, _) = vault_config_pda(&h.vault_id);
+    let mut acct = h.svm.get_account(&pda).expect("vault_config");
+    acct.data[FEE_KEY_BINDING_OFFSET..FEE_KEY_BINDING_OFFSET + 32].copy_from_slice(&binding);
+    acct.data[FEE_KEY_EPOCH_OFFSET..FEE_KEY_EPOCH_OFFSET + 8].copy_from_slice(&epoch.to_le_bytes());
     h.svm.set_account(pda, acct).unwrap();
 }
 
@@ -933,8 +956,8 @@ pub fn build_settle_batched_ix_for(
 /// bypass proving), this drives the actual verifier.
 ///
 /// `proof_bytes` is the 256-byte Borsh `Groth16Proof`
-/// (`pi_a ‖ pi_b ‖ pi_c`); ix data = disc + merkle_root(32) +
-/// expiry_slot(u64 LE) + proof(256).
+/// (`pi_a ‖ pi_b ‖ pi_c`); the v2 instruction also carries the governed fee
+/// epoch and the fixed 272-byte encrypted recovery record.
 pub fn build_verify_match_batch_ix(
     h: &Harness,
     payer: &Pubkey,
@@ -943,6 +966,29 @@ pub fn build_verify_match_batch_ix(
     merkle_root: &[u8; 32],
     proof_bytes: &[u8; 256],
 ) -> Instruction {
+    build_verify_match_batch_ix_with_recovery(
+        h,
+        payer,
+        base_mint,
+        quote_mint,
+        merkle_root,
+        proof_bytes,
+        1,
+        [0u8; 272],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_verify_match_batch_ix_with_recovery(
+    h: &Harness,
+    payer: &Pubkey,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+    merkle_root: &[u8; 32],
+    proof_bytes: &[u8; 256],
+    fee_key_epoch: u64,
+    fee_recovery_ciphertext: [u8; 272],
+) -> Instruction {
     // S-04: no expiry_slot argument — the program derives the marker TTL.
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
@@ -950,6 +996,8 @@ pub fn build_verify_match_batch_ix(
     let mut data = anchor_disc("verify_match_batch").to_vec();
     data.extend_from_slice(merkle_root);
     data.extend_from_slice(proof_bytes);
+    data.extend_from_slice(&fee_key_epoch.to_le_bytes());
+    data.extend_from_slice(&fee_recovery_ciphertext);
     Instruction {
         program_id: h.vault_id,
         // Order: payer, vault_config, market_config, marker, system.
@@ -1235,10 +1283,9 @@ pub fn create_spl_token_account(
 }
 
 /// The secret openings behind a note — everything the VALID_SPEND circuit needs.
-/// `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`.
+/// `owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`.
 pub struct NoteSecret {
     pub spending_key: Fr,
-    pub r_owner: Fr,
     pub recovery_nonce: Fr,
     /// Seed-derived in the real client; a deterministic stand-in here. It is a
     /// PRIVATE VALID_DEPOSIT witness and the reason the deposit inner is not a
@@ -1249,26 +1296,16 @@ pub struct NoteSecret {
 }
 
 impl NoteSecret {
-    pub fn from_seeds(sk_seed: u8, r_owner_seed: u8, inner_seed: u8) -> Self {
+    pub fn from_seeds(sk_seed: u8, inner_seed: u8) -> Self {
         use darkpool_crypto::field::fr_from_uniform_bytes;
         use darkpool_crypto::poseidon::poseidon_hash;
         let spending_key = fr_from_uniform_bytes(&[sk_seed; 32]);
-        let r_owner = fr_from_uniform_bytes(&[r_owner_seed; 32]);
         let recovery_nonce = fr_from_uniform_bytes(&[inner_seed; 32]);
         let note_secret = fr_from_uniform_bytes(&[inner_seed ^ 0x5A; 32]);
-        let owner_commitment = poseidon_hash(&[Fr::from(1u64), spending_key, r_owner]).unwrap();
-        // Poseidon4 now — see darkpool-crypto/src/deposit.rs for why the
-        // fourth input exists.
-        let inner_hash = poseidon_hash(&[
-            Fr::from(27u64),
-            owner_commitment,
-            recovery_nonce,
-            note_secret,
-        ])
-        .unwrap();
+        let owner_commitment = poseidon_hash(&[Fr::from(32u64), spending_key]).unwrap();
+        let inner_hash = poseidon_hash(&[Fr::from(33u64), recovery_nonce, note_secret]).unwrap();
         Self {
             spending_key,
-            r_owner,
             recovery_nonce,
             note_secret,
             inner_hash,
@@ -1278,7 +1315,7 @@ impl NoteSecret {
 }
 
 /// A note deposited on-chain via a real `deposit` ix, carrying everything the
-/// subsequent real `withdraw` needs (its commitment, nullifier, and the
+/// subsequent real `withdraw` needs (its commitment, use tag, and the
 /// single-leaf Merkle witness + root).
 pub struct DepositedNote {
     pub commitment: [u8; 32],
@@ -1288,7 +1325,6 @@ pub struct DepositedNote {
     /// consumed once under each scheme, which is a double-spend; the two
     /// cross-path tests in `tee_forced_settle_batched.rs` are what catch that.
     pub use_tag: [u8; 32],
-    pub nullifier: [u8; 32],
     pub amount: u64,
     pub mint: Pubkey,
     pub tree_id: u8,
@@ -1312,7 +1348,6 @@ pub fn deposit_note(
 ) -> DepositedNote {
     use darkpool_crypto::field::fr_to_be_bytes;
     use darkpool_crypto::note::commitment_from_fields_v2;
-    use darkpool_crypto::poseidon::poseidon_hash;
 
     let owner_commitment_bytes = fr_to_be_bytes(&secret.owner_commitment);
     let inner_hash_bytes = fr_to_be_bytes(&secret.inner_hash);
@@ -1325,11 +1360,6 @@ pub fn deposit_note(
     )
     .expect("note fields are Fr-safe (Poseidon outputs)");
     let commitment_bytes = commitment.into_bytes();
-    // nullifier = Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)
-    let nullifier = fr_to_be_bytes(
-        &poseidon_hash(&[Fr::from(3u64), secret.spending_key, secret.inner_hash]).unwrap(),
-    );
-
     assert_eq!(
         tree_leaf_count(h, tree_id),
         0,
@@ -1398,7 +1428,6 @@ pub fn deposit_note(
     DepositedNote {
         commitment: commitment_bytes,
         use_tag,
-        nullifier,
         amount,
         mint: *mint,
         tree_id,
@@ -1440,7 +1469,6 @@ fn build_valid_deposit_proof(
            \"amount\": \"{amount}\",\n\
            \"recoveryNonce\": \"{nonce}\",\n\
            \"spendingKey\": \"{spending}\",\n\
-           \"ownerCommitmentBlinding\": \"{r_owner}\",\n\
            \"noteSecret\": \"{note_secret}\"\n\
          }}",
         commitment = fr_to_dec(&Fr::from_be_bytes_mod_order(commitment)),
@@ -1448,7 +1476,6 @@ fn build_valid_deposit_proof(
         mint_hi = fr_to_dec(&mint_hi),
         nonce = fr_to_dec(&secret.recovery_nonce),
         spending = fr_to_dec(&secret.spending_key),
-        r_owner = fr_to_dec(&secret.r_owner),
         note_secret = fr_to_dec(&secret.note_secret),
     );
     let tag: String = commitment[..6].iter().map(|b| format!("{b:02x}")).collect();
@@ -1514,11 +1541,10 @@ pub fn build_withdraw_tx(
     let (note_lock, _) = note_lock_pda(&h.vault_id, &note.use_tag);
     let (outstanding, _) = outstanding_mint_pda(h, &note.mint);
 
-    // withdraw(tree_id, note_use_tag, nullifier, merkle_root, amount, proof)
+    // withdraw(tree_id, note_use_tag, merkle_root, amount, proof)
     let mut data = anchor_disc("withdraw").to_vec();
     data.push(note.tree_id);
     data.extend_from_slice(&note.use_tag);
-    data.extend_from_slice(&note.nullifier);
     data.extend_from_slice(&note.merkle_root);
     data.extend_from_slice(&note.amount.to_le_bytes());
     // Groth16Proof Borsh = pi_a[64] ‖ pi_b[128] ‖ pi_c[64] (fixed arrays, no len prefix).
@@ -1598,25 +1624,21 @@ fn build_valid_spend_proof(
     let input_json = format!(
         "{{\n\
            \"merkleRoot\": \"{mr}\",\n\
-           \"nullifier\": \"{nl}\",\n\
            \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
            \"amount\": \"{amt}\",\n\
            \"spendingKey\": \"{sk}\",\n\
-           \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"innerHash\": \"{ih}\",\n\
            \"merklePath\": [{sibs}],\n\
            \"merkleIndices\": [{idxs}],\n\
            \"recipient\": [\"{dlo}\", \"{dhi}\"]\n\
          }}",
         mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.merkle_root)),
-        nl = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.nullifier)),
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
         dlo = fr_to_dec(&dest_lo),
         dhi = fr_to_dec(&dest_hi),
         amt = note.amount,
         sk = fr_to_dec(&note.secret.spending_key),
-        ocb = fr_to_dec(&note.secret.r_owner),
         ih = fr_to_dec(&note.secret.inner_hash),
         sibs = siblings_dec
             .iter()

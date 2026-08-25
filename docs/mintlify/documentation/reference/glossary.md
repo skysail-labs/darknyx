@@ -64,7 +64,7 @@ Its memory is encrypted and its keys are bound to its measured image. See
 ### Inner hash
 
 A note's amount-independent value that anchors both its commitment and its
-nullifier. Match outputs derive their inner hash from the consumed input inner,
+note-use tag. Match outputs derive their inner hash from the consumed input inner,
 so clients can verify and recover continuations without pre-supplied pools. See
 [Shielded Pool](../how-it-works/shielded-pool.md).
 
@@ -93,13 +93,6 @@ owner, amount, and token. Your balance is the set of notes you own. See
 The hash that represents a note on-chain. Opaque from the outside; only the owner
 can recognize and value it.
 
-### Nullifier
-
-A unique proof output derived from the spending key and a note's private inner
-hash. The shared on-chain double-spend guard is the unlinkable note-use tag used
-by withdrawal, settlement, and merge. See
-[Shielded Pool](../how-it-works/shielded-pool.md).
-
 ### Note-use tag
 
 The deterministic, circuit-derived public handle used when a note is locked or
@@ -120,7 +113,7 @@ expiry and is not part of trade finality. See
 
 ### Spending key
 
-The secret that determines note ownership, derives nullifiers, and authorizes
+The secret that determines note ownership and authorizes
 withdrawals. **Never** seen by the enclave. Distinct from the trading key. See
 [Account Model](../account/account-model.md).
 
@@ -152,6 +145,6 @@ moving custody. See [Deposit](../account/deposit.md).
 
 ### Vault
 
-The on-chain Solana program that holds custody, owns the note tree and nullifier
-set, and verifies settlement proofs. The only layer that can move tokens. See
+The on-chain Solana program that holds custody, owns the note tree and shared
+consume-once set, and verifies settlement proofs. The only layer that can move tokens. See
 [Trade Flow](../how-it-works/trade-flow.md).

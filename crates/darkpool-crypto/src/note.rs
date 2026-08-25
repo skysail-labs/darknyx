@@ -1,10 +1,9 @@
 //! UTXO note structure and commitment derivation.
 //!
-//! **The live construction is v2 (`inner_hash`)** — a SINGLE per-note blinding
-//! that anchors both the commitment AND the nullifier (see
-//! [`crate::nullifier::nullifier_v2`]). Domain
-//! tag DOMAIN_NOTE=2 is prepended to prevent second-preimage collisions with the
-//! owner-commitment and nullifier Poseidon uses (DOMAIN_OWNER=1, DOMAIN_NULL=3).
+//! The live construction uses a single per-note `inner_hash` that anchors both
+//! the commitment and its unlinkable note-use tag. Domain tag DOMAIN_NOTE=2 is
+//! prepended to prevent second-preimage collisions with the
+//! owner-commitment Poseidon uses (`DOMAIN_OWNER_V2=32`).
 //!
 //! ```text
 //!     C_v2(note) = Poseidon6(
@@ -12,7 +11,7 @@
 //!         token_mint_lo_u128,   // Solana pubkey low 128 bits
 //!         token_mint_hi_u128,   // Solana pubkey high 128 bits
 //!         amount_u64,
-//!         owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
+//!         owner_commitment_fr,  // = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)
 //!         inner_hash_fr,        // single per-note blinding (replaces nonce+blinding_r)
 //!     )
 //! ```
@@ -57,21 +56,25 @@ impl NoteCommitment {
     }
 }
 
-const DOMAIN_OWNER: u64 = 1;
+pub const DOMAIN_OWNER_V2: u64 = 32;
 const DOMAIN_NOTE: u64 = 2;
 
-/// Compute the owner commitment: Poseidon3(DOMAIN_OWNER, spending_key, r_owner).
-/// This is the value stored inside each note and constrained by VALID_SPEND.
-pub fn owner_commitment(spending_key: &Fr, r_owner: &Fr) -> Result<[u8; 32], CryptoError> {
-    let h = poseidon_hash(&[Fr::from(DOMAIN_OWNER), *spending_key, *r_owner])?;
+/// Compute the v2 owner commitment:
+/// `Poseidon2(DOMAIN_OWNER_V2, spending_key)`.
+///
+/// The spending key remains private; the hash is the wallet-wide owner field
+/// constrained by every note circuit. The retired `r_owner` was derived from
+/// the same seed and stored in the same keystore, so it was not an independent
+/// compromise barrier.
+pub fn owner_commitment(spending_key: &Fr) -> Result<[u8; 32], CryptoError> {
+    let h = poseidon_hash(&[Fr::from(DOMAIN_OWNER_V2), *spending_key])?;
     Ok(fr_to_be_bytes(&h))
 }
 
 /// v2 note commitment: `Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount,
 /// owner_commitment, inner_hash)`. A single `inner_hash` carries the per-note
 /// blinding (the retired v1 construction used a separate `nonce`/`blinding_r`
-/// pair) while keeping the mint binding. Pairs with
-/// [`crate::nullifier::nullifier_v2`].
+/// pair) while keeping the mint binding.
 ///
 /// `inner_hash` is a canonical BN254 `Fr` (32 BE bytes). Deposits derive it
 /// client-side; match and merge outputs constrain their own derivations.
@@ -117,6 +120,15 @@ mod tests {
         let c1 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
         let c2 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
         assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn owner_v2_matches_phase_zero_vector() {
+        let owner = owner_commitment(&Fr::from(1001u64)).unwrap();
+        assert_eq!(
+            hex::encode(owner),
+            "19a60cc2fc6bb80d7e36a941527f46d25403bc24035835e8d8be6b82119022c1"
+        );
     }
 
     #[test]

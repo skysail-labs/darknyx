@@ -261,6 +261,9 @@ pub struct SettleDriverConfig {
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
     pub protocol_owner_commitment: [u8; 32],
+    pub fee_epoch_key: [u8; 32],
+    pub fee_key_binding: [u8; 32],
+    pub fee_key_epoch: u64,
     /// Protocol fee rate (bps) — the circuit exact-fee public input
     /// (`VaultConfig.fee_rate_bps`, reconciled at boot).
     pub fee_rate_bps: u64,
@@ -489,6 +492,9 @@ async fn drive_batch(
         base_mint: driver.cfg.base_mint,
         quote_mint: driver.cfg.quote_mint,
         protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
+        fee_epoch_key: driver.cfg.fee_epoch_key,
+        fee_key_binding: driver.cfg.fee_key_binding,
+        fee_key_epoch: driver.cfg.fee_key_epoch,
         fee_rate_bps: driver.cfg.fee_rate_bps,
         price_scale: driver.cfg.price_scale,
         circuit_n: driver.cfg.circuit_n,
@@ -1104,6 +1110,9 @@ mod tests {
                 base_mint,
                 quote_mint,
                 protocol_owner_commitment: fr_safe(0x07),
+                fee_epoch_key: fr_safe(0x08),
+                fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+                fee_key_epoch: 1,
                 fee_rate_bps: 0,
                 price_scale: 1,
                 circuit_n: 2,
