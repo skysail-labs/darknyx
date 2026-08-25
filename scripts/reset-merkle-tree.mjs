@@ -43,9 +43,13 @@ const VAULT = new PublicKey(
 
 // `num_trees` byte offset inside VaultConfig data (after the 8-byte Anchor
 // disc): admin(32) + tee_pubkeys(16×32=512) + root_key(32)
-// + zero_subtree_roots(20×32=640) + protocol_owner(32) + fee_rate(2)
-// + num_tee_keys(1) = 1259.
-const NUM_TREES_OFFSET = 8 + 32 + 16 * 32 + 32 + 20 * 32 + 32 + 2 + 1;
+// + zero_subtree_roots(20×32=640) + protocol_owner(32)
+// + fee_key_binding(32) + fee_key_epoch(8) + fee_rate(2)
+// + num_tee_keys(1) = 1299. Keep this in lockstep with the generated account
+// layout fixture and packages/sdk/src/tee/vault-config.ts.
+const NUM_TREES_OFFSET =
+  8 + 32 + 16 * 32 + 32 + 20 * 32 + 32 + 32 + 8 + 2 + 1;
+const MAX_TREES = 16;
 
 const admin = await Keypair.fromSecretKey(
   new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
@@ -109,7 +113,10 @@ if (treeFlag !== -1) {
   }
   const numTrees =
     info.data.length > NUM_TREES_OFFSET ? info.data[NUM_TREES_OFFSET] : 1;
-  treeIds = Array.from({ length: Math.max(1, numTrees) }, (_, i) => i);
+  if (numTrees < 1 || numTrees > MAX_TREES) {
+    throw new Error(`vault_config num_trees out of range: ${numTrees}`);
+  }
+  treeIds = Array.from({ length: numTrees }, (_, i) => i);
 }
 
 for (const treeId of treeIds) {
