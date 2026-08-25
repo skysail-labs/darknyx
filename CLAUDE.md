@@ -297,6 +297,7 @@ RUN_DEVNET_E2E=1 \
 set -e
 cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd line
 bash scripts/check-compose-image-digests.sh          # CPU/GPU compose must use @sha256
+bash scripts/check-compose-secret-forwarding.sh      # fee key must cross compose + CI deploy boundaries
 bash scripts/check-icicle-cuda-arch-env.sh           # every CUDA build.rs reads the var the Dockerfile forwards
 bash scripts/check-brand-namespace.sh                # no stale pre-Darknyx namespaces
 node scripts/check-domain-registry.mjs               # authoritative Poseidon assignments + consumers
@@ -527,6 +528,10 @@ QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
+# Materialize this mode-0600 fragment from the sealed keyring exactly as
+# documented in docs/protocol-fee-recovery-runbook.md, then remove it after
+# Phala accepts the encrypted deployment.
+source .devnet/fee-key-deploy.env
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
 cat > .devnet/darknyx-deploy.env <<EOF
@@ -542,6 +547,7 @@ DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
 DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_TEE_FEE_EPOCH_KEY
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=$K
 DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1

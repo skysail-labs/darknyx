@@ -39,7 +39,9 @@
 #      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
-#   4. Add secrets `PHALA_CLOUD_API_KEY` and `HELIUS_API_KEY`.
+#   4. Add secrets `PHALA_CLOUD_API_KEY`, `HELIUS_API_KEY`, and
+#      `DARKNYX_NIGHTLY_FEE_EPOCH_KEY`. The fee key must be the 32-byte hex
+#      secret whose Poseidon binding is recorded in DEVNET_E2E_CONFIG_B64.
 # The K shard signers are deterministic per app_id; this workflow re-rotates +
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
@@ -93,6 +95,7 @@ jobs:
     env:
       HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
       CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
+      DARKNYX_NIGHTLY_FEE_EPOCH_KEY: ${{ secrets.DARKNYX_NIGHTLY_FEE_EPOCH_KEY }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -156,6 +159,10 @@ jobs:
         run: |
           test -n "$CVM" || { echo "::error::repo variable DARKNYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
           jq -e .baseMint.pubkey .devnet/e2e-config.json > /dev/null
+          printf '%s' "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" | grep -qE '^[0-9a-fA-F]{64}$' \
+            || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be a nonzero 32-byte hex secret"; exit 1; }
+          printf '%s' "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" | grep -qEv '^0{64}$' \
+            || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be nonzero"; exit 1; }
 
       # ── reset the on-chain tree FIRST so the CVM mirror cold-boots empty and
       #    our deposits land at leaf 0.. (cvm tests assert startCount == 0) ──
@@ -202,6 +209,7 @@ jobs:
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+            echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
           } > /tmp/darknyx.env
@@ -478,6 +486,7 @@ jobs:
               echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+              echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
               echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
             } > /tmp/darknyx.env
@@ -637,6 +646,7 @@ jobs:
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+            echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
           } > /tmp/darknyx-legacy.env
