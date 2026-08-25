@@ -159,9 +159,9 @@ jobs:
         run: |
           test -n "$CVM" || { echo "::error::repo variable DARKNYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
           jq -e .baseMint.pubkey .devnet/e2e-config.json > /dev/null
-          printf '%s' "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" | grep -qE '^[0-9a-fA-F]{64}$' \
+          [[ "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" =~ ^[0-9a-fA-F]{64}$ ]] \
             || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be a nonzero 32-byte hex secret"; exit 1; }
-          printf '%s' "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" | grep -qEv '^0{64}$' \
+          [[ ! "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" =~ ^0{64}$ ]] \
             || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be nonzero"; exit 1; }
 
       # ── reset the on-chain tree FIRST so the CVM mirror cold-boots empty and

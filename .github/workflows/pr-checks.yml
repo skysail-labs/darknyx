@@ -130,6 +130,7 @@ jobs:
               - 'Dockerfile*'
               - 'scripts/check-compose-image-digests.sh'
               - 'scripts/check-compose-secret-forwarding.sh'
+              - '.github/workflows/cvm-e2e.yml'
               - 'scripts/check-ratls-cutover.sh'
               - 'scripts/check-icicle-cuda-arch-env.sh'
               # And the workflow itself, so an edit that weakens a guard's
@@ -562,6 +563,13 @@ jobs:
         with:
           name: circuit-build
           path: circuits/build
+
+      # Fee-epoch recovery imports the collector source, whose package boundary
+      # resolves @darknyx/sdk through its emitted workspace entry point. A clean
+      # runner has no stale dist/, so build it before Vitest just as the local
+      # tests-inclusive gate does.
+      - name: Build SDK workspace entry point
+        run: node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.json
 
       # Run the entire SDK suite. With the circuit artefacts now in
       # place, the prover tests (`valid-input-prover`, `valid-create-prover`,

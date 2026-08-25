@@ -33,6 +33,7 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { requirePrivateRpcUrl } from "./private-rpc.mjs";
 
 // Collect signer args from argv (space-separated) and/or TEE_PUBKEYS
 // (comma-separated), in order — keys[j] is shard j's fee-payer/authority.
@@ -71,12 +72,7 @@ if (
   process.exit(1);
 }
 
-const RPC = process.env.SOLANA_RPC_URL;
-if (!RPC) {
-  throw new Error(
-    "SOLANA_RPC_URL is required (use the configured private RPC)",
-  );
-}
+const RPC = requirePrivateRpcUrl(process.env.SOLANA_RPC_URL);
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??

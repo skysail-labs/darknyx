@@ -32,6 +32,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  TransactionExpiredBlockheightExceededError,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
@@ -107,6 +108,26 @@ export const PASSPHRASE = cvmCredential(
 export const FEE_RATE_BPS = BigInt(
   process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30",
 );
+
+export async function landedSignatureAfterBlockheightExpiry(
+  connection: Pick<Connection, "getSignatureStatuses">,
+  error: unknown,
+): Promise<string | undefined> {
+  if (!(error instanceof TransactionExpiredBlockheightExceededError)) {
+    return undefined;
+  }
+  const response = await connection.getSignatureStatuses([error.signature], {
+    searchTransactionHistory: true,
+  });
+  const status = response.value[0];
+  if (!status) return undefined;
+  if (status.err) {
+    throw new Error(
+      `expired deposit transaction ${error.signature} landed with an error`,
+    );
+  }
+  return error.signature;
+}
 
 /** Per-run salt so persona seed-derived commitments are fresh each run — a
  * fixed seed can reproduce a deposited/consumed-note PDA on a second run,
@@ -633,11 +654,22 @@ export class CvmHarness {
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("Blockhash not found") || attempt === 3) {
+        const landed = await landedSignatureAfterBlockheightExpiry(
+          this.conn,
+          error,
+        );
+        if (landed) {
+          sig = landed;
+          break;
+        }
+        const retryable =
+          error instanceof TransactionExpiredBlockheightExceededError ||
+          message.includes("Blockhash not found");
+        if (!retryable || attempt === 3) {
           throw error;
         }
         console.warn(
-          `  · deposit RPC rejected an expired blockhash; retrying with a fresh transaction (${attempt}/3)`,
+          `  · deposit blockhash expired before landing; retrying with a fresh transaction (${attempt}/3)`,
         );
       }
     }

@@ -55,8 +55,8 @@ review, and ceremony.
 
 | ID | Severity | Status | Phase | Invariant restored | Circuit/wire impact | Next action |
 |---|---|---|---:|---|---|---|
-| PA-01 | High privacy | **Code complete** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Run the two-epoch finalized-chain recovery/spend drill and negative-linkability check in Phase 5. |
-| PA-02 | High privacy | **Code complete** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Exercise devnet merge and Phase 5 merge-then-order/recovery evidence. |
+| PA-01 | High privacy | **Code complete** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Two-epoch finalized recovery/spend passed; add and run the live legacy-dictionary observer-negative assertion, then record crash recovery and final bookkeeping. |
+| PA-02 | High privacy | **Code complete** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Devnet merge and CVM merge-then-order passed; add and run the live retired-inner/tag observer-negative assertion, then record crash recovery and final bookkeeping. |
 | PA-03 | Medium privacy/architecture | **Code complete** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Retain as code complete pending final external/release assurance. |
 | PA-04 | Low security / High volume cost | **Hosted validated** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Retain for final release assurance; hosted replay and exact 8-byte layouts passed. |
 | PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Exercise settlement-created continuation locks in the Phase 5 CVM run. |
@@ -78,7 +78,7 @@ review, and ceremony.
 | 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0` | complete; final external/release assurance remains |
 | 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
 | 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | **Merged; local gates passed** | PR #206 / `3e720377` | hosted/external gates remain |
-| 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending** | PR #207 / `9a2c9d48` | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; Phase 5 hosted rotation/recovery/spend evidence exists |
+| 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending** | PR #207 | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; Phase 5 hosted rotation/recovery/spend evidence exists |
 | 5 | `privacy/release-assurance` | devnet/CVM evidence and operational release assurance | **In progress; checkpoint recorded** | stacked branch `privacy/release-assurance` | principal local/devnet/CVM suites passed and the checkpoint CVM was safely stopped; PA-01/PA-02 observer-negative assertions, crash-recovery drill, and final bookkeeping remain |
 
 Phase 3 must not be split into independently deployable old/new semantics. It
@@ -394,6 +394,10 @@ All remain open:
 - [ ] Public Phase-2 ceremony and reproducible artifact verification complete.
 - [ ] Mainnet build excludes `devnet-admin`; program hash and all authorities
   independently verified.
+- [ ] Mainnet uses a distinct operations admin; independent attestation checks
+  are rehearsed by both the 3-of-5 operations and 4-of-7 cold quorums.
+- [ ] Per-MM execution-quality statistics are public and monitored for repeated
+  selection patterns consistent with a colluding matcher/market maker.
 
 No real-value deposit is permitted while any mandatory gate remains open.
 

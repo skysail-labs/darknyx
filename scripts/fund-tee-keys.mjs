@@ -29,6 +29,7 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { requirePrivateRpcUrl } from "./private-rpc.mjs";
 
 const raw = [
   ...process.argv.slice(2),
@@ -50,12 +51,7 @@ try {
   process.exit(1);
 }
 
-const RPC = process.env.SOLANA_RPC_URL;
-if (!RPC) {
-  throw new Error(
-    "SOLANA_RPC_URL is required (use the configured private RPC)",
-  );
-}
+const RPC = requirePrivateRpcUrl(process.env.SOLANA_RPC_URL);
 const FUNDER_KP =
   process.env.FUNDER_KEYPAIR ?? join(homedir(), ".config/solana/id.json");
 const TARGET_SOL = Number(process.env.FUND_TARGET_SOL ?? "2");

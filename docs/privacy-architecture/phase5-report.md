@@ -36,6 +36,14 @@ closure.
 - App ID: `app_9ca3cded105f16923afb0e3f62537882c14db637`.
 - Compose hash:
   `dda6a19ceecee3b8b262c9c43bf2bf4421bdf00ef07da412468eda34459905cf`.
+- A post-run `phala cvms get app_9ca3cded105f16923afb0e3f62537882c14db637
+  --json` control-plane readback reported that exact app ID and compose hash;
+  its deployed compose file named source tag `tee-v3-hardening-91` and pinned
+  the exact
+  `sha256:af1a31600f6a5cc9bc0de14df4609cdb73e87906ef7805b482d09360ce123422`
+  image. The same readback reported `status=stopped`, `in_progress=false`, and
+  `gpus=0`. This evidence comes from the deployed CVM record, not the deploy
+  command exit status.
 - The CVM was `tdx.xlarge` on prod9 with 8 vCPU, 16 GiB RAM, and zero
   GPUs. RA-TLS live validation passed 6 tests with 1 environment-gated skip.
 - All four enclave signers were rotated and funded. Rotation signature:
@@ -120,4 +128,9 @@ Resume these items on this branch before claiming Phase 5/6 completion:
 Independent privacy/circuit review, Phase-2 ceremony, mainnet-without-
 `devnet-admin` verification, authority/hash checks, and the post-ceremony CVM
 settlement remain Phase 7 external release gates regardless of the deferred
-focused work above.
+focused work above. Mainnet must initialize a distinct `operations_admin`
+instead of reusing the deployer or cold root/upgrade authority, and rehearse
+both the 3-of-5 operations quorum and 4-of-7 cold quorum with every signer
+independently verifying the TEE attestation. Per-MM execution-quality
+statistics must also be published and monitored so repeated selection of a
+colluding market maker is observable rather than hidden inside enclave policy.

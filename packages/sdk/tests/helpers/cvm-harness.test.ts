@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  TransactionExpiredBlockheightExceededError,
+} from "@solana/web3.js";
 
-import { CvmHarness, floorPriceToTick } from "./cvm-harness.js";
+import {
+  CvmHarness,
+  floorPriceToTick,
+  landedSignatureAfterBlockheightExpiry,
+} from "./cvm-harness.js";
 import { MerkleShadow } from "./merkle-shadow.js";
 
 function leaf(value: number): Uint8Array {
@@ -40,6 +48,41 @@ describe("floorPriceToTick", () => {
     expect(() => floorPriceToTick(4n, 5n)).toThrow(
       "tickSize exceeds the positive price",
     );
+  });
+});
+
+describe("deposit blockheight expiry reconciliation", () => {
+  it("preserves a submitted signature that already landed", async () => {
+    const error = new TransactionExpiredBlockheightExceededError("signature");
+    const connection = {
+      getSignatureStatuses: async () => ({
+        context: { slot: 1 },
+        value: [
+          {
+            slot: 1,
+            confirmations: null,
+            err: null,
+            confirmationStatus: "finalized" as const,
+          },
+        ],
+      }),
+    } as unknown as Pick<Connection, "getSignatureStatuses">;
+    await expect(
+      landedSignatureAfterBlockheightExpiry(connection, error),
+    ).resolves.toBe("signature");
+  });
+
+  it("allows a fresh retry only when the expired signature is absent", async () => {
+    const error = new TransactionExpiredBlockheightExceededError("signature");
+    const connection = {
+      getSignatureStatuses: async () => ({
+        context: { slot: 1 },
+        value: [null],
+      }),
+    } as unknown as Pick<Connection, "getSignatureStatuses">;
+    await expect(
+      landedSignatureAfterBlockheightExpiry(connection, error),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -84,5 +127,35 @@ describe("CvmHarness.createHydrated", () => {
         }),
       ),
     ).rejects.toThrow("non-contiguous");
+  });
+
+  it("rejects a contiguous replay whose advertised root is wrong", async () => {
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([1]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: leaf(10),
+        }),
+      ),
+    ).rejects.toThrow("replay root disagrees with the CVM");
+  });
+
+  it("rejects a mirrored count that disagrees with the shards", async () => {
+    const shadow = await MerkleShadow.create();
+    await shadow.append(leaf(9));
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([7]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: await shadow.computeRoot(),
+        }),
+      ),
+    ).rejects.toThrow("on-chain shards report");
   });
 });

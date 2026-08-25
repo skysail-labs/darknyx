@@ -134,6 +134,7 @@ maybeDescribe("CVM protocol fee recovery across key epochs", () => {
       let selected:
         | {
             stored: (typeof candidates)[number];
+            note: ReturnType<typeof openStoredFeeNote>;
             noteUseTag: Awaited<ReturnType<typeof deriveNoteUseTag>>;
             inclusion: {
               leaf_index: number;
@@ -180,14 +181,14 @@ maybeDescribe("CVM protocol fee recovery across key epochs", () => {
           merkle_root: string;
           siblings: string[];
         };
-        selected = { stored, noteUseTag, inclusion };
+        selected = { stored, note, noteUseTag, inclusion };
         break;
       }
       if (!selected) {
         throw new Error(`epoch ${epoch} has no unconsumed recovered fee note`);
       }
 
-      const note = openStoredFeeNote(selected.stored);
+      const { note } = selected;
       const mint = new PublicKey(note.tokenMint);
       const destination = await associatedTokenAddress(mint, payer.publicKey);
       const { inclusion } = selected;

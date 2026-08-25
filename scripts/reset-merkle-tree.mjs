@@ -33,22 +33,17 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { requirePrivateRpcUrl } from "./private-rpc.mjs";
 
-const RPC = process.env.SOLANA_RPC_URL;
-if (!RPC) {
-  throw new Error(
-    "SOLANA_RPC_URL is required (use the configured private RPC)",
-  );
-}
+const RPC = requirePrivateRpcUrl(process.env.SOLANA_RPC_URL);
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-// Consume the fixture generated from the Rust account struct rather than
-// duplicating a byte offset here. A previous literal survived a VaultConfig
-// field insertion and made this script interpret fee-key bytes as shard count.
+// StaleLayoutDecode: consume the generated Rust layout so fee-key bytes can
+// never be interpreted as `num_trees`.
 const vaultLayout = JSON.parse(
   readFileSync("programs/vault/account-layout.json", "utf8"),
 ).accounts?.VaultConfig;

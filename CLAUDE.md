@@ -529,8 +529,13 @@ ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 # Materialize this mode-0600 fragment from the sealed keyring exactly as
-# documented in docs/protocol-fee-recovery-runbook.md, then remove it after
-# Phala accepts the encrypted deployment.
+# documented in docs/protocol-fee-recovery-runbook.md. Both plaintext fragments
+# are removed after success, failure, or interruption.
+cleanup_deploy_secrets() {
+  rm -P .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env 2>/dev/null \
+    || rm -f .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env
+}
+trap cleanup_deploy_secrets EXIT HUP INT TERM
 source .devnet/fee-key-deploy.env
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
@@ -552,6 +557,9 @@ DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=$K
 DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1
 EOF
+# Run `phala deploy ... -e .devnet/darknyx-deploy.env`, then:
+cleanup_deploy_secrets
+trap - EXIT HUP INT TERM
 ```
 
 A production boot rejects the public `darknyx-test-*` credentials. Keep the fresh
