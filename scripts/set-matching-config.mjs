@@ -65,9 +65,15 @@ if (owner.length !== 32)
 const feeKeyBindingHex =
   process.env.FEE_KEY_BINDING_HEX ?? cfg.protocol.feeKeyBindingHex;
 const feeKeyBinding = Buffer.from(feeKeyBindingHex ?? "", "hex");
-const feeKeyEpoch = BigInt(
-  process.env.FEE_KEY_EPOCH ?? cfg.protocol.feeKeyEpoch ?? "0",
-);
+const feeKeyEpochValue =
+  process.env.FEE_KEY_EPOCH ?? cfg.protocol.feeKeyEpoch ?? "0";
+if (
+  typeof feeKeyEpochValue === "number" &&
+  !Number.isSafeInteger(feeKeyEpochValue)
+) {
+  throw new Error("numeric fee key epoch must be a safe integer");
+}
+const feeKeyEpoch = BigInt(feeKeyEpochValue);
 if (feeKeyBinding.length !== 32 || feeKeyBinding.equals(Buffer.alloc(32))) {
   throw new Error("fee key binding must be a nonzero 32-byte hex value");
 }

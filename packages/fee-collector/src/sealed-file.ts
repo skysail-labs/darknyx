@@ -4,14 +4,7 @@ import {
   randomBytes,
   scryptSync,
 } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  readFile,
-  rename,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, basename, join } from "node:path";
 
 const PROFILE = "scrypt-n17-r8-p1-v1" as const;
@@ -152,12 +145,20 @@ export async function writeSealedJson(
       dirname(path),
       `.${basename(path)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
     );
-    await writeFile(temporary, `${JSON.stringify(envelope)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
+    const temporaryFile = await open(temporary, "wx", 0o600);
+    try {
+      await temporaryFile.writeFile(`${JSON.stringify(envelope)}\n`, "utf8");
+      await temporaryFile.sync();
+    } finally {
+      await temporaryFile.close();
+    }
     await rename(temporary, path);
+    const directory = await open(dirname(path), "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
     temporary = null;
   } finally {
     if (temporary) await unlink(temporary).catch(() => undefined);

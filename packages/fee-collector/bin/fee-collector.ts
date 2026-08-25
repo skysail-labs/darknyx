@@ -169,6 +169,7 @@ async function recover(flags: Flags): Promise<void> {
   ]);
   const rpcUrl = required(flags, "--rpc-url");
   const programId = required(flags, "--program-id");
+  const output = required(flags, "--output");
   const since = parseU64(flags.get("--since-slot") ?? "0", "since-slot", true);
   if (since > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error("since-slot exceeds the JavaScript safe-integer range");
@@ -188,7 +189,27 @@ async function recover(flags: Flags): Promise<void> {
     keyForEpoch: feeKeyProvider(keyring),
     resolveMarket: makeFinalizedMarketResolver(rpcUrl, programId),
   });
-  const endSlot = transactions.at(-1)?.slot ?? Number(since);
+  const reasons: Record<string, number> = {};
+  for (const issue of result.unresolved) {
+    reasons[issue.reason] = (reasons[issue.reason] ?? 0) + 1;
+  }
+  const summary = {
+    command: "recover",
+    finalizedTransactions: transactions.length,
+    recoveredNotes: result.notes.length,
+    skippedUnsettledSlots: result.skippedUnsettledSlots,
+    unresolved: result.unresolved.length,
+    unresolvedReasons: reasons,
+  };
+  if (result.unresolved.length > 0) {
+    console.log(JSON.stringify(summary));
+    process.exitCode = 2;
+    return;
+  }
+  const endSlot = transactions.reduce(
+    (maximum, transaction) => Math.max(maximum, transaction.slot),
+    Number(since),
+  );
   const inventory = buildFeeInventory({
     programId,
     recoveryStartSlot: Number(since),
@@ -196,25 +217,11 @@ async function recover(flags: Flags): Promise<void> {
     notes: result.notes,
   });
   await writeFeeInventory(
-    required(flags, "--output"),
+    output,
     inventory,
     envSecret("DARKNYX_FEE_INVENTORY_PASSPHRASE"),
   );
-  const reasons: Record<string, number> = {};
-  for (const issue of result.unresolved) {
-    reasons[issue.reason] = (reasons[issue.reason] ?? 0) + 1;
-  }
-  console.log(
-    JSON.stringify({
-      command: "recover",
-      finalizedTransactions: transactions.length,
-      recoveredNotes: result.notes.length,
-      skippedUnsettledSlots: result.skippedUnsettledSlots,
-      unresolved: result.unresolved.length,
-      unresolvedReasons: reasons,
-    }),
-  );
-  if (result.unresolved.length > 0) process.exitCode = 2;
+  console.log(JSON.stringify(summary));
 }
 
 async function main(): Promise<void> {

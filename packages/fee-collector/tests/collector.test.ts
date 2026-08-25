@@ -122,14 +122,19 @@ interface EpochFixture {
 async function epochFixture(
   epoch: bigint,
   startSlot: number,
-  options: { tamperCiphertext?: boolean; wrongCommitment?: boolean } = {},
+  options: {
+    tamperCiphertext?: boolean;
+    wrongCommitment?: boolean;
+    zeroBaseWithCommitment?: boolean;
+    protocolOwner?: Uint8Array;
+  } = {},
 ): Promise<EpochFixture> {
   const epochKey = field(Number(epoch + 20n));
   const binding = await deriveFeeKeyBinding(epochKey);
   const owner = field(25);
   const buyerTag = field(Number(epoch + 30n));
   const sellerTag = field(Number(epoch + 40n));
-  const baseAmount = 7n + epoch;
+  const baseAmount = options.zeroBaseWithCommitment ? 0n : 7n + epoch;
   const quoteAmount = 11n + epoch;
   const baseInner = await deriveMatchFeeInner(
     epochKey,
@@ -223,7 +228,7 @@ async function epochFixture(
       transaction(
         `config-${epoch}`,
         startSlot,
-        configData(owner, binding, epoch),
+        configData(options.protocolOwner ?? owner, binding, epoch),
       ),
       verify,
       settle,
@@ -252,6 +257,23 @@ describe("finalized-chain protocol fee recovery", () => {
     expect(result.notes.map((note) => note.amount)).toEqual([8n, 12n, 9n, 13n]);
     expect(result.notes.map((note) => note.epoch)).toEqual([1n, 1n, 2n, 2n]);
     expect(result.skippedUnsettledSlots).toBe(2);
+    expect(result.notes[0]).toMatchObject({
+      epoch: 1n,
+      verifySignature: "verify-1",
+      settleSignature: "settle-1",
+      matchIndex: 0,
+      side: "base",
+      amount: 8n,
+      treeId: 0,
+      leafIndex: 12n,
+    });
+    expect(result.notes[0].tokenMint).toEqual(MARKET.baseMint);
+    expect(result.notes[1]).toMatchObject({
+      side: "quote",
+      amount: 12n,
+      leafIndex: 13n,
+    });
+    expect(result.notes[1].tokenMint).toEqual(MARKET.quoteMint);
   });
 
   it("reports a missing epoch key instead of inventing an opening", async () => {
@@ -333,5 +355,91 @@ describe("finalized-chain protocol fee recovery", () => {
     expect(result.unresolved).toEqual([]);
     expect(result.notes).toHaveLength(2);
     expect(result.skippedUnsettledSlots).toBe(3);
+  });
+
+  it("reports missing config, epoch drift, and unavailable market data", async () => {
+    const fixture = await epochFixture(7n, 90);
+    const missingConfig = await recoverProtocolFees({
+      transactions: [fixture.verify, fixture.settle],
+      programId: PROGRAM,
+      keyForEpoch: () => fixture.key,
+      resolveMarket,
+    });
+    expect(missingConfig.unresolved.map((item) => item.reason)).toContain(
+      "missing_protocol_config",
+    );
+
+    const mismatchedConfig = transaction(
+      "config-mismatch",
+      89,
+      configData(field(25), fixture.key.binding, 8n),
+    );
+    const epochMismatch = await recoverProtocolFees({
+      transactions: [mismatchedConfig, fixture.verify, fixture.settle],
+      programId: PROGRAM,
+      keyForEpoch: () => fixture.key,
+      resolveMarket,
+    });
+    expect(epochMismatch.unresolved.map((item) => item.reason)).toContain(
+      "epoch_mismatch",
+    );
+
+    const unavailable = await recoverProtocolFees({
+      transactions: fixture.transactions,
+      programId: PROGRAM,
+      keyForEpoch: () => fixture.key,
+      resolveMarket: async () => {
+        throw new Error("transient RPC failure");
+      },
+    });
+    expect(unavailable.unresolved.map((item) => item.reason)).toContain(
+      "market_config_unavailable",
+    );
+  });
+
+  it("reports malformed settlement binding and impossible zero-fee outputs", async () => {
+    const malformed = await epochFixture(8n, 100);
+    const matchIndexOffset =
+      malformed.settle.instructions[0].data.length - 4 * 32 - 1;
+    malformed.settle.instructions[0].data[matchIndexOffset] = 1;
+    const invalidBinding = await recoverProtocolFees({
+      transactions: malformed.transactions,
+      programId: PROGRAM,
+      keyForEpoch: () => malformed.key,
+      resolveMarket,
+    });
+    expect(invalidBinding.unresolved.map((item) => item.reason)).toContain(
+      "invalid_settlement_binding",
+    );
+
+    const impossibleZero = await epochFixture(9n, 110, {
+      zeroBaseWithCommitment: true,
+    });
+    const zeroResult = await recoverProtocolFees({
+      transactions: impossibleZero.transactions,
+      programId: PROGRAM,
+      keyForEpoch: () => impossibleZero.key,
+      resolveMarket,
+    });
+    expect(zeroResult.unresolved.map((item) => item.reason)).toContain(
+      "commitment_mismatch",
+    );
+  });
+
+  it("records non-canonical owner fields as unresolved instead of aborting", async () => {
+    const fixture = await epochFixture(10n, 120, {
+      protocolOwner: new Uint8Array(32).fill(0xff),
+    });
+    const result = await recoverProtocolFees({
+      transactions: fixture.transactions,
+      programId: PROGRAM,
+      keyForEpoch: () => fixture.key,
+      resolveMarket,
+    });
+    expect(result.notes).toEqual([]);
+    expect(result.unresolved.map((item) => item.reason)).toEqual([
+      "commitment_mismatch",
+      "commitment_mismatch",
+    ]);
   });
 });

@@ -37,11 +37,17 @@ describe("finalized settlement batch binding", () => {
     const value = payload();
     const siblings = [10, 11, 12, 13].map((item) => bytes(32, item));
     const leaf = await computeSettlementBatchLeaf(value);
+    expect(Buffer.from(leaf).toString("hex")).toBe(
+      "227bfaf15070d46854c20e13ab209066649c349b6c9ea08b9342b6699623f51a",
+    );
     const first = await computeSettlementBatchRoot({
       leaf,
       matchIndex: 3,
       siblings,
     });
+    expect(Buffer.from(first).toString("hex")).toBe(
+      "19ce7fa75f6c9217e42bc2a7659e03583eb481248f2b6fd628bd0495cbcb19c2",
+    );
     expect(
       await computeSettlementBatchRoot({ leaf, matchIndex: 3, siblings }),
     ).toEqual(first);

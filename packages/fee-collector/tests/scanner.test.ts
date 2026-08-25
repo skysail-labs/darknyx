@@ -35,6 +35,10 @@ describe("Helius finalized vault-history scanner", () => {
                     message: {
                       instructions: [
                         {
+                          programId: "system-program",
+                          parsed: { type: "transfer" },
+                        },
+                        {
                           programId: "vault-program",
                           accounts: ["a", "b", "c"],
                           data: base58Encode(instructionData),
@@ -81,7 +85,7 @@ describe("Helius finalized vault-history scanner", () => {
     expect(result).toHaveLength(1);
     expect(
       result[0].instructions.map((instruction) => instruction.data),
-    ).toEqual([instructionData, anchorDiscriminator("set_protocol_config")]);
+    ).toEqual([anchorDiscriminator("set_protocol_config"), instructionData]);
     const firstRequest = JSON.parse(String(fetchFn.mock.calls[0][1]?.body)) as {
       params: [string, Record<string, unknown>];
     };
@@ -101,25 +105,99 @@ describe("Helius finalized vault-history scanner", () => {
 
   it("rejects malformed RPC responses without echoing the credentialed URL", async () => {
     const rpcUrl = "https://example.invalid/?api-key=do-not-log";
+    const error = await scanFinalizedVaultHistory({
+      rpcUrl,
+      programId: "vault-program",
+      retryDelayMs: 0,
+      fetchFn: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("bad", { status: 503 })),
+    }).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "finalized history RPC returned HTTP 503",
+    );
+    expect((error as Error).message).not.toContain("do-not-log");
+  });
+
+  it("retries transient responses and rejects a cursor that does not advance", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            result: { data: [], paginationToken: "stuck" },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            result: { data: [], paginationToken: "stuck" },
+          }),
+        ),
+      );
     await expect(
       scanFinalizedVaultHistory({
-        rpcUrl,
+        rpcUrl: "https://example.invalid/?api-key=secret",
         programId: "vault-program",
-        fetchFn: vi
-          .fn<typeof fetch>()
-          .mockResolvedValue(new Response("bad", { status: 503 })),
+        retryDelayMs: 0,
+        fetchFn,
       }),
-    ).rejects.toThrow("finalized history RPC returned HTTP 503");
-    try {
-      await scanFinalizedVaultHistory({
-        rpcUrl,
+    ).rejects.toThrow(/cursor did not advance/);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails closed when a successful vault instruction is malformed", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          result: {
+            data: [
+              {
+                slot: 11,
+                transaction: {
+                  signatures: ["signature-1"],
+                  message: {
+                    instructions: [{ programId: "vault-program", data: "1" }],
+                  },
+                },
+                meta: { err: null },
+              },
+            ],
+            paginationToken: null,
+          },
+        }),
+      ),
+    );
+    await expect(
+      scanFinalizedVaultHistory({
+        rpcUrl: "https://example.invalid",
         programId: "vault-program",
-        fetchFn: vi
-          .fn<typeof fetch>()
-          .mockResolvedValue(new Response("bad", { status: 503 })),
-      });
-    } catch (error) {
-      expect((error as Error).message).not.toContain("do-not-log");
-    }
+        fetchFn,
+      }),
+    ).rejects.toThrow(/malformed vault instruction/);
+  });
+
+  it("bounds a hung archival request", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(
+      async (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    await expect(
+      scanFinalizedVaultHistory({
+        rpcUrl: "https://example.invalid",
+        programId: "vault-program",
+        fetchFn,
+        retryDelayMs: 0,
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow(/transport failed after 4 attempts/);
+    expect(fetchFn).toHaveBeenCalledTimes(4);
   });
 });

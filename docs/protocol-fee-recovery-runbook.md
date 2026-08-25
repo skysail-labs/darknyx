@@ -41,8 +41,9 @@ The collector accepts a note only after it independently:
 A nonzero encrypted slot with no finalized Tx D minted no fee note and is
 counted as skipped. Missing history, keys, configuration, events, or any
 cryptographic mismatch is an unresolved record and makes the command exit
-nonzero. A partial inventory is written for investigation but must never be
-treated as a complete protocol balance.
+nonzero. The collector refuses to write an inventory when any unresolved
+record exists, so an encrypted inventory always represents a complete scan of
+its recorded slot range.
 
 ## 2. Build and secret handling
 
@@ -63,7 +64,8 @@ export DARKNYX_FEE_INVENTORY_PASSPHRASE='<distinct password>'
 ```
 
 Keyrings and recovered inventories use a versioned AES-256-GCM envelope with a
-fixed scrypt profile (`N=2^17, r=8, p=1`) and mode `0600`. Writes are atomic.
+fixed scrypt profile (`N=2^17, r=8, p=1`) and mode `0600`. Writes are atomic and
+flush both file contents and the containing directory before success returns.
 The collector rejects symlinks, malformed profiles, unknown fields, duplicate
 commitments, and authentication failures. Application output contains only
 public epochs, bindings, and counts—never keys, inners, amounts, or credentialed
@@ -118,7 +120,9 @@ proved under the old epoch.
    ```
 
 3. Submit `set_protocol_config` through the operations authority with the
-   printed **public** binding and epoch. On devnet the maintained helper is:
+   printed **public** binding and epoch. Mainnet initialization must establish
+   a distinct operations authority first: it cannot be the deployer key or the
+   cold root/upgrade vault. On devnet the maintained helper is:
 
    ```sh
    SOLANA_RPC_URL="$HELIUS" \
@@ -141,8 +145,11 @@ proved under the old epoch.
 
 6. Incorporate that fragment into the encrypted Phala `-e` deployment file,
    deploy the digest-pinned image, and securely remove the plaintext deployment
-   fragments after Phala accepts them.
-7. Cold-boot, verify the CVM's strict finalized-governance binding check, run a
+   fragments on success, failure, or interruption.
+7. Read the image digest and compose measurement reported by the deployed CVM,
+   compare both with the approved values, and record the comparison. A
+   successful deploy command is not artifact verification.
+8. Cold-boot, verify the CVM's strict finalized-governance binding check, run a
    nonzero-fee settlement, and only then resume intake.
 
 The keyring retains every older epoch marked `retired`; retirement means “do not
@@ -178,7 +185,25 @@ the backed-up protocol-owner spending key, create the ordinary proof-backed
 withdraw/merge instruction through the SDK, and verify the commitment and use
 tag before signing.
 
-## 6. Mandatory recovery drill
+## 6. Release and rehearsal gates
+
+Real-value deposits remain forbidden while any mandatory audit, ceremony,
+authority, recovery, or deployment-verification gate is open. A billable CVM
+must not start until the relevant local and devnet gates have passed.
+
+Before a recovery rehearsal:
+
+1. run the maintained local LiteSVM custody and proof suites;
+2. after any program or verifying-key change, reset every devnet Merkle shard;
+3. run the VALID_DEPOSIT deposit/withdraw drill with `RUN_DEVNET_DW=1`;
+4. run one focused `cvm-settle-e2e` settlement before the two-epoch drill;
+5. verify the deployed digest and compose measurement from the running CVM;
+6. rehearse the 3-of-5 operations path and the 4-of-7 cold root/upgrade path;
+   and
+7. require every participating signer to independently verify the TEE
+   attestation and record that evidence before approving a rotation.
+
+## 7. Mandatory recovery drill
 
 Before mainnet and after every collector, key schema, fee formula, settlement
 wire, or governance-layout change:
@@ -193,12 +218,13 @@ wire, or governance-layout change:
 8. repeat with a missing old key and one tampered record, requiring loud
    unresolved results and no invented openings.
 
-Record proposal and transaction signatures, slots, epochs, bindings, image
-digest, compose hash, recovered/skipped/unresolved counts, and spend
-signatures. Never record the secret keys, decrypted amounts, inners, or RPC API
-key.
+Record proposal and transaction signatures, slots, epochs, bindings, verified
+image digest, verified compose hash, recovered/skipped/unresolved counts, and
+spend signatures. Never record the secret keys, decrypted amounts, inners, or
+RPC API key. Drain the venue at the end, require `safe_to_stop=true`, stop the
+CPU CVM, and verify that no billable instance remains running.
 
-## 7. Disaster recovery
+## 8. Disaster recovery
 
 - **Primary keyring lost:** restore the verified offline keyring to a new
   mode-0600 path, verify every public binding against finalized governance, and

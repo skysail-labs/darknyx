@@ -402,17 +402,24 @@ export async function recoverProtocolFees(params: {
           unresolved(issues, eventContext, "missing_settlement_event");
           continue;
         }
-        const innerHash = await deriveMatchFeeInner(
-          key.key,
-          side.useTag,
-          side.role,
-        );
-        const expected = await noteCommitmentV2({
-          tokenMint: side.mint,
-          amount: side.amount,
-          ownerCommitment: bytesToBigIntBE(verify.protocol.ownerCommitment),
-          innerHash: bytesToBigIntBE(innerHash),
-        });
+        let innerHash: Uint8Array;
+        let expected: Uint8Array;
+        try {
+          innerHash = await deriveMatchFeeInner(
+            key.key,
+            side.useTag,
+            side.role,
+          );
+          expected = await noteCommitmentV2({
+            tokenMint: side.mint,
+            amount: side.amount,
+            ownerCommitment: bytesToBigIntBE(verify.protocol.ownerCommitment),
+            innerHash: bytesToBigIntBE(innerHash),
+          });
+        } catch {
+          unresolved(issues, eventContext, "commitment_mismatch");
+          continue;
+        }
         if (!same(expected, side.commitment)) {
           unresolved(issues, eventContext, "commitment_mismatch");
           continue;

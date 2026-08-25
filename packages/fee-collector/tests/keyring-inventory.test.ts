@@ -12,6 +12,7 @@ import {
   readFeeInventory,
   rotateFeeKeyring,
   saveFeeKeyring,
+  validateFeeInventory,
   verifyFeeKeyringBackup,
   writeFeeInventory,
 } from "../src/index.js";
@@ -76,7 +77,8 @@ describe("fee epoch key custody", () => {
     const envelope = JSON.parse(await readFile(path, "utf8")) as {
       ciphertext: string;
     };
-    envelope.ciphertext = `${envelope.ciphertext.slice(0, -2)}00`;
+    const suffix = envelope.ciphertext.endsWith("00") ? "01" : "00";
+    envelope.ciphertext = `${envelope.ciphertext.slice(0, -2)}${suffix}`;
     await writeFile(path, JSON.stringify(envelope), { mode: 0o600 });
     await expect(loadFeeKeyring(path, PASSPHRASE)).rejects.toThrow(
       /authentication failed/,
@@ -112,5 +114,16 @@ describe("encrypted recovered fee inventory", () => {
         notes: [note, { ...note, side: "quote" }],
       }),
     ).toThrow(/duplicate commitment/);
+  });
+
+  it("rejects the reserved zero fee epoch at the inventory boundary", () => {
+    const inventory = buildFeeInventory({
+      programId: "vault-program",
+      recoveryStartSlot: 10,
+      recoveryEndSlot: 20,
+      notes: [recoveredNote()],
+    });
+    inventory.notes[0].epoch = "0";
+    expect(() => validateFeeInventory(inventory)).toThrow(/nonzero u64/);
   });
 });

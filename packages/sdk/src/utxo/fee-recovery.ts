@@ -58,6 +58,10 @@ function recoveryKey(epochKey: Uint8Array, epoch: bigint): Uint8Array {
 }
 
 function recoveryNonce(batchRoot: Uint8Array, epoch: bigint): Uint8Array {
+  // AEAD invariant: a (batchRoot, epoch) tuple is single-use. Settlement
+  // retries must reuse the existing ciphertext. Any changed fee amounts require
+  // a newly derived batch root before encryption, otherwise the deterministic
+  // XChaCha20 nonce would be reused under the same epoch key.
   return sha256
     .create()
     .update(NONCE_DOMAIN)

@@ -100,7 +100,9 @@ function validateStoredNote(value: unknown): StoredFeeNote {
   ) {
     throw new Error("malformed fee inventory note");
   }
-  parseU64(note.epoch, "fee epoch");
+  if (parseU64(note.epoch, "fee epoch") === 0n) {
+    throw new Error("fee epoch must be a nonzero u64");
+  }
   parseU64(note.amount, "fee amount");
   parseU64(note.leafIndex, "fee leaf index");
   fromHex(note.batchRoot, "batch root");

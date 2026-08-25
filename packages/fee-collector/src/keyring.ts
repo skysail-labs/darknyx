@@ -143,7 +143,10 @@ export async function validateFeeKeyring(value: unknown): Promise<FeeKeyring> {
       throw new Error("fee epoch key is not a canonical nonzero BN254 scalar");
     }
     const expected = await deriveFeeKeyBinding(key);
-    if (!expected.every((byte, index) => byte === binding[index])) {
+    if (
+      expected.length !== binding.length ||
+      !expected.every((byte, index) => byte === binding[index])
+    ) {
       throw new Error(`fee-key binding mismatch at epoch ${epoch}`);
     }
     if (item.state === "active") active += 1;
