@@ -1,0 +1,29 @@
+{
+  "name": "@darknyx/fee-collector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Darknyx operator-only finalized-chain protocol fee recovery and epoch-key custody tool.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "bin": {
+    "darknyx-fee-collector": "dist/bin/fee-collector.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@darknyx/sdk": "0.1.0",
+    "@solana/web3.js": "3.0.0-rc.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}

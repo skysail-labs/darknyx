@@ -19,6 +19,7 @@ export * from "./zk/valid-deposit-prover.js";
 export * from "./zk/groth16-format.js";
 export * from "./idl/vault-client.js";
 export * from "./idl/seeds.js";
+export * from "./idl/log-scope.js";
 export * from "./client.js";
 export * from "./api-url.js";
 // Order canonical encoders + the consumed-input-bound fill-memo surface.
@@ -55,10 +56,12 @@ export * from "./fills/recover.js";
 export * from "./fills/cold-recovery.js";
 export * from "./utxo/match-output.js";
 export * from "./utxo/match-config.js";
+export * from "./utxo/fee-recovery.js";
 export * from "./fills/ws-client.js";
 export { isContributoryX25519PublicKey } from "./keys/fill-encryption.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";
+export * from "./settlement/batch-binding.js";
 // TEE attestation — shared verification core (event-log RTMR3 replay,
 // report_data binding, measurement pinning) used by the daemon + browser SDK,
 // the real DCAP verifier (@phala/dcap-qvl), and the browser client entrypoint.

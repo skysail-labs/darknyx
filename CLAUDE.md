@@ -77,6 +77,10 @@ the order/cancel canonical signing — single source of truth, used by the
 in-TEE matcher)
 and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
+`packages/fee-collector/` is the operator-only finalized-chain protocol-fee
+recovery tool. It owns encrypted fee-key epochs and recovered fee-note
+inventory; it is not a client product or an always-on service. Follow
+`docs/protocol-fee-recovery-runbook.md` for every rotation or recovery.
 
 > **Public docs live in `docs/mintlify/` — edit them directly.** This directory
 > is the single source of truth for the hosted documentation. Keep navigation
@@ -331,7 +335,7 @@ node scripts/check-script-awaits.mjs                # .mjs get no typecheck; a f
 # Typecheck with the TESTS-INCLUSIVE config. The build tsconfig includes only
 # `src/`, so `-p packages/<pkg>/tsconfig.json` never sees tests/ — which is how
 # 23 type errors sat on main unnoticed.
-# ALL SIX packages that HAVE a tsconfig.test.json are listed. This block used to
+# ALL SEVEN packages that HAVE a tsconfig.test.json are listed. This block used to
 # name three; browser-client and client-core were checked by nothing, locally or
 # in CI, and browser-client is the SIGNED RELEASE surface.
 # The SDK and client-core must be BUILT first — daemon/indexer/browser-client
@@ -348,6 +352,7 @@ node scripts/clean-ts-dist.mjs
 ./node_modules/.bin/tsc -p packages/trader-host/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/client-core/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/browser-client/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/fee-collector/tsconfig.test.json --noEmit
 # The parity helpers gate the TS↔Rust byte-equality contracts (§7). Without
 # them every one of those assertions SKIPS and vitest still reports green —
 # which is exactly what happened during the v3 Buffer→Uint8Array port. The
@@ -360,6 +365,7 @@ cargo build --examples -p darkpool-crypto           # §2.1 lists this; the next
 ( cd packages/client-core && ../../node_modules/.bin/vitest run )
 ( cd packages/trader-host && ../../node_modules/.bin/vitest run )
 ( cd packages/browser-client && ../../node_modules/.bin/vitest run )
+( cd packages/fee-collector && ../../node_modules/.bin/vitest run )
 # The browser PRODUCTION build. CI gates this; this block did not, so a change
 # that bundles cleanly in tests could still break the signed release — e.g. a
 # value import from the SDK root barrel drags node:crypto into the browser

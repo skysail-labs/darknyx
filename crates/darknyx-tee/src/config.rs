@@ -125,7 +125,9 @@ impl TransportModeConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+// Deliberately no `Debug`: this struct contains the protocol fee epoch key.
+// Startup failures may format individual public fields, never the whole config.
+#[derive(Clone)]
 #[allow(dead_code)] // Not every field is read on every build profile.
 pub struct Config {
     /// Boot-static market routing table. `DARKNYX_TEE_MARKETS_JSON` is the
@@ -269,6 +271,15 @@ pub struct Config {
     /// shard = the pre-sharding behavior). MUST equal the on-chain
     /// `num_trees` set at `initialize`. Range 1..=16.
     pub num_trees: u8,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("contents", &"[REDACTED: contains operator secrets]")
+            .finish()
+    }
 }
 
 /// The placeholder base mint used when `DARKNYX_TEE_BASE_MINT` is unset —

@@ -667,6 +667,11 @@ jobs:
       - name: tsc --noEmit (browser client, tests included)
         run: node node_modules/typescript/bin/tsc -p packages/browser-client/tsconfig.test.json --noEmit
 
+      - name: tsc --noEmit + vitest (protocol fee collector)
+        run: |
+          node node_modules/typescript/bin/tsc -p packages/fee-collector/tsconfig.test.json --noEmit
+          node node_modules/vitest/vitest.mjs run --root packages/fee-collector
+
       # Guard the guard: assert each tsconfig.test.json actually includes
       # `tests/`. Without this, narrowing an `include` would silently restore
       # the blind spot while this job kept reporting success — the T-18 pattern
@@ -675,7 +680,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for pkg in sdk daemon indexer trader-host client-core browser-client; do
+          for pkg in sdk daemon indexer trader-host client-core browser-client fee-collector; do
             cfg="packages/$pkg/tsconfig.test.json"
             test -f "$cfg" || { echo "::error::$cfg is missing"; fail=1; continue; }
             # Prove tsc really loaded a test file. Inspecting the resolved file
