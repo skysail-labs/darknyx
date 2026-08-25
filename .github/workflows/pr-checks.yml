@@ -765,8 +765,8 @@ jobs:
             --expected-oracle-mode=pyth-solana-push-v1 \
             --recovery-start-slot=1 \
             --artifact-key-id=ci-release-v1 \
-            --circuit-version=note-use-v1 \
-            --proving-key-version=phase2-v1
+            --circuit-version=note-lineage-v2 \
+            --proving-key-version=phase3-v1
           npm -w @darknyx/browser-client run test:prover
 
   trader-host:

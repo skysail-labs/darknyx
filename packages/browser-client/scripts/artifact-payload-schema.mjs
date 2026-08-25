@@ -1,7 +1,7 @@
 export const CLIENT_CIRCUIT_ARITIES = Object.freeze({
   deposit: 5,
   input: 4,
-  spend: 8,
+  spend: 7,
   merge_k2: 6,
   merge_k4: 8,
 });
