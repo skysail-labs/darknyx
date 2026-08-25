@@ -11,9 +11,9 @@ fn decode32(value: &str, label: &str) -> [u8; 32] {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 6 {
+    if args.len() != 8 {
         eprintln!(
-            "usage: match-config-digest <fee_bps> <owner_hex> <base_mint_hex> <quote_mint_hex> <price_scale>"
+            "usage: match-config-digest <fee_bps> <owner_hex> <base_mint_hex> <quote_mint_hex> <price_scale> <fee_key_binding_hex> <fee_key_epoch>"
         );
         std::process::exit(2);
     }
@@ -22,7 +22,17 @@ fn main() {
     let base = decode32(&args[3], "base mint");
     let quote = decode32(&args[4], "quote mint");
     let price_scale = args[5].parse::<u64>().expect("price_scale must be u64");
-    let digest = match_config_digest(fee_rate_bps, &owner, &base, &quote, price_scale)
-        .expect("field-safe match config");
+    let fee_key_binding = decode32(&args[6], "fee key binding");
+    let fee_key_epoch = args[7].parse::<u64>().expect("fee_key_epoch must be u64");
+    let digest = match_config_digest(
+        fee_rate_bps,
+        &owner,
+        &base,
+        &quote,
+        price_scale,
+        &fee_key_binding,
+        fee_key_epoch,
+    )
+    .expect("field-safe match config");
     println!("{}", hex::encode(digest));
 }

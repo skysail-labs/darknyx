@@ -78,7 +78,6 @@ interface PreparedDeposit {
 interface PreparedSpend {
   witness: SpendInputs;
   noteUseTag: Uint8Array;
-  nullifier: Uint8Array;
   merkleRoot: Uint8Array;
 }
 
@@ -372,7 +371,6 @@ export class BrowserAccountOperations {
       assertPublicInputs("VALID_SPEND", proof.publicInputs, [
         prepared.noteUseTag,
         prepared.merkleRoot,
-        prepared.nullifier,
         bn254ToBE32(mintLo),
         bn254ToBE32(mintHi),
         bn254ToBE32(params.amount),
@@ -387,7 +385,6 @@ export class BrowserAccountOperations {
         destinationTokenAccount: destination,
         tokenProgramId: TOKEN_PROGRAM_ID,
         noteUseTag: noteUseTagFromBytes(prepared.noteUseTag),
-        nullifier: prepared.nullifier,
         merkleRoot: prepared.merkleRoot,
         amount: params.amount,
         proof,

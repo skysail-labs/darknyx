@@ -49,9 +49,8 @@ template MerkleTreeChecker(depth) {
 //
 // This is the input-side counterpart to VALID_SPEND. The difference from
 // VALID_SPEND:
-//   - No nullifier is computed or revealed. The note is not being SPENT here,
-//     only locked. Nullification happens later in tee_forced_settle (via
-//     ConsumedNoteEntry PDAs) or in withdraw (via NullifierEntry PDAs).
+//   - The note is not spent here, only locked. Every eventual consumption path
+//     uses the same note-use-tag-keyed ConsumedNoteEntry PDA.
 //   - The public handle is `noteUseTag`, not the commitment. The on-chain
 //     `lock_note` instruction seeds the NoteLock PDA with it, so it must agree
 //     with the proof. The commitment stays a private intermediate here, as it
@@ -62,7 +61,7 @@ template MerkleTreeChecker(depth) {
 //
 // Public inputs:  merkleRoot, noteUseTag, tokenMint[2] (lo|hi 128-bit
 //                 halves of the Solana mint pubkey)
-// Private inputs: amount, spendingKey, ownerCommitmentBlinding, innerHash,
+// Private inputs: amount, spendingKey, innerHash,
 //                 merklePath[depth], merkleIndices[depth]
 //
 // The note commitment is NOT public. It is recomputed inside the circuit from
@@ -82,7 +81,6 @@ template ValidInput(merkleDepth) {
     // ----- Private -----
     signal input amount;
     signal input spendingKey;
-    signal input ownerCommitmentBlinding;  // r_owner used in owner_commitment
     signal input innerHash;
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
@@ -95,12 +93,10 @@ template ValidInput(merkleDepth) {
     amountIsZero.in <== amount;
     amountIsZero.out === 0;
 
-    // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
-    // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_OWNER.
-    component ownerHash = Poseidon(3);
-    ownerHash.inputs[0] <== 1;   // DOMAIN_OWNER
+    // owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spendingKey)
+    component ownerHash = Poseidon(2);
+    ownerHash.inputs[0] <== 32;  // DOMAIN_OWNER_V2
     ownerHash.inputs[1] <== spendingKey;
-    ownerHash.inputs[2] <== ownerCommitmentBlinding;
     signal ownerCommitment;
     ownerCommitment <== ownerHash.out;
 

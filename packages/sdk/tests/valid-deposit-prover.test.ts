@@ -35,7 +35,6 @@ const be32ToBig = (bytes: Uint8Array): bigint => {
 
 suite("VALID_DEPOSIT prover", () => {
   const spendingKey = 123456789n;
-  const ownerBlinding = 987654321n;
   const recoveryNonce = 112233445566778899n;
   // Stands in for `deriveNoteSecret(seed, recoveryNonce)`; the circuit only
   // requires it be a field element, not that it came from a seed.
@@ -44,9 +43,8 @@ suite("VALID_DEPOSIT prover", () => {
   const amount = 5_015_000n;
 
   async function inputs() {
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const owner = await ownerCommitment(spendingKey);
     const inner = await deriveDepositInnerHash(
-      bn254ToBE32(owner),
       bn254ToBE32(recoveryNonce),
       bn254ToBE32(noteSecret),
     );
@@ -63,7 +61,6 @@ suite("VALID_DEPOSIT prover", () => {
       amount,
       recoveryNonce,
       spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
       noteSecret,
     };
   }
@@ -102,11 +99,7 @@ suite("VALID_DEPOSIT prover", () => {
       { ...witness, amount: witness.amount + 1n },
       { ...witness, recoveryNonce: witness.recoveryNonce + 1n },
       { ...witness, spendingKey: witness.spendingKey + 1n },
-      {
-        ...witness,
-        ownerCommitmentBlinding: witness.ownerCommitmentBlinding + 1n,
-      },
-      // The arity-4 input. Perturbing it must break the commitment binding
+      // Perturbing the private note secret must break the commitment binding
       // just like every other opening field — otherwise it is decorative and
       // the entropy hardening buys nothing.
       { ...witness, noteSecret: witness.noteSecret + 1n },

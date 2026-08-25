@@ -1,7 +1,7 @@
 import { poseidonHashBytesBE } from "./note.js";
 
 const MAX_K = 4;
-const DOMAIN_MERGE_INNER = 26n;
+export const DOMAIN_MERGE_INNER_V2 = 34n;
 
 const u8ToBigBE = (value: Uint8Array): bigint => {
   let result = 0n;
@@ -9,21 +9,21 @@ const u8ToBigBE = (value: Uint8Array): bigint => {
   return result;
 };
 
-/** Derive the VALID_MERGE output inner from its private commitment slots. */
+/** Derive the VALID_MERGE output inner from its private input-inner slots. */
 export async function deriveMergeOutputInnerHash(
-  inputCommitments: readonly Uint8Array[],
+  inputInners: readonly Uint8Array[],
 ): Promise<bigint> {
-  if (inputCommitments.length !== 2 && inputCommitments.length !== 4) {
-    throw new Error("merge commitments must contain exactly 2 or 4 slots");
+  if (inputInners.length !== 2 && inputInners.length !== 4) {
+    throw new Error("merge inners must contain exactly 2 or 4 slots");
   }
   const slots = Array.from({ length: MAX_K }, () => 0n);
   let activeBitmap = 0;
-  for (let index = 0; index < inputCommitments.length; index += 1) {
-    const commitment = inputCommitments[index];
-    if (commitment.length !== 32) {
-      throw new Error(`merge commitment ${index} must be 32 bytes`);
+  for (let index = 0; index < inputInners.length; index += 1) {
+    const inner = inputInners[index];
+    if (inner.length !== 32) {
+      throw new Error(`merge inner ${index} must be 32 bytes`);
     }
-    const value = u8ToBigBE(commitment);
+    const value = u8ToBigBE(inner);
     slots[index] = value;
     if (value !== 0n) activeBitmap |= 1 << index;
   }
@@ -32,7 +32,7 @@ export async function deriveMergeOutputInnerHash(
   }
   return u8ToBigBE(
     await poseidonHashBytesBE([
-      DOMAIN_MERGE_INNER,
+      DOMAIN_MERGE_INNER_V2,
       slots[0],
       slots[1],
       slots[2],

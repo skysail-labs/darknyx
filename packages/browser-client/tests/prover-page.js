@@ -62,20 +62,17 @@ try {
       amount: bigint(deposit.amount),
       recoveryNonce: bigint(deposit.recoveryNonce),
       spendingKey: bigint(deposit.spendingKey),
-      ownerCommitmentBlinding: bigint(deposit.ownerCommitmentBlinding),
       noteSecret: bigint(deposit.noteSecret),
     }),
   );
   await run("input", 4, () => suite.proveValidInput(fixtures.input.input));
   const spend = fixtures.spend.input;
-  await run("spend", 8, () =>
+  await run("spend", 7, () =>
     suite.spend.prove({
       merkleRoot: bigint(spend.merkleRoot),
-      nullifier: bigint(spend.nullifier),
       tokenMint: bigints(spend.tokenMint),
       amount: bigint(spend.amount),
       spendingKey: bigint(spend.spendingKey),
-      ownerCommitmentBlinding: bigint(spend.ownerCommitmentBlinding),
       innerHash: bigint(spend.innerHash),
       merklePath: bigints(spend.merklePath),
       merkleIndices: spend.merkleIndices.map(Number),
@@ -93,7 +90,6 @@ try {
         merkleRoot: bigint(merge.merkleRoot),
         tokenMint: bigints(merge.tokenMint),
         spendingKey: bigint(merge.spendingKey),
-        ownerCommitmentBlinding: bigint(merge.ownerCommitmentBlinding),
         isActive: merge.isActive.map(Number),
         amount: bigints(merge.amount),
         innerHash: bigints(merge.innerHash),

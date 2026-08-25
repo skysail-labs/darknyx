@@ -52,12 +52,16 @@ pub fn build_batch_public_inputs(
     let base_mint = slots[0].base_mint;
     let quote_mint = slots[0].quote_mint;
     let price_scale = slots[0].price_scale;
+    let fee_key_binding = slots[0].fee_key_binding;
+    let fee_key_epoch = slots[0].fee_key_epoch;
     for (idx, slot) in slots.iter().enumerate().filter(|(_, slot)| slot.is_active) {
         if slot.fee_rate_bps != fee_rate_bps
             || slot.protocol_owner_commitment != protocol_owner
             || slot.base_mint != base_mint
             || slot.quote_mint != quote_mint
             || slot.price_scale != price_scale
+            || slot.fee_key_binding != fee_key_binding
+            || slot.fee_key_epoch != fee_key_epoch
         {
             return Err(LeafError::MixedBatchConfig { idx });
         }
@@ -68,6 +72,8 @@ pub fn build_batch_public_inputs(
         &base_mint,
         &quote_mint,
         price_scale,
+        &fee_key_binding,
+        fee_key_epoch,
     )?;
     Ok(BatchPublicInputs {
         leaves,
@@ -96,6 +102,9 @@ mod tests {
             o
         };
         slots[0].protocol_owner_commitment = owner;
+        slots[0].fee_key_binding = [0x04; 32];
+        slots[0].fee_key_binding[0] = 0;
+        slots[0].fee_key_epoch = 7;
         let pi = build_batch_public_inputs(&slots).unwrap();
         assert_eq!(pi.leaves.len(), 4);
         assert_eq!(pi.merkle_paths.root(), pi.merkle_root);
@@ -105,7 +114,16 @@ mod tests {
         assert_eq!(pi.public_inputs_be[1], pi.config_digest);
         assert_eq!(
             pi.config_digest,
-            match_config_digest(30, &owner, &[0x22; 32], &[0x33; 32], 100_000_000).unwrap()
+            match_config_digest(
+                30,
+                &owner,
+                &[0x22; 32],
+                &[0x33; 32],
+                100_000_000,
+                &slots[0].fee_key_binding,
+                7,
+            )
+            .unwrap()
         );
     }
 

@@ -27,8 +27,8 @@ Implementation state is tracked in
 Phase 0 measurements, fixed vectors, account-reader inventory, and the frozen
 design decisions live in
 [`phase0-report.md`](phase0-report.md).
-The proposed machine-readable domain allocation is
-[`domain-registry.proposed.json`](domain-registry.proposed.json).
+The authoritative machine-readable domain allocation is
+[`domain-registry.json`](domain-registry.json).
 Its validation contract is
 [`domain-registry.schema.json`](domain-registry.schema.json).
 The reproducible frozen formula vectors are

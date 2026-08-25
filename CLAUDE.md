@@ -20,7 +20,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   (Anchor 2.0.0-rc.1). It owns custody, the incremental Merkle tree of note
   commitments (now **sharded into K per-shard `MerkleTree` accounts** —
   `VaultConfig` holds the global state incl. the K-key `tee_pubkeys` set
-  + `num_trees`), the nullifier / consumed-note sets, the Groth16
+  + `num_trees`), the consumed-note set, the Groth16
   verifier, the **note-merge** path (`merge`, VALID_MERGE K=2/4), and the
   **atomic batched settlement** path
   (`lock_note → verify_match_batch → tee_forced_settle_batched →
@@ -48,7 +48,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
   streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
-  byte-identical Poseidon / nullifier / note / key derivation that the TS SDK
+  byte-identical Poseidon / note-use / note / key derivation that the TS SDK
   has parity tests against.
 * **Deferred browser trader (`packages/browser-client/` +
   `packages/trader-host/`)** — implemented and devnet-tested in 2026-08, but
@@ -78,30 +78,22 @@ in-TEE matcher)
 and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
-> **Public docs live in `docs/gitbook/` — edit it directly.** `docs/gitbook/`
-> is the **single source of truth** for the public documentation portal, hosted
-> on GitBook via git-sync. It is GitBook-flavored Markdown: YAML frontmatter with
-> a quoted `description`, `{% hint style="info|warning|success" %}` callouts, a
-> root `SUMMARY.md` table of contents, `.md`-suffixed relative links, and a
-> `.gitbook.yaml` config. Edit these files directly; when you add, remove, rename,
-> or reorder a page, **update `SUMMARY.md` in the same change** (it drives the
-> nav). GitBook git-sync is **bidirectional** — edits made in the GitBook UI are
-> committed back here, so this directory is the canonical copy; never keep a
-> parallel generated source. (The former Docusaurus source `docs/portal/` and its
-> `scripts/convert-portal-to-gitbook.py` generator were retired 2026-07 in favor
-> of editing GitBook directly.)
+> **Public docs live in `docs/mintlify/` — edit them directly.** This directory
+> is the single source of truth for the hosted documentation. Keep navigation
+> and API-reference links in sync when pages move; do not recreate a parallel
+> GitBook or Docusaurus source.
 
-**The note model (v2 / `inner_hash`).** Every note commitment AND its
-nullifier are anchored on a single amount-independent `inner_hash`:
+**The note model (`inner_hash`).** Every note commitment and unlinkable use tag
+are anchored on a single amount-independent `inner_hash`:
 
 ```
 commitment = Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount, owner_commitment, inner_hash)
-nullifier  = Poseidon3(DOMAIN_NULL, spending_key, inner_hash)
+note_use_tag = Poseidon3(DOMAIN_NOTE_USE, commitment, inner_hash)
 ```
 
 VALID_MATCH_BATCH v3 derives user-output inners as
 `Poseidon3(24, consumed_input_inner, role)` and fee inners as
-`Poseidon3(25, consumed_input_commitment, role)`. This removes caller-selected
+`Poseidon4(36, fee_epoch_key, consumed_use_tag, role)`. This removes caller-selected
 output randomness and lets the matcher rotate partial-fill residuals without a
 client roundtrip or anchor-dependent liveness.
 
@@ -119,9 +111,9 @@ boundaries, but Rust `NoteCommitment`/`NoteUseTag` newtypes and TypeScript brand
 separate internal APIs. Convert raw bytes through their checked constructors;
 an explicit wrong conversion otherwise derives a plausible-looking PDA and
 fails on-chain as `AccountNotFound` / `ConstraintSeeds`.
-Deposit inners gained a seed-derived `note_secret`
-(`Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`) so one leaked
-wallet-wide owner commitment cannot recompute a user's whole tag history.
+Deposit inners use a seed-derived `note_secret`
+(`Poseidon3(33, recovery_nonce, note_secret)`), so the public recovery nonce is
+not enough to reconstruct a user's use-tag history.
 Full rationale, and an exact statement of what is and is not unlinkable, in
 **[`CRYPTOGRAPHY.md` §2.1](CRYPTOGRAPHY.md)**.
 
@@ -303,6 +295,7 @@ cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd l
 bash scripts/check-compose-image-digests.sh          # CPU/GPU compose must use @sha256
 bash scripts/check-icicle-cuda-arch-env.sh           # every CUDA build.rs reads the var the Dockerfile forwards
 bash scripts/check-brand-namespace.sh                # no stale pre-Darknyx namespaces
+node scripts/check-domain-registry.mjs               # authoritative Poseidon assignments + consumers
 bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writes the fingerprint
                                                     #   manifest the litesvm suite checks (T-13), so a
                                                     #   stale .so can't be validated silently
@@ -833,10 +826,12 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   retired two-stage Poseidon12+Poseidon9 construction back.
 * **Domain tags.** `DOMAIN_LEAF_V3 = 31` (the active leaf tag),
   `DOMAIN_RELOCK_DIGEST = 30`, `DOMAIN_NOTE_USE = 29`,
-  `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
-  `DOMAIN_DEPOSIT_INNER = 27`, `DOMAIN_MATCH_CONFIG = 28`,
-  `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
-  appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
+  `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_OWNER_V2 = 32`,
+  `DOMAIN_DEPOSIT_INNER_V2 = 33`, `DOMAIN_MERGE_INNER_V2 = 34`,
+  `DOMAIN_FEE_KEY_BINDING = 35`, `DOMAIN_FEE_INNER_V2 = 36`,
+  `DOMAIN_MATCH_CONFIG_V2 = 37`, `DOMAIN_BATCH_ROOT = 22`, and
+  `DOMAIN_NOTE = 2` — each appears in Rust + TS + circom and is checked against
+  `docs/privacy-architecture/domain-registry.json`. (`DOMAIN_LEAF_INNER =
   20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags, and
   `DOMAIN_LEAF_V2 = 23` is the retired Poseidon11 commitment-only leaf — dead
   constants, no longer hashed.)
@@ -907,9 +902,8 @@ check fails, or proofs don't verify.
 |---|---|---|---|
 | Poseidon arities | `darkpool-crypto/src/poseidon.rs` | `sdk/src/zk/poseidon.ts` | `poseidon-parity.test.ts` |
 | Note commitment (v2) | `darkpool-crypto/src/note.rs::commitment_from_fields_v2` | `sdk/src/utxo/note.ts::noteCommitmentV2` | `note-commitment-parity.test.ts` |
-| Nullifier (v2) | `darkpool-crypto/src/nullifier.rs` | `sdk/src/utxo/note.ts::nullifierV2` | `nullifier-parity.test.ts` |
 | **Note-use tag** | `darkpool-crypto/src/note_use.rs::note_use_tag` | `sdk/src/utxo/note-use.ts::deriveNoteUseTag` | `note-use-tag-parity.test.ts` |
-| Deposit inner (arity **4**) | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
+| Deposit inner (arity **3**, domain 33) | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
 | Note secret | `darkpool-crypto/src/keys.rs::derive_note_secret` | `sdk/src/keys/key-generators.ts::deriveNoteSecret` | `keys-parity.test.ts` |
 | Output `inner_hash` (trade/change/fee) | `darkpool-crypto/src/match_output.rs::{match_output_inner_hash, match_fee_inner_hash}` | `sdk/src/utxo/match-output.ts` | `match-output-parity.test.ts` + `inner-hash-parity.test.ts` |
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
@@ -949,11 +943,10 @@ on-chain. (There is **no** `PoseidonFailed (6030)` variant on the vault — code
   (in the test harnesses) for any hashed 32-byte field.
 * **Mint pubkeys split into two 128-bit halves** (`pubkey_to_fr_pair`) — a
   256-bit pubkey can't fit one Fr element.
-* **Owner commitments + nullifiers are Poseidon outputs** → Fr-safe by
+* **Owner commitments + note-use tags are Poseidon outputs** → Fr-safe by
   construction. Intake Fr-validates the order's consumed input `inner_hash`.
-  Match/merge output inners are Poseidon-derived. The nullifier is used by the
-  withdraw proof; payload v9 removed it from Tx D, and v11 keys settlement
-  replay protection on circuit-bound note-use tags.
+  Match/merge output inners are Poseidon-derived. All consume paths key replay
+  protection on the circuit-bound note-use tag.
 
 ---
 
@@ -1078,8 +1071,8 @@ implementation it must stay byte-identical to).
 * **No implementation-process references.** No PR numbers, phase names, slice or
   step numbers. They resolve to nothing within months.
 * **No migration narration.** A version label is fine when it names something
-  that exists *now* — the `darknyx-match-v11` domain tag, Anchor v2, a v0
-  transaction, `/v1/stream`, `nullifier_v2`. It is noise when it narrates a move
+  that exists *now* — the `darknyx-match-v12` domain tag, Anchor v2, a v0
+  transaction, `/v1/stream`. It is noise when it narrates a move
   away from something the reader cannot see: "subsumes the legacy v3.1
   `verify_valid_price` ix, which has been removed" tells a new developer nothing,
   because there is no v3.1 and no such instruction. State the design; delete the

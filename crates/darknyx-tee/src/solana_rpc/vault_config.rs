@@ -22,12 +22,14 @@
 //! 552  root_key                 Pubkey            (32)
 //! 584  zero_subtree_roots       [[u8; 32]; 20]    (640)
 //! 1224 protocol_owner_commitment[u8; 32]          (32)
-//! 1256 fee_rate_bps             u16               (2)   ← read
-//! 1258 num_tee_keys             u8
-//! 1259 num_trees                u8
-//! 1260 bump                     u8
-//! 1261 _padding                 [u8; 3]
-//! 1264 (end)
+//! 1256 fee_key_binding          [u8; 32]          (32)
+//! 1288 fee_key_epoch            u64               (8)
+//! 1296 fee_rate_bps             u16               (2)   ← read
+//! 1298 num_tee_keys             u8
+//! 1299 num_trees                u8
+//! 1300 bump                     u8
+//! 1301 _padding                 [u8; 3]
+//! 1304 (end)
 //! ```
 
 use std::sync::LazyLock;
@@ -49,11 +51,14 @@ const ZERO_SUBTREE_ROOTS: usize = ROOT_KEY + 32 * 20;
 /// `protocol_owner_commitment: [u8; 32]`.
 const PROTOCOL_OWNER_COMMITMENT: usize = ZERO_SUBTREE_ROOTS + 32;
 const PROTOCOL_OWNER_COMMITMENT_OFFSET: usize = ZERO_SUBTREE_ROOTS;
+const FEE_KEY_BINDING_OFFSET: usize = PROTOCOL_OWNER_COMMITMENT;
+const FEE_KEY_BINDING_END: usize = FEE_KEY_BINDING_OFFSET + 32;
+const FEE_KEY_EPOCH_OFFSET: usize = FEE_KEY_BINDING_END;
 /// Byte offset of `fee_rate_bps: u16` (little-endian).
-pub const FEE_RATE_BPS_OFFSET: usize = PROTOCOL_OWNER_COMMITMENT;
+pub const FEE_RATE_BPS_OFFSET: usize = FEE_KEY_EPOCH_OFFSET + 8;
 const NUM_TEE_KEYS_OFFSET: usize = FEE_RATE_BPS_OFFSET + 2;
 const NUM_TREES_OFFSET: usize = NUM_TEE_KEYS_OFFSET + 1;
-pub const VAULT_CONFIG_ACCOUNT_LEN: usize = 1264;
+pub const VAULT_CONFIG_ACCOUNT_LEN: usize = 1304;
 
 static VAULT_CONFIG_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     let hash = Sha256::digest(b"account:VaultConfig");
@@ -66,6 +71,8 @@ static VAULT_CONFIG_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
 pub struct OnChainVaultConfig {
     pub tee_pubkeys: [[u8; 32]; 16],
     pub protocol_owner_commitment: [u8; 32],
+    pub fee_key_binding: [u8; 32],
+    pub fee_key_epoch: u64,
     pub fee_rate_bps: u16,
     pub num_tee_keys: u8,
     pub num_trees: u8,
@@ -87,6 +94,14 @@ pub fn parse_vault_config(data: &[u8]) -> Option<OnChainVaultConfig> {
             [PROTOCOL_OWNER_COMMITMENT_OFFSET..PROTOCOL_OWNER_COMMITMENT]
             .try_into()
             .ok()?,
+        fee_key_binding: data[FEE_KEY_BINDING_OFFSET..FEE_KEY_BINDING_END]
+            .try_into()
+            .ok()?,
+        fee_key_epoch: u64::from_le_bytes(
+            data[FEE_KEY_EPOCH_OFFSET..FEE_KEY_EPOCH_OFFSET + 8]
+                .try_into()
+                .ok()?,
+        ),
         fee_rate_bps: u16::from_le_bytes(
             data[FEE_RATE_BPS_OFFSET..FEE_RATE_BPS_OFFSET + 2]
                 .try_into()
@@ -126,6 +141,8 @@ mod tests {
             offset(A, "protocol_owner_commitment")
         );
         assert_eq!(FEE_RATE_BPS_OFFSET, offset(A, "fee_rate_bps"));
+        assert_eq!(FEE_KEY_BINDING_OFFSET, offset(A, "fee_key_binding"));
+        assert_eq!(FEE_KEY_EPOCH_OFFSET, offset(A, "fee_key_epoch"));
         assert_eq!(NUM_TEE_KEYS_OFFSET, offset(A, "num_tee_keys"));
         assert_eq!(NUM_TREES_OFFSET, offset(A, "num_trees"));
         assert_eq!(VAULT_CONFIG_ACCOUNT_LEN, account_len(A));
@@ -133,9 +150,11 @@ mod tests {
 
     #[test]
     fn parse_fee_rate_bps_reads_le_u16() {
-        let mut data = vec![0u8; 1264];
+        let mut data = vec![0u8; VAULT_CONFIG_ACCOUNT_LEN];
         data[..8].copy_from_slice(&*VAULT_CONFIG_DISCRIMINATOR);
         data[FEE_RATE_BPS_OFFSET..FEE_RATE_BPS_OFFSET + 2].copy_from_slice(&30u16.to_le_bytes());
+        data[FEE_KEY_BINDING_OFFSET..FEE_KEY_BINDING_END].copy_from_slice(&[0x04; 32]);
+        data[FEE_KEY_EPOCH_OFFSET..FEE_KEY_EPOCH_OFFSET + 8].copy_from_slice(&7u64.to_le_bytes());
         assert_eq!(parse_fee_rate_bps(&data), Some(30));
     }
 
@@ -147,6 +166,8 @@ mod tests {
         data[TEE_PUBKEYS_OFFSET + 32..TEE_PUBKEYS_OFFSET + 64].copy_from_slice(&[0x22; 32]);
         data[PROTOCOL_OWNER_COMMITMENT_OFFSET..PROTOCOL_OWNER_COMMITMENT]
             .copy_from_slice(&[0x03; 32]);
+        data[FEE_KEY_BINDING_OFFSET..FEE_KEY_BINDING_END].copy_from_slice(&[0x04; 32]);
+        data[FEE_KEY_EPOCH_OFFSET..FEE_KEY_EPOCH_OFFSET + 8].copy_from_slice(&7u64.to_le_bytes());
         data[FEE_RATE_BPS_OFFSET..FEE_RATE_BPS_OFFSET + 2].copy_from_slice(&30u16.to_le_bytes());
         data[NUM_TEE_KEYS_OFFSET] = 2;
         data[NUM_TREES_OFFSET] = 2;
@@ -155,6 +176,8 @@ mod tests {
         assert_eq!(parsed.tee_pubkeys[0], [0x11; 32]);
         assert_eq!(parsed.tee_pubkeys[1], [0x22; 32]);
         assert_eq!(parsed.protocol_owner_commitment, [0x03; 32]);
+        assert_eq!(parsed.fee_key_binding, [0x04; 32]);
+        assert_eq!(parsed.fee_key_epoch, 7);
         assert_eq!(parsed.fee_rate_bps, 30);
         assert_eq!(parsed.num_tee_keys, 2);
         assert_eq!(parsed.num_trees, 2);

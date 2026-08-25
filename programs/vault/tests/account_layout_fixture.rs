@@ -118,6 +118,8 @@ fn render() -> String {
         root_key: 32,
         zero_subtree_roots: 32 * MERKLE_DEPTH as usize,
         protocol_owner_commitment: 32,
+        fee_key_binding: 32,
+        fee_key_epoch: 8,
         fee_rate_bps: 2,
         num_tee_keys: 1,
         num_trees: 1,

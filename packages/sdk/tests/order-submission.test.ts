@@ -85,11 +85,10 @@ describe("inclusion proof fetch", () => {
 describe("proveAndBuildOrder", () => {
   it("fetches the witness, proves (stub), and assembles a signed order", async () => {
     const spendingKey = 7n;
-    const blinding = 3n;
     const innerHash = 0x55n;
     const amount = 1_000n;
     const tokenMint = new Uint8Array(32).fill(9);
-    const owner = await ownerCommitment(spendingKey, blinding);
+    const owner = await ownerCommitment(spendingKey);
     const commitment = await noteCommitmentV2({
       tokenMint,
       amount,
@@ -120,7 +119,6 @@ describe("proveAndBuildOrder", () => {
       baseUrl: "https://x",
       token: "t",
       prover,
-      ownerCommitmentBlinding: blinding,
       tokenMint,
       fetchImpl,
       masterSeed: new Uint8Array(64).fill(5),

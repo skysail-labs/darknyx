@@ -10,7 +10,7 @@
 
 use anyhow::{anyhow, Result};
 use darkpool_crypto::note::owner_commitment;
-use darkpool_crypto::{ephemeral_public, fr_to_be_bytes, nullifier_v2, Fr};
+use darkpool_crypto::{ephemeral_public, fr_to_be_bytes, Fr};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::order_canonical::OrderCanonical;
 use ed25519_dalek::{Signer, SigningKey};
@@ -192,7 +192,6 @@ fn salted_order_id(nonce: u64, index: u64) -> [u8; 16] {
 /// A trader's keys for one order.
 struct Persona {
     spending_key: Fr,
-    owner_blinding: Fr,
     owner_commit: [u8; 32],
     trading: SigningKey,
 }
@@ -200,15 +199,13 @@ struct Persona {
 impl Persona {
     fn new(seed: u64) -> Result<Self> {
         let spending_key = Fr::from(seed | 1); // non-zero
-        let owner_blinding = Fr::from(seed.wrapping_add(0xfeed));
-        let owner_commit = owner_commitment(&spending_key, &owner_blinding)
-            .map_err(|e| anyhow!("owner_commitment: {e}"))?;
+        let owner_commit =
+            owner_commitment(&spending_key).map_err(|e| anyhow!("owner_commitment: {e}"))?;
         let mut tseed = [0u8; 32];
         tseed[..8].copy_from_slice(&seed.to_le_bytes());
         let trading = SigningKey::from_bytes(&tseed);
         Ok(Self {
             spending_key,
-            owner_blinding,
             owner_commit,
             trading,
         })
@@ -247,8 +244,6 @@ fn build_order_body(
     };
     let digest = canonical.digest().map_err(|e| anyhow!("digest: {e}"))?;
     let sig = p.trading.sign(&digest);
-    let nullifier =
-        nullifier_v2(&p.spending_key, &note.inner_hash).map_err(|e| anyhow!("nullifier: {e}"))?;
     Ok(serde_json::json!({
         "symbol": symbol,
         "side": match side { OrderSide::Bid => "bid", OrderSide::Ask => "ask" },
@@ -270,7 +265,6 @@ fn build_order_body(
         "session_id": hex::encode(boot_session_id),
         "owner_commitment": hex::encode(p.owner_commit),
         "note_inner_hash": hex::encode(note.inner_hash),
-        "nullifier": hex::encode(nullifier),
         "merkle_root": hex::encode(proof.merkle_root),
         "valid_input_proof": hex::encode(proof.proof_bytes),
         "collateral_amount": note.amount,
@@ -374,7 +368,6 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
             &buyer_quote_ata,
             buyer_note_amt,
             &buyer.spending_key,
-            &buyer.owner_blinding,
             &buyer_recovery_nonce,
             0,
         )
@@ -386,7 +379,6 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
             &seller_base_ata,
             seller_note_amt,
             &seller.spending_key,
-            &seller.owner_blinding,
             &seller_recovery_nonce,
             0,
         )
@@ -397,8 +389,8 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     );
 
     // 3. Prove VALID_INPUT for both.
-    let buyer_proof = harness.prove(&buyer.spending_key, &buyer.owner_blinding, &buyer_note)?;
-    let seller_proof = harness.prove(&seller.spending_key, &seller.owner_blinding, &seller_note)?;
+    let buyer_proof = harness.prove(&buyer.spending_key, &buyer_note)?;
+    let seller_proof = harness.prove(&seller.spending_key, &seller_note)?;
 
     // 4. Build + sign both orders. Salt the order_ids per run (see
     // `salted_order_id`) for clear idempotency and settlement observability.
@@ -704,7 +696,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     }
 
     // Nanosecond resolution so two runs started within the same second get
-    // distinct salts (as_secs() collided → nullifier-PDA replay on re-run).
+    // distinct salts (as_secs() collided → note-use-tag replay on re-run).
     let salt = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -742,7 +734,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     tracing::info!(traders = p.traders, mix = %p.mix, "real-settle LOAD: planning + depositing");
     for inst in 0..p.traders {
         let scenario = pick_scenario(&mix, inst, p.traders);
-        // Per-instance, per-side fresh personas (salted → fresh nullifiers).
+        // Per-instance, per-side fresh personas and note openings.
         //
         // DISJOINT BIT FIELDS are load-bearing. Each note's seed is
         // `seed_base ^ tag`, where `tag` is a small per-order constant
@@ -780,7 +772,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         &$ata,
                         $amount,
                         &persona.spending_key,
-                        &persona.owner_blinding,
                         &recovery_nonce,
                         shard,
                     )
@@ -915,8 +906,8 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let a1 = merged_amt / 2;
                 let a0 = merged_amt - a1;
                 // Distinct high-bit XORs (NOT 0x30/0x31 — they differ only in
-                // bit0, which a `|1` would clobber, making both inner_hashes —
-                // and thus both nullifiers — equal → merge NoteAlreadyConsumed).
+                // bit0, which a `|1` would clobber, making both inner hashes
+                // equal and therefore aliasing the note-use tags).
                 let nonce0 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x1300));
                 let nonce1 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x2500));
                 harness
@@ -932,7 +923,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         &base_ata,
                         a0,
                         &sp.spending_key,
-                        &sp.owner_blinding,
                         &nonce0,
                         shard,
                     )
@@ -944,7 +934,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         &base_ata,
                         a1,
                         &sp.spending_key,
-                        &sp.owner_blinding,
                         &nonce1,
                         shard,
                     )
@@ -960,7 +949,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let mproof = mp
                     .prove(
                         &sp.spending_key,
-                        &sp.owner_blinding,
                         &p.base_mint,
                         &[
                             MergeInput {
@@ -1034,14 +1022,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         let mut prove_handles = Vec::with_capacity(order_chunk.len());
         for order in order_chunk {
             let h = harness.clone();
-            let (sk, ob, note) = (
-                order.persona.spending_key,
-                order.persona.owner_blinding,
-                order.note.clone(),
-            );
+            let (sk, note) = (order.persona.spending_key, order.note.clone());
             prove_handles.push(tokio::task::spawn_blocking(move || {
                 let t = Instant::now();
-                let proof = h.prove(&sk, &ob, &note);
+                let proof = h.prove(&sk, &note);
                 (proof, t.elapsed().as_micros() as u64)
             }));
         }
@@ -1340,8 +1324,8 @@ mod tests {
     }
 
     /// Every per-order PRIMARY-note seed is `seed_base ^ tag`. Two primary
-    /// notes share a nullifier iff they share a seed (nullifier_v2 ignores
-    /// mint+amount). So the safety invariant is: across all instances, all
+    /// notes share the same deterministic opening iff they share a seed. So
+    /// the safety invariant is: across all instances, all
     /// `seed_base(inst) ^ tag` are globally unique for the primary tag set
     /// (`0x1` bid, `0x2` seller, `0x10+j` partial-fill asks).
     #[test]
@@ -1355,7 +1339,7 @@ mod tests {
             for &t in &tags {
                 assert!(
                     seen.insert(sb ^ t),
-                    "seed collision: inst={inst} tag={t:#x} — would alias a nullifier"
+                    "seed collision: inst={inst} tag={t:#x} — would alias a note opening"
                 );
             }
         }

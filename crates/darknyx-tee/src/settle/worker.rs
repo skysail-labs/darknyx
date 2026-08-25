@@ -64,7 +64,7 @@ use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArg
 use crate::persistence::journal::{JournalEntry, JournalStage, SettleJournal};
 use crate::prover::{build_batch_public_inputs, MatchSlotWitness, Prover};
 use crate::settle::pipeline::first_signature_b58;
-use crate::settle::vault::{consumed_note_pda, vault_program_id};
+use crate::settle::vault::{consumed_note_pda, market_config_pda, vault_program_id};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-match inputs the worker needs to settle one match.
@@ -832,6 +832,24 @@ async fn run_batch_settle_inner(
         // that has actually expired.
         let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
         let marker_expiry_slot = marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS);
+        let mut fee_amounts = [(0u64, 0u64); 16];
+        for (target, slot) in fee_amounts.iter_mut().zip(inputs.witnesses.iter()) {
+            *target = (slot.seller_fee_amt, slot.buyer_fee_amt);
+        }
+        let first = &inputs.witnesses[0];
+        let market = market_config_pda(&first.base_mint, &first.quote_mint)
+            .0
+            .to_bytes();
+        let fee_recovery_ciphertext = darkpool_crypto::encrypt_fee_recovery(
+            &first.fee_epoch_key,
+            first.fee_key_epoch,
+            &merkle_root,
+            &market,
+            &first.base_mint,
+            &first.quote_mint,
+            &fee_amounts,
+        )
+        .map_err(|e| WorkerError::Prover(format!("fee recovery record: {e}")))?;
         let verify_ix = build_verify_match_batch_ix(
             &tee_pubkey,
             &inputs.witnesses[0].base_mint,
@@ -839,32 +857,33 @@ async fn run_batch_settle_inner(
             VerifyMatchBatchArgs {
                 merkle_root,
                 proof: proof_bytes,
+                fee_key_epoch: first.fee_key_epoch,
+                fee_recovery_ciphertext,
             },
         );
         let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
         verify_ixs.push(verify_ix);
         // PS-02 — a failed Tx B is NOT automatically fatal.
         //
-        // `verify_match_batch`'s `payer` is deliberately unauthenticated ("anyone
-        // can push a valid proof" is a real liveness property) and the marker is
-        // `init` on the root alone, so an observer can replay our own proof and
-        // land first. Our Tx B then fails on the `init` collision. Propagating
+        // The marker is `init` on the root alone, so another authorized shard
+        // signer can submit the same proof and land first. Our Tx B then fails
+        // on the `init` collision. Propagating
         // that killed the batch BEFORE Tx D — and the 2N `lock_note` txs have
         // already landed, so both sides' notes sat pinned until lock expiry. One
         // transaction fee bought a deterministic, repeatable settlement stall
-        // against maker orders the attacker chose.
+        // against maker orders the submitting peer chose.
         //
         // Reconcile instead. Two properties make that safe, and neither is
         // incidental:
         //
         //   1. The marker can only EXIST if a valid Groth16 proof for this exact
         //      root and config digest verified on-chain. Its presence is
-        //      cryptographic evidence that this batch was verified — an attacker
+        //      cryptographic evidence that this batch was verified — a peer
         //      cannot fabricate one for our root.
         //   2. Its `expiry_slot` is DERIVED on-chain, never supplied (S-04). A
-        //      front-runner cannot hand us a marker with a uselessly short TTL;
-        //      that lever was exactly the S-04 finding. So a marker created by
-        //      someone else is functionally the one we would have created —
+        //      peer cannot hand us a marker with a uselessly short TTL. So a
+        //      marker created by another authorized signer is functionally the
+        //      one we would have created —
         //      only `payer` differs, which costs us its rent and nothing else.
         //
         // We still verify it is present, well-formed, and has runway left,

@@ -93,7 +93,16 @@ async fn prove_and_verify_n2_dummy_batch() {
     assert_eq!(public.public_inputs_be[1], public.config_digest);
     assert_eq!(
         public.config_digest,
-        darkpool_crypto::match_config_digest(0, &[0u8; 32], &[0u8; 32], &[0u8; 32], 1).unwrap()
+        darkpool_crypto::match_config_digest(
+            0,
+            &[0u8; 32],
+            &[0u8; 32],
+            &[0u8; 32],
+            1,
+            &darkpool_crypto::fee_key_binding(&[0u8; 32]).unwrap(),
+            0,
+        )
+        .unwrap()
     );
 
     // 3. Verify the proof against the zkey's own VK, in-ark. This

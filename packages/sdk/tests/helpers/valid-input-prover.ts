@@ -44,7 +44,6 @@ export interface ValidInputProveParams {
 
   // ----- circuit private witnesses -----
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
   innerHash: bigint;
   /** Private positive-u64 note amount. */
@@ -79,7 +78,7 @@ export interface ValidInputProveResult {
  * Generate a VALID_INPUT proof.
  *
  * The caller is responsible for ensuring the supplied (mint, amount,
- * spendingKey, ownerCommitmentBlinding, innerHash) actually compose
+ * spendingKey, innerHash) actually compose
  * into a note whose commitment is at the position the merkleWitness
  * traverses to `merkleRootBE`. If any of those disagree, snarkjs will fail
  * to find a witness and throw.
@@ -107,7 +106,7 @@ export async function proveValidInput(
   // self-test that the inputs at least produce *some* leaf.
   const ownerCommitmentBytes = await (async () => {
     const { ownerCommitment } = await import("../../src/utxo/note.js");
-    return ownerCommitment(args.spendingKey, args.ownerCommitmentBlinding);
+    return ownerCommitment(args.spendingKey);
   })();
   const commitmentBE = await noteCommitmentV2({
     tokenMint: args.tokenMint,
@@ -131,7 +130,6 @@ export async function proveValidInput(
     tokenMint: [mintLo.toString(), mintHi.toString()],
     amount: args.amount.toString(),
     spendingKey: args.spendingKey.toString(),
-    ownerCommitmentBlinding: args.ownerCommitmentBlinding.toString(),
     innerHash: args.innerHash.toString(),
     merklePath: args.merkleWitness.pathElements.map((e) => e.toString()),
     merkleIndices: args.merkleWitness.pathIndices.map((i) => i.toString()),

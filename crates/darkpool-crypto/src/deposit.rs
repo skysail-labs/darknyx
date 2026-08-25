@@ -1,12 +1,11 @@
 //! Recoverable inner-hash derivation for proof-gated deposits.
 //!
 //! ```text
-//! deposit_inner_hash = Poseidon4(27, owner_commitment, recovery_nonce, note_secret)
+//! deposit_inner_hash = Poseidon3(33, recovery_nonce, note_secret)
 //! ```
 //!
-//! Keeps the wallet-wide owner private while letting a seed-recovered wallet
-//! rebuild the note opening from the public pseudorandom nonce recorded in the
-//! deposit instruction.
+//! The note commitment already binds the wallet-wide owner. The inner therefore
+//! carries only the public recovery nonce and the seed-derived per-note secret.
 //!
 //! # Why `note_secret` exists (arity 3 -> 4)
 //!
@@ -43,7 +42,7 @@ use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};
 use crate::poseidon::poseidon_hash;
 
-pub const DOMAIN_DEPOSIT_INNER: u64 = 27;
+pub const DOMAIN_DEPOSIT_INNER_V2: u64 = 33;
 
 /// Derive a deposit note's inner hash.
 ///
@@ -53,14 +52,12 @@ pub const DOMAIN_DEPOSIT_INNER: u64 = 27;
 /// kept so the field keeps its meaning across the change; the parity vectors
 /// move, and are re-pinned in the tests below.
 pub fn deposit_inner_hash(
-    owner_commitment: &[u8; 32],
     recovery_nonce: &[u8; 32],
     note_secret: &[u8; 32],
 ) -> Result<[u8; 32], CryptoError> {
-    let owner = fr_from_be_bytes(owner_commitment)?;
     let nonce = fr_from_be_bytes(recovery_nonce)?;
     let secret = fr_from_be_bytes(note_secret)?;
-    let hash = poseidon_hash(&[Fr::from(DOMAIN_DEPOSIT_INNER), owner, nonce, secret])?;
+    let hash = poseidon_hash(&[Fr::from(DOMAIN_DEPOSIT_INNER_V2), nonce, secret])?;
     Ok(fr_to_be_bytes(&hash))
 }
 
@@ -76,19 +73,9 @@ mod tests {
 
     #[test]
     fn deterministic_and_domain_separated() {
-        let inner = deposit_inner_hash(&scalar(7), &scalar(9), &scalar(11)).unwrap();
-        assert_eq!(
-            inner,
-            deposit_inner_hash(&scalar(7), &scalar(9), &scalar(11)).unwrap()
-        );
-        assert_ne!(
-            inner,
-            deposit_inner_hash(&scalar(7), &scalar(10), &scalar(11)).unwrap()
-        );
-        assert_ne!(
-            inner,
-            deposit_inner_hash(&scalar(8), &scalar(9), &scalar(11)).unwrap()
-        );
+        let inner = deposit_inner_hash(&scalar(9), &scalar(11)).unwrap();
+        assert_eq!(inner, deposit_inner_hash(&scalar(9), &scalar(11)).unwrap());
+        assert_ne!(inner, deposit_inner_hash(&scalar(10), &scalar(11)).unwrap());
     }
 
     /// The whole point of the fourth input: two deposits that agree on the
@@ -99,19 +86,32 @@ mod tests {
     /// recomputable by anyone who learned that one value.
     #[test]
     fn the_secret_separates_deposits_that_agree_on_all_public_data() {
-        let owner = scalar(7);
         let nonce = scalar(9);
         assert_ne!(
-            deposit_inner_hash(&owner, &nonce, &scalar(1)).unwrap(),
-            deposit_inner_hash(&owner, &nonce, &scalar(2)).unwrap(),
-            "the inner must not be a function of public data plus a wallet-wide value"
+            deposit_inner_hash(&nonce, &scalar(1)).unwrap(),
+            deposit_inner_hash(&nonce, &scalar(2)).unwrap(),
+            "the inner must retain a per-note observer secret"
         );
     }
 
     #[test]
     fn rejects_non_field_inputs() {
-        assert!(deposit_inner_hash(&[0xff; 32], &scalar(1), &scalar(1)).is_err());
-        assert!(deposit_inner_hash(&scalar(1), &[0xff; 32], &scalar(1)).is_err());
-        assert!(deposit_inner_hash(&scalar(1), &scalar(1), &[0xff; 32]).is_err());
+        assert!(deposit_inner_hash(&[0xff; 32], &scalar(1)).is_err());
+        assert!(deposit_inner_hash(&scalar(1), &[0xff; 32]).is_err());
+    }
+
+    #[test]
+    fn matches_phase_zero_vector() {
+        let inner = deposit_inner_hash(&scalar_u64(2002), &scalar_u64(3003)).unwrap();
+        assert_eq!(
+            hex::encode(inner),
+            "2a0d7bf65498b8f216e0a66fb57cbbb807f54506c9618990fa4d879e322ae6ad"
+        );
+    }
+
+    fn scalar_u64(value: u64) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&value.to_be_bytes());
+        bytes
     }
 }

@@ -74,16 +74,16 @@ For every active match, VALID_MATCH_BATCH binds:
 - the configured base and quote mints and price scale;
 - positive active amounts and scaled floor pricing with a bounded remainder;
 - exact conservation of both assets;
-- the on-chain fee rate and protocol fee-note owner;
+- the on-chain fee rate, protocol fee-note owner, fee-key binding, and epoch;
 - user outputs derived from the consumed input inners; and
-- fee outputs derived from the consumed commitments.
+- fee outputs derived from a governed epoch key and the consumed use tags.
 
 These constraints stop the matcher from switching assets, inventing value,
 changing fees, or redirecting outputs even though amounts remain private.
 
 For verification efficiency, the chain supplies the proof with two public
 values: the batch root and a Poseidon digest of the governed fee, fee owner,
-market mints, and price scale. The vault recomputes that digest from
+market mints, price scale, fee-key binding, and epoch. The vault recomputes that digest from
 `VaultConfig` and the selected `MarketConfig`; the prover cannot choose it.
 Compressing the public statement reduces verifier work without dropping any of
 those bindings.

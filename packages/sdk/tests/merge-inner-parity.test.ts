@@ -1,5 +1,5 @@
 /** VALID_MERGE output-inner parity: TS, Rust, and the circuit use
- * Poseidon6(26, c0, c1, c2, c3, active_bitmap). */
+ * Poseidon6(34, inner0, inner1, inner2, inner3, active_bitmap). */
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -19,12 +19,12 @@ const be32 = (n: number): Uint8Array => {
 };
 const hex = (value: bigint): string => value.toString(16).padStart(64, "0");
 
-describe("VALID_MERGE commitment-derived inner hash", () => {
-  it("matches the pinned v3 KAT and K=2/K=4 padding parity", async () => {
+describe("VALID_MERGE private-input-inner derivation", () => {
+  it("matches the pinned v2 KAT and K=2/K=4 padding parity", async () => {
     const c0 = be32(1);
     const c1 = be32(2);
     const expected =
-      "1ed62782faeb9cd43f741e189ade09a0406a22f9c633cb9311b00e692c1458d5";
+      "2e09bfc0e798cb542b53eaf14bd7430640b59f0a2cffd14089d60600d701a283";
     const k2 = await deriveMergeOutputInnerHash([c0, c1]);
     const k4 = await deriveMergeOutputInnerHash([
       c0,
@@ -39,20 +39,20 @@ describe("VALID_MERGE commitment-derived inner hash", () => {
   it.skipIf(!existsSync(rustHelper))(
     "matches the Rust helper byte-for-byte",
     async () => {
-      const commitments = [be32(1), be32(2), be32(0), be32(0)];
+      const inners = [be32(1), be32(2), be32(0), be32(0)];
       const rust = spawnSync(
         rustHelper,
-        [...commitments.map((c) => Buffer.from(c).toString("hex")), "3"],
+        [...inners.map((inner) => Buffer.from(inner).toString("hex")), "3"],
         { encoding: "utf8" },
       );
       expect(rust.status, rust.stderr).toBe(0);
       expect(rust.stdout.trim()).toBe(
-        hex(await deriveMergeOutputInnerHash(commitments)),
+        hex(await deriveMergeOutputInnerHash(inners)),
       );
     },
   );
 
-  it("rejects an all-dummy or malformed commitment vector", async () => {
+  it("rejects an all-dummy or malformed private-inner vector", async () => {
     await expect(
       deriveMergeOutputInnerHash([new Uint8Array(32), new Uint8Array(32)]),
     ).rejects.toThrow(/at least one active/);

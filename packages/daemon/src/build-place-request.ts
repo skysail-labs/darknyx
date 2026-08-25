@@ -110,7 +110,6 @@ export async function buildPlaceRequest(
     baseUrl: args.gatewayUrl,
     token: args.token,
     prover: args.prover,
-    ownerCommitmentBlinding: keystore.ownerBlinding,
     tokenMint: note.tokenMint,
     treeId: args.treeId,
     fetchImpl: args.fetchImpl,

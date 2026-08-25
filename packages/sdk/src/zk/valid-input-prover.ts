@@ -211,7 +211,6 @@ export async function fetchInclusionProof(
  * `amount` is a private positive-u64 circuit witness. */
 export interface ValidInputProveParams {
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   innerHash: bigint;
   tokenMint: Uint8Array;
   amount: bigint;
@@ -242,10 +241,7 @@ export function nodeValidInputProver(artifacts: {
     // Recompute the private Merkle leaf, then derive the circuit's public
     // consume handle. Both are 32 bytes; passing the commitment here compiles
     // but targets the pre-note-use-tag circuit interface.
-    const owner = await ownerCommitment(
-      params.spendingKey,
-      params.ownerCommitmentBlinding,
-    );
+    const owner = await ownerCommitment(params.spendingKey);
     const commitmentBE = await noteCommitmentV2({
       tokenMint: params.tokenMint,
       amount: params.amount,
@@ -263,7 +259,6 @@ export function nodeValidInputProver(artifacts: {
       tokenMint: [mintLo.toString(), mintHi.toString()],
       amount: params.amount.toString(),
       spendingKey: params.spendingKey.toString(),
-      ownerCommitmentBlinding: params.ownerCommitmentBlinding.toString(),
       innerHash: params.innerHash.toString(),
       merklePath: params.witness.siblings.map((s) => s.toString()),
       merkleIndices: params.witness.pathIndices.map((i) => i.toString()),
@@ -329,7 +324,6 @@ export async function proveAndBuildOrder(
      * spending key at all, only proving does.
      */
     spendingKey: bigint;
-    ownerCommitmentBlinding: bigint;
     tokenMint: Uint8Array;
     treeId?: number;
     /** REQUIRED — see InclusionFetchOptions.fetchImpl. */
@@ -352,7 +346,6 @@ export async function proveAndBuildOrder(
   );
   const validInput = await args.prover({
     spendingKey: args.spendingKey,
-    ownerCommitmentBlinding: args.ownerCommitmentBlinding,
     innerHash: args.note.innerHash,
     tokenMint: args.tokenMint,
     amount: args.note.amount,

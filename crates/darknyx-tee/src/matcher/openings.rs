@@ -20,16 +20,6 @@
 //! expand the canonical order encoding (and therefore without a
 //! cross-language signing-contract change — CLAUDE.md §7).
 //!
-//! **The order schema deliberately carries no `nullifier`, and must not.**
-//! Settlement does not consume one, so an intake copy would buy nothing — while
-//! `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` is exactly the value the
-//! note's eventual `withdraw` publishes on-chain. Holding it for every
-//! collateral note means anyone who can read enclave memory — a disclosure bug,
-//! a host-captured core dump, a debug-endpoint regression — can join intake
-//! nullifiers against published ones and deanonymise which orders became which
-//! withdrawals. That defeats unlinkability with no custody compromise at all
-//! (audit S-09).
-//!
 //! Spending keys, viewing keys, and blinding-derivation seeds never
 //! appear here — only the per-note opening fields the circuit
 //! consumes as private witnesses.
@@ -51,11 +41,10 @@ pub struct NoteOpening {
     /// for the conservation constraint to hold — enforced by
     /// [`Self::verify_commitment`] (the commitment binds the amount).
     pub amount: u64,
-    /// `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`.
+    /// `Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`.
     pub owner_commitment: [u8; 32],
-    /// v2: the note's single `inner_hash` (replaces the old nonce +
-    /// blinding pair). Anchors the commitment — and, off-enclave, the
-    /// nullifier the owner derives from it with their spending key.
+    /// The note's single `inner_hash`. It anchors the commitment and the
+    /// public note-use tag while remaining private.
     pub inner_hash: [u8; 32],
 }
 

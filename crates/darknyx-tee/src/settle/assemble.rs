@@ -19,7 +19,7 @@
 //!   note_d/f  seller outputs  owner = seller input's owner commitment
 //!                             inner = Poseidon3(24, seller_input_inner, role)
 //!   note_fee  protocol cut    owner = protocol_owner_commitment
-//!                             inner = Poseidon3(25, consumed_input_commitment, role)
+//!                             inner = Poseidon4(36, epoch_key, consumed_use_tag, role)
 //! ```
 //!
 //! Deriving outputs from the *consumed input* rather than from caller-supplied
@@ -35,7 +35,7 @@
 //! without a matcher tick or a real proof.
 
 use darkpool_crypto::note::commitment_from_fields_v2;
-use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash, note_use_tag};
+use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash, note_use_tag, NoteUseTag};
 use darkpool_matcher::change_note::{
     CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_BASE, FEE_ROLE_QUOTE, TRADE_ROLE_BUYER,
     TRADE_ROLE_SELLER,
@@ -68,6 +68,9 @@ pub struct MatchAssemblyInputs<'a> {
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
     pub protocol_owner_commitment: [u8; 32],
+    pub fee_epoch_key: [u8; 32],
+    pub fee_key_binding: [u8; 32],
+    pub fee_key_epoch: u64,
     /// Protocol fee rate (bps) — the circuit's exact-fee public input
     /// (`VaultConfig.fee_rate_bps`). Stamped into every slot's witness.
     pub fee_rate_bps: u64,
@@ -269,11 +272,20 @@ pub fn assemble_match(
         (ZERO32, ZERO32)
     };
 
+    let note_a_use_tag = use_tag(&m.note_buyer, &inp.buyer_opening.inner_hash)?;
+    let note_b_use_tag = use_tag(&m.note_seller, &inp.seller_opening.inner_hash)?;
+    let note_a_use_tag_typed =
+        NoteUseTag::from_bytes(note_a_use_tag).map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let note_b_use_tag_typed =
+        NoteUseTag::from_bytes(note_b_use_tag).map_err(|e| AssembleError::Crypto(e.to_string()))?;
+
     // ── 5. Per-match fee notes, atomically appended by this match's Tx D.
-    let fee_base_inner = match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE)
-        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
-    let fee_quote_inner = match_fee_inner_hash(&m.note_buyer, FEE_ROLE_QUOTE)
-        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let fee_base_inner =
+        match_fee_inner_hash(&inp.fee_epoch_key, &note_b_use_tag_typed, FEE_ROLE_BASE)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let fee_quote_inner =
+        match_fee_inner_hash(&inp.fee_epoch_key, &note_a_use_tag_typed, FEE_ROLE_QUOTE)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
     let note_fee_base_commitment = if m.seller_fee_amt == 0 {
         ZERO32
     } else {
@@ -335,6 +347,9 @@ pub fn assemble_match(
         note_fee_quote_commitment,
         fee_rate_bps: inp.fee_rate_bps,
         protocol_owner_commitment: inp.protocol_owner_commitment,
+        fee_epoch_key: inp.fee_epoch_key,
+        fee_key_binding: inp.fee_key_binding,
+        fee_key_epoch: inp.fee_key_epoch,
         price_scale: inp.price_scale,
         fee_base_inner,
         fee_quote_inner,
@@ -344,8 +359,6 @@ pub fn assemble_match(
     // pair the enclave already holds, so the enclave needs no new input — and
     // the same derivation runs in-circuit, so a mismatch fails the leaf binding
     // rather than settling something the proof did not authorise.
-    let note_a_use_tag = use_tag(&m.note_buyer, &inp.buyer_opening.inner_hash)?;
-    let note_b_use_tag = use_tag(&m.note_seller, &inp.seller_opening.inner_hash)?;
     // Change-note tags, masked to zero exactly like their commitments: a side
     // with no change has no note, so it must publish no tag — otherwise the
     // settle would derive a relock PDA for a note that does not exist.
@@ -405,6 +418,9 @@ pub struct BatchAssemblyParams {
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
     pub protocol_owner_commitment: [u8; 32],
+    pub fee_epoch_key: [u8; 32],
+    pub fee_key_binding: [u8; 32],
+    pub fee_key_epoch: u64,
     // Fee identifier is intentionally absent: `assemble_batch` must copy the
     // value recorded on `RunBatchOutput`, so callers cannot re-sample it.
     /// Protocol fee rate (bps) — the circuit exact-fee public input
@@ -471,6 +487,9 @@ pub fn assemble_batch(
             base_mint: params.base_mint,
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
+            fee_epoch_key: params.fee_epoch_key,
+            fee_key_binding: params.fee_key_binding,
+            fee_key_epoch: params.fee_key_epoch,
             // C-08: the leaf/payload batch_slot is this match's index in the
             // batch (0..N-1), which the circuit + on-chain settle both require.
             slot_index: idx as u64,
@@ -661,6 +680,9 @@ mod tests {
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
+            fee_epoch_key: fr_safe(0x08),
+            fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+            fee_key_epoch: 1,
             price_scale: 1,
             // Default to index 0 (single-match). The scenario's MatchPair
             // carries batch_slot=7 (a now_slot stand-in) on purpose, so tests
@@ -712,7 +734,13 @@ mod tests {
         assert_eq!(p.batch_slot, 3, "payload batch_slot must be slot_index");
         assert_eq!(
             w.fee_base_inner,
-            match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE).unwrap()
+            match_fee_inner_hash(
+                &fr_safe(0x08),
+                &NoteUseTag::from_bytes(use_tag(&m.note_seller, &seller.inner_hash).unwrap())
+                    .unwrap(),
+                FEE_ROLE_BASE,
+            )
+            .unwrap()
         );
     }
 
@@ -960,6 +988,9 @@ mod tests {
                 base_mint: base_mint(),
                 quote_mint: quote_mint(),
                 protocol_owner_commitment: [0u8; 32],
+                fee_epoch_key: fr_safe(0x08),
+                fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+                fee_key_epoch: 1,
                 fee_rate_bps: 0,
                 price_scale: 1,
                 slot_index: 0,
@@ -1127,6 +1158,9 @@ mod tests {
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
+            fee_epoch_key: fr_safe(0x08),
+            fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+            fee_key_epoch: 1,
             fee_rate_bps: 0,
             price_scale: 1,
             circuit_n: 16,
@@ -1141,8 +1175,8 @@ mod tests {
         let mut store = OpeningStore::new();
         // The STORE stays commitment-keyed — it is in-enclave, and the enclave
         // holds both halves. Only what reaches the chain becomes a tag.
-        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
-        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+        store.insert(m.note_buyer, order_rec(buyer.clone(), [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller.clone(), [0x02; 16]));
 
         let mut output = RunBatchOutput::empty(7, 100, 0);
         output.matches = vec![m.clone()];
@@ -1182,11 +1216,16 @@ mod tests {
         let protocol_owner = fr_safe(0x07);
         let (m, buyer, seller) = scenario(1_000, 100_000, 0, 0, 300, 3);
         let mut store = OpeningStore::new();
-        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
-        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+        store.insert(m.note_buyer, order_rec(buyer.clone(), [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller.clone(), [0x02; 16]));
 
-        let base_inner = match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE).unwrap();
-        let quote_inner = match_fee_inner_hash(&m.note_buyer, FEE_ROLE_QUOTE).unwrap();
+        let key = fr_safe(0x08);
+        let base_tag =
+            NoteUseTag::from_bytes(use_tag(&m.note_seller, &seller.inner_hash).unwrap()).unwrap();
+        let quote_tag =
+            NoteUseTag::from_bytes(use_tag(&m.note_buyer, &buyer.inner_hash).unwrap()).unwrap();
+        let base_inner = match_fee_inner_hash(&key, &base_tag, FEE_ROLE_BASE).unwrap();
+        let quote_inner = match_fee_inner_hash(&key, &quote_tag, FEE_ROLE_QUOTE).unwrap();
         let base_fee_commitment =
             commitment_from_fields_v2(&base_mint(), 3, &protocol_owner, &base_inner)
                 .unwrap()

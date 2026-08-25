@@ -69,6 +69,7 @@ import {
   VAULT_CONFIG_ACCOUNT_LEN,
   vaultConfigTeePubkeys,
 } from "../src/tee/vault-config.js";
+import { deriveFeeKeyBinding } from "../src/utxo/match-output.js";
 
 // ────────────────────────────────────────────────────────────────────────────
 // env + keypair loading
@@ -205,6 +206,8 @@ export interface E2EConfig {
   protocol: {
     ownerCommitmentHex: string;
     feeRateBps: number;
+    feeKeyBindingHex: string;
+    feeKeyEpoch: string;
   };
   marketConfigPda: string;
   market: {
@@ -481,6 +484,19 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
       const tag = new TextEncoder().encode("darknyx-protocol-owner-v1");
       protocolOwnerCommitment.set(tag.slice(0, 32));
       protocolOwnerCommitment[0] = 0; // keep value < BN254 Fr
+      const feeKeyHex = requireEnv("DARKNYX_TEE_FEE_EPOCH_KEY");
+      if (!/^[0-9a-fA-F]{64}$/.test(feeKeyHex)) {
+        throw new Error("DARKNYX_TEE_FEE_EPOCH_KEY must be 32-byte hex");
+      }
+      const feeEpochKey = Uint8Array.from(Buffer.from(feeKeyHex, "hex"));
+      if (feeEpochKey.every((byte) => byte === 0)) {
+        throw new Error("DARKNYX_TEE_FEE_EPOCH_KEY must be nonzero");
+      }
+      const feeKeyBinding = await deriveFeeKeyBinding(feeEpochKey);
+      const feeKeyEpoch = BigInt(process.env.DARKNYX_TEE_FEE_KEY_EPOCH ?? "1");
+      if (feeKeyEpoch <= 0n) {
+        throw new Error("DARKNYX_TEE_FEE_KEY_EPOCH must be positive");
+      }
 
       // DEV-NET: wipe every Merkle-tree shard so the trade-flow test's
       // in-memory shadow trees start from the same empty root as on-chain.
@@ -551,6 +567,8 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
           admin: admin.publicKey,
           protocolOwnerCommitment,
           feeRateBps: PROTOCOL_FEE_BPS,
+          feeKeyBinding,
+          feeKeyEpoch,
         }),
       );
       const spcSig = await sendAndConfirmTransaction(
@@ -633,6 +651,8 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
             "hex",
           ),
           feeRateBps: PROTOCOL_FEE_BPS,
+          feeKeyBindingHex: Buffer.from(feeKeyBinding).toString("hex"),
+          feeKeyEpoch: feeKeyEpoch.toString(),
         },
         marketConfigPda: marketPda.toBase58(),
         market: {

@@ -147,8 +147,7 @@ async function executeDeposit(
     throw new DarkPoolError("parameter", "tokenMint must be 32 bytes");
   }
 
-  const { masterSeed, spendingKey, ownerBlinding } =
-    await client.getResolvedKeys();
+  const { masterSeed, spendingKey } = await client.getResolvedKeys();
   const treeId = params.treeId ?? 0;
 
   // --- Stage: merkle-position-fetch ---
@@ -170,8 +169,7 @@ async function executeDeposit(
   // --- Stage: note-build ---
   await params.callbacks?.pre?.("note-build");
   const recoveryNonce = bytesToBigIntBE(recoveryNonceBytes);
-  const owner = await ownerCommitment(spendingKey, ownerBlinding);
-  const ownerBytes = bn254ToBE32(owner);
+  const owner = await ownerCommitment(spendingKey);
   // The per-note secret is keyed on the PUBLIC recovery nonce, so cold
   // recovery re-derives it from seed + chain with nothing extra persisted.
   // It is what stops the inner — and the note-use tag derived from it — being
@@ -180,7 +178,6 @@ async function executeDeposit(
     deriveNoteSecret(masterSeed, recoveryNonceBytes),
   );
   const innerBytes = await deriveDepositInnerHash(
-    ownerBytes,
     recoveryNonceBytes,
     noteSecretBytes,
   );
@@ -204,7 +201,6 @@ async function executeDeposit(
       amount: params.amount,
       recoveryNonce,
       spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
       noteSecret: bytesToBigIntBE(noteSecretBytes),
     });
     const expectedPublic = [

@@ -1,5 +1,5 @@
 /**
- * v3.5 — batched match-validity prover (parameterised over N).
+ * Batched match-validity prover (parameterised over N).
  *
  * Single Groth16 proof attesting that output construction, market binding,
  * scaled pricing, conservation, and per-match fees hold for all active
@@ -44,7 +44,6 @@ import { snarkjsFullProve } from "./snarkjs-prover.js";
 const DOMAIN_BATCH_ROOT = 22n;
 // Commitment-only leaf (amount-privacy). Replaces the old two-stage
 // leaf's DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21.
-const DOMAIN_LEAF_V2 = 23n;
 /** `Poseidon3(29, note_commitment, inner_hash)` — the public consume handle. */
 const DOMAIN_NOTE_USE = 29n;
 /** `Poseidon3(30, tag_e, tag_f)` — folds the two relock tags into one leaf slot. */
@@ -121,7 +120,13 @@ export interface MatchSlotWitness {
   protocolOwnerCommitment: bigint;
   /** Governed fixed-point denominator — bound through the public config digest. */
   priceScale: bigint;
-  /** Fee-note inner_hashes (derive_inner(batch_slot, FEE_ROLE_*)). */
+  /** Private governed scalar used to derive all fee-note inners in this batch. */
+  feeEpochKey: bigint;
+  /** `Poseidon2(35, feeEpochKey)`, bound through the config digest. */
+  feeKeyBinding: bigint;
+  /** Monotonic governance epoch selecting `feeEpochKey`. */
+  feeKeyEpoch: bigint;
+  /** Canonical derived fee-note inners retained for parity assertions. */
   feeBaseInner: bigint;
   feeQuoteInner: bigint;
 }
@@ -207,6 +212,9 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     feeRateBps: 0n,
     protocolOwnerCommitment: 0n,
     priceScale: 1n,
+    feeEpochKey: 0n,
+    feeKeyBinding: 0n,
+    feeKeyEpoch: 0n,
     feeBaseInner: 0n,
     feeQuoteInner: 0n,
   };
@@ -453,6 +461,8 @@ export async function proveMatchBatch(
       baseMint: args.slots[0].baseMint,
       quoteMint: args.slots[0].quoteMint,
       priceScale: args.slots[0].priceScale,
+      feeKeyBinding: bn254ToBE32(args.slots[0].feeKeyBinding),
+      feeKeyEpoch: args.slots[0].feeKeyEpoch,
     }));
 
   const inputs: Record<string, string | string[]> = {
@@ -467,6 +477,9 @@ export async function proveMatchBatch(
     quote_mint_lo: pubkeyToFrPair(args.slots[0].quoteMint)[0].toString(),
     quote_mint_hi: pubkeyToFrPair(args.slots[0].quoteMint)[1].toString(),
     price_scale: args.slots[0].priceScale.toString(),
+    fee_key_binding: args.slots[0].feeKeyBinding.toString(),
+    fee_key_epoch: args.slots[0].feeKeyEpoch.toString(),
+    fee_epoch_key: args.slots[0].feeEpochKey.toString(),
     // VALID_CREATE-equivalent public fields
     note_a_commitment: args.slots.map((s) =>
       bigintFromBE32(s.noteAcommitment).toString(),

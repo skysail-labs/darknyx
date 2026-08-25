@@ -301,6 +301,9 @@ pub(crate) fn circom_input_json(
         "config_digest",
         "fee_rate_bps",
         "protocol_owner_commitment",
+        "fee_key_binding",
+        "fee_key_epoch",
+        "fee_epoch_key",
         "base_mint_lo",
         "base_mint_hi",
         "quote_mint_lo",
@@ -363,6 +366,9 @@ fn push_all_inputs(
         "protocol_owner_commitment",
         be32_to_bigint(&slots[0].protocol_owner_commitment)
     );
+    push!("fee_key_binding", be32_to_bigint(&slots[0].fee_key_binding));
+    push!("fee_key_epoch", BigInt::from(slots[0].fee_key_epoch));
+    push!("fee_epoch_key", be32_to_bigint(&slots[0].fee_epoch_key));
     let (base_lo, base_hi) = mint_lo_hi(&slots[0].base_mint);
     let (quote_lo, quote_hi) = mint_lo_hi(&slots[0].quote_mint);
     push!("base_mint_lo", base_lo);

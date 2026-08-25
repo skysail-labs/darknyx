@@ -46,11 +46,10 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     "production Node adapter supplies noteUseTag rather than the private commitment",
     async () => {
       const spendingKey = 91n;
-      const ownerBlinding = 92n;
       const innerHash = 93n;
       const amount = 94n;
       const tokenMint = dummyAddress().toBytes();
-      const owner = await ownerCommitment(spendingKey, ownerBlinding);
+      const owner = await ownerCommitment(spendingKey);
       const commitment = await noteCommitmentV2({
         tokenMint,
         amount,
@@ -64,7 +63,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
 
       const result = await prover({
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         innerHash,
         tokenMint,
         amount,
@@ -86,13 +84,12 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     async () => {
       // Note opening (small in-field values for safety on both Rust + circomlibjs).
       const spendingKey = 12345678901234567890n;
-      const ownerBlinding = 42n;
       const innerHash = 7n;
       const amount = 1_000_000n;
       const tokenMint = dummyAddress().toBytes();
 
       // Build the note commitment + drop it into a fresh shadow tree.
-      const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
+      const ownerCommitFr = await ownerCommitment(spendingKey);
       const noteCommitBE = await noteCommitmentV2({
         tokenMint,
         amount,
@@ -106,7 +103,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       const result = await proveValidInput({
         repoRoot,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         innerHash,
         tokenMint,
         amount,
@@ -158,12 +154,9 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
   ait("rejects a witness for a leaf that's not in the tree", async () => {
     // Same opening, but the merkle witness is for a DIFFERENT leaf.
     const spendingKey = 1n;
-    const ownerBlinding = 2n;
     const innerHash = 3n;
     const amount = 5n;
     const tokenMint = dummyAddress().toBytes();
-
-    const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
 
     const tree = await MerkleShadow.create();
     // Append a DIFFERENT note as leaf 0.
@@ -178,7 +171,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       proveValidInput({
         repoRoot,
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         innerHash,
         tokenMint,
         amount,
@@ -189,8 +181,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
         },
       }),
     ).rejects.toThrow();
-    // Silence unused warning if helper is moved.
-    void ownerCommitFr;
   });
 
   for (const [label, amount] of [
@@ -199,10 +189,9 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
   ] as const) {
     ait(`rejects private ${label} amount in-circuit`, async () => {
       const spendingKey = 11n;
-      const ownerBlinding = 12n;
       const innerHash = 13n;
       const tokenMint = dummyAddress().toBytes();
-      const owner = await ownerCommitment(spendingKey, ownerBlinding);
+      const owner = await ownerCommitment(spendingKey);
       const commitment = await noteCommitmentV2({
         tokenMint,
         amount,
@@ -223,7 +212,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
         tokenMint: [mintLo.toString(), mintHi.toString()],
         amount: amount.toString(),
         spendingKey: spendingKey.toString(),
-        ownerCommitmentBlinding: ownerBlinding.toString(),
         innerHash: innerHash.toString(),
         merklePath: witness.siblings.map((s) => be32ToBigInt(s).toString()),
         merkleIndices: witness.indices.map(String),

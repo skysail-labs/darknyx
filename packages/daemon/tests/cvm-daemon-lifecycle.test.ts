@@ -457,7 +457,6 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
       // global fetch and cannot reach the enclave.
       fetchImpl: tfetch,
       prover: nodeValidInputProver(VI),
-      ownerCommitmentBlinding: ks.ownerBlinding,
       tokenMint: baseMint.toBytes(),
     });
     const resp = await placeOrder(

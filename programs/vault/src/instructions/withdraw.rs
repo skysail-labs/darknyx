@@ -103,7 +103,6 @@ pub fn withdraw_handler(
     ctx: &mut Context<Withdraw>,
     _tree_id: u8,
     note_use_tag: [u8; 32],
-    nullifier: [u8; 32],
     merkle_root: [u8; 32],
     amount: u64,
     proof: Groth16Proof,
@@ -113,7 +112,7 @@ pub fn withdraw_handler(
     // ----- Layer 3: consumed-notes guard -----
     // Enforced by the `consumed_note` `init` constraint (a second withdraw OR a
     // prior settle-consume of this tag makes the init fail). The entry is
-    // written near the bottom of the handler, alongside the nullifier.
+    // written near the bottom of the handler.
 
     // ----- Layer 1: note-lock guard -----
     //
@@ -135,19 +134,18 @@ pub fn withdraw_handler(
     );
 
     // ----- Verify ZK proof -----
-    // VALID_SPEND public signals (in circuit declaration order):
-    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, recipient[0],
-    //    recipient[1]] plus the noteUseTag OUTPUT
+    // VALID_SPEND public signals are the noteUseTag output followed by root,
+    // mint halves, amount, and recipient halves. The retired nullifier was not
+    // a replay-state key and is intentionally absent.
     //
     // Wire order matches circuit.sym (circom places outputs before inputs):
     //   wire 1: noteUseTag (signal output — first in IC sum)
     //   wire 2: merkleRoot
-    //   wire 3: nullifier
-    //   wire 4: tokenMint[0]
-    //   wire 5: tokenMint[1]
-    //   wire 6: amount
-    //   wire 7: recipient[0]  (dest_lo — low 128 bits of the destination ATA)
-    //   wire 8: recipient[1]  (dest_hi — high 128 bits)
+    //   wire 3: tokenMint[0]
+    //   wire 4: tokenMint[1]
+    //   wire 5: amount
+    //   wire 6: recipient[0]
+    //   wire 7: recipient[1]
     // Binding noteUseTag as wire 1 prevents the "arbitrary handle bypass" attack
     // where a caller supplies an un-consumed handle while submitting a proof for
     // a different, already-consumed note. The TAG rather than the commitment:
@@ -156,7 +154,7 @@ pub fn withdraw_handler(
     let mint_bytes = ctx.accounts.token_mint.address().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
     // S-01: bind the DESTINATION into the proof. Without this the tuple
-    // (note_use_tag, nullifier, merkle_root, amount, proof) was a bearer
+    // (note_use_tag, merkle_root, amount, proof) was a bearer
     // instrument — the proof authorised destroying the note but said nothing
     // about where the money went, so whoever held those bytes first decided
     // the destination. Exploitable by front-running, and (needing no
@@ -165,13 +163,12 @@ pub fn withdraw_handler(
     // while creating neither guard PDA, leaving the note spendable.
     //
     // A 256-bit pubkey does not fit one BN254 Fr element, so it splits into
-    // lo/hi halves exactly like the mint — hence 8 public inputs, not 7.
+    // lo/hi halves exactly like the mint — hence 7 total public signals.
     let dest_bytes = ctx.accounts.destination_token_account.address().to_bytes();
     let [dest_lo, dest_hi] = pubkey_pair_be32(&dest_bytes);
-    let public_inputs: [[u8; 32]; 8] = [
+    let public_inputs: [[u8; 32]; 7] = [
         note_use_tag,
         merkle_root,
-        nullifier,
         mint_lo,
         mint_hi,
         u64_be32(amount),
@@ -186,7 +183,7 @@ pub fn withdraw_handler(
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<7>(&vk, &proof, &public_inputs)?;
 
     // ----- v2 solvency check (must come BEFORE state mutation) -----
     require!(
@@ -249,7 +246,6 @@ pub fn withdraw_handler(
     );
 
     emit!(Withdrawn {
-        nullifier,
         note_use_tag,
         token_mint: *ctx.accounts.token_mint.address(),
         amount,
@@ -260,7 +256,6 @@ pub fn withdraw_handler(
 
 #[event]
 pub struct Withdrawn {
-    pub nullifier: [u8; 32],
     pub note_use_tag: [u8; 32],
     pub token_mint: Address,
     pub amount: u64,

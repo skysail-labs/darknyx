@@ -114,9 +114,8 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
       (_, i) =>
         (i * 31 + 7 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
     );
-    const ownerBlinding = 99n;
     const spendingKey = deriveSpendingKey(masterSeed);
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const owner = await ownerCommitment(spendingKey);
     const tree = await MerkleShadow.create();
 
     // ── reset shard 0 so indices are deterministic (only this client appends) ──
@@ -145,7 +144,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
         },
       },
       connectionProvider: { connection: conn, perRpcUrl: rpcUrl },
-      ownerCommitmentBlinding: ownerBlinding,
       providers: {
         accountInfoProvider: {
           getAccountInfo: async (pk) => {
@@ -204,7 +202,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
               repoRoot: REPO_ROOT,
               k: inputs.k,
               spendingKey: inputs.spendingKey,
-              ownerCommitmentBlinding: inputs.ownerCommitmentBlinding,
               tokenMint: mint.toBytes(),
               merkleRootBE: bn254ToBE32(inputs.merkleRoot),
               slots,

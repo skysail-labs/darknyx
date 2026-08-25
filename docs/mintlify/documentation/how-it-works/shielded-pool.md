@@ -53,9 +53,8 @@ commitments. You read roots and inclusion paths through the
 
 ## Replay guards prevent double-spends
 
-A commitment proves a note *exists*. A withdrawal proof also derives a
-**nullifier** from the spending key and private inner hash. The shared on-chain
-consume-once handle, however, is the note-use tag:
+A commitment proves a note *exists*. Every spending proof derives the shared
+on-chain consume-once handle, the note-use tag:
 
 - `note_use_tag = Hash(note_commitment, inner_hash)` is **unlinkable** to the
   public leaf without the private inner hash, and
@@ -68,7 +67,8 @@ use note ──► publish note-use tag
    try to use it again ──► same consumed-note PDA already exists ──► rejected
 ```
 
-Settlement payload v11 publishes neither input nullifiers nor input commitments.
+Settlement payload v12 publishes neither input commitments nor any second
+spend identifier.
 Instead, the zero-knowledge circuits derive unlinkable note-use tags from each
 commitment and its private inner hash; lock, settlement, withdrawal, and merge
 derive their PDAs from those tags. A second attempt collides with the existing
@@ -81,7 +81,7 @@ than left to the matcher.
 
 ## The amount-independent inner hash
 
-Each note's commitment and its nullifier are both anchored on a single
+Each note's commitment and note-use tag are both anchored on a single
 amount-independent value, the note's **inner hash**. For a match output, the
 settlement circuit derives the new inner as
 `Poseidon3(24, consumed_input_inner, role)`. The matcher can therefore re-lock a
@@ -135,10 +135,9 @@ the note from being withdrawn, merged, or settled elsewhere while that
 settlement may still land. At lock expiry it stops blocking use; cleanup of the
 expired account is separate from spendability.
 
-Every value-moving transition is gated on-chain by a distinct record (a wallet
-entry, duplicate-deposit guard, withdrawal nullifier, consumed-note marker, or
-live note lock), so a note can never be spent twice regardless of what the
-engine does. See [Deposit](../account/deposit.md) and
+Every value-moving transition is gated on-chain by a duplicate-deposit guard,
+shared consumed-note marker, or live note lock, so a note can never be spent
+twice regardless of what the engine does. See [Deposit](../account/deposit.md) and
 [Withdraw](../account/withdraw.md) for the on-ramp and off-ramp,
 [Account Model](../account/account-model.md) for how you reconstruct your spendable
 set, and [Settlement](./settlement.md) for the on-chain spend pipeline.

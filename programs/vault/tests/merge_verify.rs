@@ -35,11 +35,10 @@ use solana_transaction::Transaction;
 const TREE_DEPTH: usize = 20;
 
 // Fixed test owner.
-fn owner_parts() -> (Fr, Fr, Fr) {
+fn owner_parts() -> (Fr, Fr) {
     let sk = Fr::from(0x1234_5678u64);
-    let r_owner = Fr::from(0xfeedu64);
-    let owner = poseidon_hash(&[Fr::from(1u64), sk, r_owner]).unwrap(); // DOMAIN_OWNER
-    (sk, r_owner, owner)
+    let owner = poseidon_hash(&[Fr::from(32u64), sk]).unwrap(); // DOMAIN_OWNER_V2
+    (sk, owner)
 }
 
 fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
@@ -115,7 +114,7 @@ fn prove_merge(
     Vec<[u8; 32]>,
 ) {
     assert!(num_real >= 1 && num_real <= k);
-    let (sk, r_owner, owner) = owner_parts();
+    let (sk, owner) = owner_parts();
     let mint_bytes = [0x07u8; 32];
     let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint_bytes);
 
@@ -154,9 +153,8 @@ fn prove_merge(
     // emit their note-use TAG (BE32), dummies emit 0. These are what merge.rs
     // consumes as tag-keyed ConsumedNoteEntry guards.
     //
-    // `input_commitments` (the leaf values) is still needed separately: the
-    // merged note's inner hash is defined over consumed COMMITMENTS, and that
-    // derivation is KAT-pinned on both host sides.
+    // `input_commitments` (the leaf values) is still needed separately for the
+    // Merkle tree. The merged note inner derives from the private input inners.
     let mut input_use_tags: Vec<[u8; 32]> = vec![];
     let mut input_commitments: Vec<[u8; 32]> = vec![];
     let mut paths: Vec<Vec<String>> = vec![];
@@ -194,7 +192,9 @@ fn prove_merge(
     }
 
     let mut merge_slots = [[0u8; 32]; 4];
-    merge_slots[..k].copy_from_slice(&input_commitments);
+    for (slot, inner) in inners.iter().enumerate() {
+        merge_slots[slot] = fr_to_be_bytes(inner);
+    }
     let active_bitmap = (1u8 << num_real) - 1;
     let output_inner_bytes = merge_output_inner_hash(&merge_slots, active_bitmap).unwrap();
     let output_inner = fr_from_be_bytes(&output_inner_bytes).unwrap();
@@ -227,7 +227,6 @@ fn prove_merge(
            \"merkleRoot\": \"{mr}\",\n\
            \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
            \"spendingKey\": \"{sk}\",\n\
-           \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"isActive\": [{act}],\n\
            \"amount\": [{amt}],\n\
            \"innerHash\": [{inr}],\n\
@@ -238,7 +237,6 @@ fn prove_merge(
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
         sk = fr_to_dec(&sk),
-        ocb = fr_to_dec(&r_owner),
         act = arr(&is_active),
         amt = arr(&amount_s),
         inr = arr(&inner_s),

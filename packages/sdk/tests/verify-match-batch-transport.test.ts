@@ -15,8 +15,8 @@ const PROGRAM_ID = new PublicKey(
 const filled = (length: number, byte: number): Uint8Array =>
   new Uint8Array(length).fill(byte);
 
-describe("verify_match_batch v3 transport", () => {
-  it("adds the governed market as a read-only account without changing Tx B data", async () => {
+describe("verify_match_batch transport", () => {
+  it("authenticates the fixed fee-recovery record in Tx B", async () => {
     const payer = dummyAddress();
     const baseMint = new PublicKey(filled(32, 0x44));
     const quoteMint = new PublicKey(filled(32, 0x55));
@@ -27,6 +27,8 @@ describe("verify_match_batch v3 transport", () => {
       baseMint,
       quoteMint,
       merkleRoot: root,
+      feeKeyEpoch: 7n,
+      feeRecoveryCiphertext: filled(272, 0x77),
       proof: {
         piA: filled(64, 0x11),
         piB: filled(128, 0x22),
@@ -34,11 +36,10 @@ describe("verify_match_batch v3 transport", () => {
       },
     });
 
-    // S-04: 8 disc + 32 root + 256 proof. The 8-byte caller-supplied
-    // `expiry_slot` is gone — it let an observer replay this proof with a
-    // 1-slot marker TTL and kill every settle in the batch. A regression that
-    // re-adds it grows this back to 304.
-    expect(ix.data).toHaveLength(296);
+    // disc + root + proof + epoch + fixed XChaCha ciphertext.
+    expect(ix.data).toHaveLength(576);
+    expect(new DataView(ix.data.buffer, ix.data.byteOffset).getBigUint64(296, true)).toBe(7n);
+    expect(ix.data.subarray(304)).toEqual(filled(272, 0x77));
     expect(ix.keys).toEqual([
       { pubkey: payer, isSigner: true, isWritable: true },
       {

@@ -9,7 +9,7 @@
  *     token_mint_lo_u128,
  *     token_mint_hi_u128,
  *     amount_u64,
- *     owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
+ *     owner_commitment_fr,  // = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)
  *     inner_hash_fr,        // single per-note blinding (v2 — replaced nonce+blinding_r)
  *   )
  *
@@ -18,7 +18,7 @@
  * withdraw becomes unspendable from the other environment.
  *
  * This is the highest-leverage parity test we could add — note_commitment is
- * the foundation of every UTXO operation. (Sibling: `nullifier-parity.test.ts`.)
+ * the foundation of every UTXO operation.
  */
 
 import { describe, it, expect } from "vitest";
@@ -29,7 +29,6 @@ import { existsSync } from "node:fs";
 
 import {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
 } from "../src/utxo/note.js";
 
@@ -182,16 +181,14 @@ describe("Note commitment parity — v2 (TS vs Rust)", () => {
 
   // The REDUCING helpers have their own boundary, and it is not the same one.
   //
-  // `ownerCommitment` and `nullifierV2` deliberately reduce their spending-key
-  // input mod r, because Rust reduces there too (`Fr::from_be_bytes_mod_order`)
-  // — that asymmetry is the whole subtlety of SW-23 and is pinned by
-  // `nullifier-parity.test.ts`. But Rust reduces BYTES, which cannot be
+  // `ownerCommitment` deliberately reduces its spending-key input mod r,
+  // because Rust reduces there too (`Fr::from_be_bytes_mod_order`). Rust
+  // reduces BYTES, which cannot be
   // negative, so a negative bigint has no Rust counterpart at all. Wrapping it
   // (`((v % r) + r) % r`) invented one: `-1n` became a perfectly valid-looking
   // `r - 1` commitment that the Rust side could never derive.
   it("rejects a negative spending key rather than wrapping it into the field", async () => {
-    await expect(ownerCommitment(-1n, 1n)).rejects.toThrow(/negative/);
-    await expect(nullifierV2(-1n, 1n)).rejects.toThrow(/negative/);
+    await expect(ownerCommitment(-1n)).rejects.toThrow(/negative/);
   });
 
   it("still reduces a legitimately oversized (256-bit) spending key", async () => {
@@ -199,11 +196,8 @@ describe("Note commitment parity — v2 (TS vs Rust)", () => {
     // break the real derivation path, where a 256-bit key is reduced on BOTH
     // sides. Rejecting here would be a divergence, not a fix.
     const oversized = (1n << 255n) + 7n;
-    await expect(ownerCommitment(oversized, 1n)).resolves.toEqual(
+    await expect(ownerCommitment(oversized)).resolves.toEqual(
       expect.any(BigInt),
-    );
-    await expect(nullifierV2(oversized, 1n)).resolves.toBeInstanceOf(
-      Uint8Array,
     );
   });
 

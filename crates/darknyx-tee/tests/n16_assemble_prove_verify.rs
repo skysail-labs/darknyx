@@ -163,6 +163,9 @@ async fn assembler_witness_proves_and_verifies_n16() {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
+        fee_epoch_key: fr_safe(0x08),
+        fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+        fee_key_epoch: 1,
         price_scale: 1,
         // This lone real match lands at batch index 0. The circuit binds
         // `batch_slot[0] === 0`; the assembler uses THIS, not the matcher's
@@ -192,8 +195,16 @@ async fn assembler_witness_proves_and_verifies_n16() {
     assert_eq!(public.public_inputs_be[1], public.config_digest);
     assert_eq!(
         public.config_digest,
-        darkpool_crypto::match_config_digest(0, &fr_safe(0x07), &base_mint(), &quote_mint(), 1)
-            .unwrap()
+        darkpool_crypto::match_config_digest(
+            0,
+            &fr_safe(0x07),
+            &base_mint(),
+            &quote_mint(),
+            1,
+            &darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+            1,
+        )
+        .unwrap()
     );
     assert_eq!(
         public.merkle_root,

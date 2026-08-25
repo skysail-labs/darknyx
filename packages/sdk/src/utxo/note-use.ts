@@ -32,10 +32,7 @@ import {
   type NoteUseTag,
 } from "./note-identity.js";
 
-/**
- * Domain tag. Note 26 is NOT free — it is `DOMAIN_MERGE_INNER`. In use: 1, 2, 3,
- * 5, 10..14, 22..28. Retired: 20, 21.
- */
+/** Domain tag; see the authoritative privacy-architecture domain registry. */
 export const DOMAIN_NOTE_USE = 29n;
 
 function be32ToBigInt(value: Uint8Array, label: string): bigint {

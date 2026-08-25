@@ -14,7 +14,6 @@ import {
   bn254ToBE32,
   deriveBlindingFactor,
   deriveNoteSecret,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
@@ -138,25 +137,19 @@ function be32ToBig(value: Uint8Array): bigint {
 
 describe("recoverNotesFromChain", () => {
   it("rebuilds deposit → trade/change → merge without stream state", async () => {
-    const owner = await ownerCommitment(
-      deriveSpendingKey(SEED),
-      deriveOwnerCommitmentBlinding(SEED),
-    );
-    const ownerBytes = bn254ToBE32(owner);
+    const owner = await ownerCommitment(deriveSpendingKey(SEED));
     const quoteNonce = deriveBlindingFactor(SEED, 0n);
     const baseNonce = deriveBlindingFactor(SEED, 1n);
     const quoteNonceBytes = bn254ToBE32(quoteNonce);
     const baseNonceBytes = bn254ToBE32(baseNonce);
     const quoteInner = be32ToBig(
       await deriveDepositInnerHash(
-        ownerBytes,
         quoteNonceBytes,
         bn254ToBE32(deriveNoteSecret(SEED, quoteNonceBytes)),
       ),
     );
     const baseInner = be32ToBig(
       await deriveDepositInnerHash(
-        ownerBytes,
         baseNonceBytes,
         bn254ToBE32(deriveNoteSecret(SEED, baseNonceBytes)),
       ),
@@ -277,14 +270,16 @@ describe("recoverNotesFromChain", () => {
     };
 
     // The merge consumes the base deposit and the trade output. Its ix carries
-    // only their tags; `deriveMergeOutputInnerHash` still runs over the
-    // COMMITMENTS, which recovery must reconstruct by inverting the tags.
-    const mergeInputs = [baseDeposit, trade];
+    // only their tags; recovery resolves the held notes and feeds their private
+    // inners to the v2 merge derivation.
     const mergeInputTags = [
       await deriveNoteUseTag(baseDeposit, bn254ToBE32(baseInner)),
       await deriveNoteUseTag(trade, bn254ToBE32(tradeInner)),
     ];
-    const mergeInner = await deriveMergeOutputInnerHash(mergeInputs);
+    const mergeInner = await deriveMergeOutputInnerHash([
+      bn254ToBE32(baseInner),
+      bn254ToBE32(tradeInner),
+    ]);
     const merged = await noteCommitmentV2({
       tokenMint: BASE_MINT,
       amount: 700n,

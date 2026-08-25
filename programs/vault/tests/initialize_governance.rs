@@ -12,6 +12,7 @@ use solana_keypair::Keypair;
 use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
+use vault::state::VaultConfig;
 
 type Pubkey = Address;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
@@ -104,12 +105,15 @@ fn upgrade_initializer_can_install_a_distinct_operations_admin() {
     send_initialize(&mut svm, &initializer, ix).unwrap();
 
     let data = svm.get_account(&vault).unwrap().data;
-    assert_eq!(data.len(), 1264);
+    assert_eq!(data.len(), 8 + core::mem::size_of::<VaultConfig>());
     assert_eq!(&data[8..40], operations_admin.as_ref());
     assert_eq!(&data[40..72], &tee_keys[0]);
     assert_eq!(&data[72..104], &tee_keys[1]);
-    assert_eq!(data[1258], 2);
-    assert_eq!(data[1259], 2);
+    assert_eq!(
+        data[8 + core::mem::offset_of!(VaultConfig, num_tee_keys)],
+        2
+    );
+    assert_eq!(data[8 + core::mem::offset_of!(VaultConfig, num_trees)], 2);
 }
 
 #[test]

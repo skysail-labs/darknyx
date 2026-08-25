@@ -4,7 +4,7 @@
  * Every `*-parity.test.ts` shells out to a `darkpool-crypto` example binary
  * under `target/debug/examples/`, and each SKIPS itself when its binary is
  * absent. That is the right default for a fresh checkout, but it means the
- * byte-equality contracts in CLAUDE.md §7 — note commitment, nullifier,
+ * byte-equality contracts in CLAUDE.md §7 — note commitment,
  * note-use tag, key derivation — can silently stop being checked while
  * `vitest run` still reports green.
  *

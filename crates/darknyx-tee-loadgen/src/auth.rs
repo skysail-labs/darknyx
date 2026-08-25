@@ -124,9 +124,9 @@ pub fn build_signed_place_body(
     // nominal-only, unchanged. `token_mint` must equal the TEE's per-side
     // collateral mint (bid → quote, ask → base); against a real
     // `from_boot` CVM those are `dev_match_config()`'s placeholder mints
-    // (base = 0x01..0xb1, quote = 0x01..0x9e). The nullifier /
-    // merkle_root / VALID_INPUT proof are not verified at intake (only
-    // stored), so synthetic values are fine.
+    // (base = 0x01..0xb1, quote = 0x01..0x9e). The merkle_root /
+    // VALID_INPUT proof are not verified by this synthetic auth-only path, so
+    // zero values are sufficient here.
     // TODO(loadgen): take mints via --base-mint/--quote-mint once the TEE
     // reads its market from the on-chain MarketConfig PDA.
     let nominal = match side {
@@ -159,14 +159,8 @@ pub fn build_signed_place_body(
     )
     .expect("synthetic opening fields are Fr-safe (top byte zero)")
     .into_bytes();
-    // Opaque-to-intake fields: a deterministic nullifier + an all-zero
-    // root + a 256-byte zero VALID_INPUT proof.
-    let nullifier = {
-        let mut n = [0u8; 32];
-        n[..16].copy_from_slice(&order_id);
-        n[16..].copy_from_slice(&order_id);
-        n
-    };
+    // Opaque-to-intake fields: an all-zero root + a 256-byte zero VALID_INPUT
+    // proof.
     let merkle_root = [0u8; 32];
     let valid_input_proof = [0u8; 256];
 
@@ -213,7 +207,6 @@ pub fn build_signed_place_body(
         // Input-note opening + VALID_INPUT relay (required since 4g.7a/c).
         "owner_commitment": hex::encode(owner_commitment),
         "note_inner_hash": hex::encode(note_inner_hash),
-        "nullifier": hex::encode(nullifier),
         "merkle_root": hex::encode(merkle_root),
         "valid_input_proof": hex::encode(valid_input_proof),
     });

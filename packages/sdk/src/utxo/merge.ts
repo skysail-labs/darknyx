@@ -169,8 +169,9 @@ export function getMergeFunction({
 
     // --- build the merged output note from the exact public commitment slots ---
     await params.callbacks?.pre?.("note-build");
-    const outputInnerHash =
-      await deriveMergeOutputInnerHash(inputCommitmentBytes);
+    const outputInnerHash = await deriveMergeOutputInnerHash(
+      innerHash.map((value) => bn254ToBE32(value)),
+    );
     const outputCommitment = await noteCommitmentV2({
       tokenMint: params.tokenMint,
       amount: sum,
@@ -180,7 +181,6 @@ export function getMergeFunction({
 
     // --- prove ---
     await params.callbacks?.pre?.("proof-generation");
-    const { ownerBlinding } = await client.getResolvedKeys();
     let proof;
     try {
       proof = await client.zkProver.merge.prove({
@@ -188,7 +188,6 @@ export function getMergeFunction({
         merkleRoot: u8ToBigBE(merkleRoot),
         tokenMint: [mintLo, mintHi],
         spendingKey,
-        ownerCommitmentBlinding: ownerBlinding,
         isActive,
         amount,
         innerHash,

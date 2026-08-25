@@ -19,22 +19,23 @@
 use crate::errors::CryptoError;
 use crate::poseidon::poseidon_hash_bytes;
 
-/// Fresh production domain tag, following `DOMAIN_DEPOSIT_INNER = 27`.
-pub const DOMAIN_MATCH_CONFIG: u64 = 28;
+pub const DOMAIN_MATCH_CONFIG_V2: u64 = 37;
 
-/// `Poseidon8(28, fee_rate_bps, protocol_owner, base_lo, base_hi,
-/// quote_lo, quote_hi, price_scale)`.
+/// `Poseidon10(37, fee_rate_bps, protocol_owner, base_lo, base_hi,
+/// quote_lo, quote_hi, price_scale, fee_key_binding, fee_key_epoch)`.
 pub fn match_config_digest(
     fee_rate_bps: u64,
     protocol_owner_commitment: &[u8; 32],
     base_mint: &[u8; 32],
     quote_mint: &[u8; 32],
     price_scale: u64,
+    fee_key_binding: &[u8; 32],
+    fee_key_epoch: u64,
 ) -> Result<[u8; 32], CryptoError> {
     let [base_lo, base_hi] = mint_halves_be(base_mint);
     let [quote_lo, quote_hi] = mint_halves_be(quote_mint);
     poseidon_hash_bytes(&[
-        u64_to_be32(DOMAIN_MATCH_CONFIG),
+        u64_to_be32(DOMAIN_MATCH_CONFIG_V2),
         u64_to_be32(fee_rate_bps),
         *protocol_owner_commitment,
         base_lo,
@@ -42,6 +43,8 @@ pub fn match_config_digest(
         quote_lo,
         quote_hi,
         u64_to_be32(price_scale),
+        *fee_key_binding,
+        u64_to_be32(fee_key_epoch),
     ])
 }
 
@@ -72,39 +75,47 @@ mod tests {
         let mut quote = [0u8; 32];
         quote[0] = 1;
         quote[31] = 0x9e;
-        let digest = match_config_digest(30, &owner, &base, &quote, 100_000_000).unwrap();
-
-        assert_eq!(
-            hex::encode(digest),
-            "053d4a1e1aa0c604c482f58e4afb9327ac4793922fc6be567c2120459be10758"
-        );
+        let binding = [3u8; 32];
+        let digest =
+            match_config_digest(30, &owner, &base, &quote, 100_000_000, &binding, 7).unwrap();
 
         assert_ne!(
             digest,
-            match_config_digest(31, &owner, &base, &quote, 100_000_000).unwrap()
+            match_config_digest(31, &owner, &base, &quote, 100_000_000, &binding, 7).unwrap()
         );
         let mut other_owner = owner;
         other_owner[31] ^= 1;
         assert_ne!(
             digest,
-            match_config_digest(30, &other_owner, &base, &quote, 100_000_000).unwrap()
+            match_config_digest(30, &other_owner, &base, &quote, 100_000_000, &binding, 7).unwrap()
         );
         let mut other_base = base;
         other_base[31] ^= 1;
         assert_ne!(
             digest,
-            match_config_digest(30, &owner, &other_base, &quote, 100_000_000).unwrap()
+            match_config_digest(30, &owner, &other_base, &quote, 100_000_000, &binding, 7).unwrap()
         );
         let mut other_quote = quote;
         other_quote[31] ^= 1;
         assert_ne!(
             digest,
-            match_config_digest(30, &owner, &base, &other_quote, 100_000_000).unwrap()
+            match_config_digest(30, &owner, &base, &other_quote, 100_000_000, &binding, 7).unwrap()
         );
         assert_ne!(
             digest,
-            match_config_digest(30, &owner, &base, &quote, 1).unwrap()
+            match_config_digest(30, &owner, &base, &quote, 1, &binding, 7).unwrap()
         );
-        assert!(match_config_digest(30, &[0xff; 32], &base, &quote, 1).is_err());
+        let mut other_binding = binding;
+        other_binding[31] ^= 1;
+        assert_ne!(
+            digest,
+            match_config_digest(30, &owner, &base, &quote, 100_000_000, &other_binding, 7).unwrap()
+        );
+        assert_ne!(
+            digest,
+            match_config_digest(30, &owner, &base, &quote, 100_000_000, &binding, 8).unwrap()
+        );
+        assert!(match_config_digest(30, &[0xff; 32], &base, &quote, 1, &binding, 7).is_err());
+        assert!(match_config_digest(30, &owner, &base, &quote, 1, &[0xff; 32], 7).is_err());
     }
 }

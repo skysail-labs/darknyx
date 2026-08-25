@@ -494,7 +494,8 @@ move atomically in Phase 2.
 ## 8. Provisional domain freeze
 
 The machine-readable proposal is
-[`domain-registry.proposed.json`](domain-registry.proposed.json).
+The provisional allocation was promoted in Phase 3 to the authoritative
+[`domain-registry.json`](domain-registry.json).
 Its JSON Schema is
 [`domain-registry.schema.json`](domain-registry.schema.json).
 The companion machine-readable formula vectors are
@@ -543,7 +544,7 @@ Repository checks for this documentation-only phase:
 
 ```sh
 git diff --check
-python3 -m json.tool docs/privacy-architecture/domain-registry.proposed.json
+node scripts/check-domain-registry.mjs
 python3 -m json.tool docs/privacy-architecture/phase0-vectors.json
 ```
 

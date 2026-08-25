@@ -1,7 +1,7 @@
 //! Shared cryptographic primitives for the Darknyx dark pool.
 //!
 //! This crate is the single source of truth for Poseidon hashing over BN254, the
-//! note commitment and nullifier formulas, note-use tags, deposit/merge/match inner
+//! note commitment formulas, note-use tags, deposit/merge/match inner
 //! hashes and the live client key derivations.
 //!
 //! # The byte-equality contract
@@ -41,6 +41,8 @@
 
 pub mod deposit;
 pub mod errors;
+#[cfg(not(target_os = "solana"))]
+pub mod fee_recovery;
 pub mod field;
 #[cfg(not(target_os = "solana"))]
 pub mod fill_encryption;
@@ -51,11 +53,16 @@ pub mod match_output;
 pub mod merge;
 pub mod note;
 pub mod note_use;
-pub mod nullifier;
 pub mod poseidon;
 
-pub use deposit::{deposit_inner_hash, DOMAIN_DEPOSIT_INNER};
+pub use deposit::{deposit_inner_hash, DOMAIN_DEPOSIT_INNER_V2};
 pub use errors::CryptoError;
+#[cfg(not(target_os = "solana"))]
+pub use fee_recovery::{
+    decode_fee_amounts, decrypt_fee_recovery, encode_fee_amounts, encrypt_fee_recovery,
+    FEE_RECOVERY_CIPHERTEXT_LEN, FEE_RECOVERY_PLAINTEXT_LEN, FEE_RECOVERY_SLOTS,
+    FEE_RECOVERY_VERSION,
+};
 pub use field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, Fr, FR_BYTES};
 #[cfg(not(target_os = "solana"))]
 pub use fill_encryption::{
@@ -67,13 +74,15 @@ pub use keys::{
     darknyx_shake_kdf_v1, derive_blinding_factor, derive_note_secret, derive_spending_key,
     derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
 };
-pub use match_config::{match_config_digest, DOMAIN_MATCH_CONFIG};
+pub use match_config::{match_config_digest, DOMAIN_MATCH_CONFIG_V2};
 pub use match_output::{
-    match_fee_inner_hash, match_output_inner_hash, DOMAIN_MATCH_FEE_INNER,
-    DOMAIN_MATCH_OUTPUT_INNER,
+    fee_key_binding, match_fee_inner_hash, match_output_inner_hash, DOMAIN_FEE_INNER_V2,
+    DOMAIN_FEE_KEY_BINDING, DOMAIN_MATCH_OUTPUT_INNER,
 };
-pub use merge::{merge_output_inner_hash, DOMAIN_MERGE_INNER};
-pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES};
+pub use merge::{merge_output_inner_hash, DOMAIN_MERGE_INNER_V2};
+pub use note::{
+    commitment_from_fields_v2, owner_commitment, NoteCommitment, DOMAIN_OWNER_V2,
+    NOTE_COMMITMENT_BYTES,
+};
 pub use note_use::{note_use_tag, NoteUseTag, DOMAIN_NOTE_USE};
-pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};

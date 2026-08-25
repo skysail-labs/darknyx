@@ -24,7 +24,6 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | -------------------------------- | -------------------------------------------------------- |
 | `poseidon-parity.test.ts`        | Poseidon arities TS↔Rust byte-equality                   |
 | `note-commitment-parity.test.ts` | v2 note commitment TS↔Rust                               |
-| `nullifier-parity.test.ts`       | v2 nullifier TS↔Rust                                     |
 | `keys-parity.test.ts`            | key derivation TS↔Rust                                   |
 | `inner-hash-parity.test.ts`      | change/trade/fee `inner_hash` TS↔Rust                    |
 | `order-canonical-parity.test.ts` | order/cancel/topup canonical digest TS↔Rust              |

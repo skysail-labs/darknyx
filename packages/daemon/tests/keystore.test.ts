@@ -109,7 +109,6 @@ describe("Keystore — derivation", () => {
     const oc1 = await ks.ownerCommitment();
     const oc2 = await ks.ownerCommitment();
     expect(oc1).toBe(oc2); // deterministic
-    expect(ks.ownerBlinding).toBe(new Keystore(identity()).ownerBlinding);
   });
 
   it("derives distinct per-order trading keys; signatures verify", () => {
@@ -146,14 +145,14 @@ describe("account identity derivation", () => {
     );
   });
 
-  it("recreating from the same seed yields a usable, identical keystore", () => {
+  it("recreating from the same seed yields a usable, identical keystore", async () => {
     const id = generateAccountIdentity();
     const recreated = deriveAccountIdentity(id.masterSeed);
     expect(new Keystore(recreated).spendingKey).toBe(
       new Keystore(id).spendingKey,
     );
-    expect(new Keystore(recreated).ownerBlinding).toBe(
-      new Keystore(id).ownerBlinding,
+    expect(await new Keystore(recreated).ownerCommitment()).toBe(
+      await new Keystore(id).ownerCommitment(),
     );
   });
 

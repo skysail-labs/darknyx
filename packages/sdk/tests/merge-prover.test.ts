@@ -54,13 +54,12 @@ const HAVE_ARTIFACTS =
 const maybe = HAVE_ARTIFACTS ? describe : describe.skip;
 
 const SK = 0x1234_5678n;
-const BLINDING = 0xfeedn;
 const MINT = new Uint8Array(32).fill(0x07);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 /** Build a note set in a fresh tree; return the shared root + per-note slots. */
 async function buildTree(notes: { amount: bigint; innerHash: bigint }[]) {
-  const owner = await ownerCommitment(SK, BLINDING);
+  const owner = await ownerCommitment(SK);
   const tree = await MerkleShadow.create();
   for (const n of notes) {
     const c = await noteCommitmentV2({
@@ -96,7 +95,6 @@ maybe("VALID_MERGE circuit", () => {
       repoRoot: REPO_ROOT,
       k: 2,
       spendingKey: SK,
-      ownerCommitmentBlinding: BLINDING,
       tokenMint: MINT,
       merkleRootBE: root,
       slots,
@@ -121,7 +119,6 @@ maybe("VALID_MERGE circuit", () => {
       repoRoot: REPO_ROOT,
       k: 4,
       spendingKey: SK,
-      ownerCommitmentBlinding: BLINDING,
       tokenMint: MINT,
       merkleRootBE: root,
       slots, // only 2 real → 2 dummy slots padded
@@ -151,7 +148,6 @@ maybe("VALID_MERGE circuit", () => {
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey: SK,
-        ownerCommitmentBlinding: BLINDING,
         tokenMint: MINT,
         merkleRootBE: root,
         slots,
@@ -165,7 +161,6 @@ maybe("VALID_MERGE circuit", () => {
       merkleRoot: "1",
       tokenMint: ["1", "2"],
       spendingKey: SK.toString(),
-      ownerCommitmentBlinding: BLINDING.toString(),
       isActive: ["0", "0"],
       amount: ["0", "0"],
       innerHash: ["0", "0"],
@@ -191,7 +186,6 @@ maybe("VALID_MERGE circuit", () => {
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey: SK,
-        ownerCommitmentBlinding: BLINDING,
         tokenMint: MINT,
         merkleRootBE: root,
         slots,
@@ -209,7 +203,6 @@ maybe("VALID_MERGE circuit", () => {
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey: SK,
-        ownerCommitmentBlinding: BLINDING,
         tokenMint: MINT,
         merkleRootBE: root,
         slots,

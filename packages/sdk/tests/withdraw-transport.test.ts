@@ -77,7 +77,6 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
           // computed inside the circuit, so the stub echoes what the caller set.
           this.expectedNoteUseTag ?? new Uint8Array(32),
           bn254ToBE32(inputs.merkleRoot),
-          bn254ToBE32(inputs.nullifier),
           bn254ToBE32(inputs.tokenMint[0]),
           bn254ToBE32(inputs.tokenMint[1]),
           bn254ToBE32(inputs.amount),
@@ -153,7 +152,6 @@ function makeClient(
     connectionProvider: conn,
     providers,
     zkProver: prover,
-    ownerCommitmentBlinding: 55n,
   });
 }
 
@@ -195,7 +193,6 @@ describe("getWithdrawFunction", () => {
     });
 
     expect(receipt.signature).toBe("withdraw_sig_xyz");
-    expect(receipt.nullifier).toHaveLength(32);
     expect(stages).toEqual([
       "merkle-proof-fetch",
       "note-build",
@@ -219,15 +216,15 @@ describe("getWithdrawFunction", () => {
     const disc = anchorDiscriminator("withdraw");
     expect(ix.data.subarray(0, 8)).toEqual(disc);
 
-    // Data layout: disc(8) || tree_id(1) || note_commitment(32) || nullifier(32)
+    // Data layout: disc(8) || tree_id(1) || note_use_tag(32)
     //   || merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
     const d = ix.data;
-    expect(d.length).toBe(8 + 1 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
+    expect(d.length).toBe(8 + 1 + 32 + 32 + 8 + 64 + 128 + 64);
     expect(d[8]).toBe(0); // tree_id
-    const amt = u64le(d, 8 + 1 + 32 + 32 + 32);
+    const amt = u64le(d, 8 + 1 + 32 + 32);
     expect(amt).toBe(250_000n);
     // Proof bytes (0xaa / 0xbb / 0xcc) should be present at the tail.
-    const tailStart = 8 + 1 + 32 + 32 + 32 + 8;
+    const tailStart = 8 + 1 + 32 + 32 + 8;
     expect(d[tailStart]).toBe(0xaa);
     expect(d[tailStart + 64]).toBe(0xbb);
     expect(d[tailStart + 64 + 128]).toBe(0xcc);

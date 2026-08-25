@@ -12,26 +12,20 @@
 //! in `circuits/templates/match_batch.circom`:
 //!
 //! ```text
-//!   leaf = Poseidon11(
-//!     DOMAIN_LEAF_V2 (= 23),
-//!     is_active,
-//!     note_a, note_b, note_c, note_d, note_e, note_f,
-//!     note_fee_base, note_fee_quote,
-//!     batch_slot,
+//!   relock_digest = Poseidon3(30, tag_e, tag_f)
+//!   leaf = Poseidon12(
+//!     DOMAIN_LEAF_V3 (= 31), is_active,
+//!     tag_a, tag_b, note_c, note_d, note_e, note_f,
+//!     note_fee_base, note_fee_quote, batch_slot, relock_digest,
 //!   )
 //! ```
 //!
 //! Internal Merkle node: `Poseidon3(DOMAIN_BATCH_ROOT = 22, left,
 //! right)`.
 //!
-//! Commitment-only (amount-privacy): the six note commitments + two fee
-//! notes bind the amounts/mints/price transitively (each commitment is itself
-//! a Poseidon6 of mint+amount+owner+inner), so the leaf no longer hashes the
-//! plaintext amounts the old two-stage (Poseidon12+Poseidon9) leaf did — and
-//! they can leave the settle payload entirely. 11 inputs ≤ 12
-//! (= `light-poseidon::MAX_X5_LEN - 1`), so a single Poseidon suffices and the
-//! on-chain handler can re-derive it via `solana_poseidon::hashv`; keep it
-//! ≤ 12 (CLAUDE.md §5.3).
+//! The consumed inputs are unlinkable use tags while created outputs remain
+//! commitments. The two continuation tags are folded to keep the outer hash at
+//! light-poseidon's 12-input cap.
 
 use darkpool_crypto::{note_use_tag, poseidon_hash_bytes, CryptoError, NoteCommitment};
 
@@ -39,11 +33,6 @@ use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
 // ── Domain-separation tags. MUST match the circuit constants. ───
 pub const DOMAIN_BATCH_ROOT: u8 = 22;
-/// Commitment-only leaf (amount-privacy). A fresh tag avoids any
-/// overlap with the old two-stage leaf (the retired DOMAIN_LEAF_INNER=20 /
-/// DOMAIN_LEAF_TOP=21 tags, removed when the leaf collapsed to one Poseidon11).
-pub const DOMAIN_LEAF_V2: u8 = 23;
-
 /// Leaf tag v3. The consumed slots now carry note-use TAGS instead of
 /// commitments, so the leaf construction changed and needs its own domain.
 pub const DOMAIN_LEAF_V3: u8 = 31;

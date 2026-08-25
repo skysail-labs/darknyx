@@ -6,7 +6,7 @@
 //! * `MatchResultPayload` — the Borsh struct the TEE signs and every settle ix
 //!   carries.
 //! * `canonical_payload_hash` — the SHA-256 the TEE actually signs, over the
-//!   `darknyx-match-v11` domain. Byte-identical with the TS
+//!   `darknyx-match-v12` domain. Byte-identical with the TS
 //!   `canonicalPayloadHash` and two other implementations; see CLAUDE.md §7.1.
 //!   `canonical_payload_hash_fixed_vector` below pins it.
 //! * `verify_tee_signature` — Ed25519-precompile inspection, called by the
@@ -109,7 +109,7 @@ pub struct MatchResultPayload {
     // (`quote === floor(base * price / price_scale)`) and bound inside the note
     // commitments, so it never needs to ride in the public settle ix.
     //
-    // This struct is 552 bytes and is signed under the `darknyx-match-v11`
+    // This struct is 552 bytes and is signed under the `darknyx-match-v12`
     // domain. ANY change to the field set or their order must bump that domain
     // tag — the tag is what stops a signature made over one layout from
     // verifying against another.
@@ -245,7 +245,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // older payload layout, which is what stops a signature for one field
         // set being replayed against another. Change the field list below and
         // this string must change with it.
-        b"darknyx-match-v11",
+        b"darknyx-match-v12",
         p.match_id.as_ref(),
         p.note_a_use_tag.as_ref(),
         p.note_b_use_tag.as_ref(),
@@ -402,9 +402,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0xC7, 0xFF, 0x67, 0xAC, 0xDA, 0x24, 0x5D, 0x16, 0x4C, 0x12, 0x48, 0xDC, 0x51, 0xDC,
-            0x2D, 0x97, 0x05, 0x2C, 0x3A, 0xBE, 0x76, 0x96, 0x41, 0x3D, 0x54, 0xE6, 0x53, 0x6E,
-            0xD0, 0x15, 0x6D, 0x45,
+            0xCC, 0x3A, 0x7F, 0xF2, 0xCB, 0x97, 0xFE, 0x64, 0x3E, 0x06, 0xE7, 0x4D, 0x74, 0xE4,
+            0xE0, 0x58, 0x09, 0x8D, 0x7E, 0xF5, 0xDE, 0x44, 0xC2, 0x7A, 0xBE, 0xB3, 0x77, 0xFC,
+            0x5C, 0x92, 0x12, 0x5A,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

@@ -3,7 +3,8 @@
 import { poseidonHashBytesBE } from "./note.js";
 
 export const DOMAIN_MATCH_OUTPUT_INNER = 24n;
-export const DOMAIN_MATCH_FEE_INNER = 25n;
+export const DOMAIN_FEE_KEY_BINDING = 35n;
+export const DOMAIN_FEE_INNER_V2 = 36n;
 export const MATCH_ROLE_TRADE_BUYER = 0xc1;
 export const MATCH_ROLE_TRADE_SELLER = 0xd1;
 export const MATCH_ROLE_CHANGE_BUYER = 0xb1;
@@ -37,14 +38,26 @@ export async function deriveMatchOutputInner(
   ]);
 }
 
-/** `Poseidon3(25, consumed_input_commitment, role)`. */
+/** `Poseidon2(35, fee_epoch_key)`. */
+export async function deriveFeeKeyBinding(
+  feeEpochKey: Uint8Array,
+): Promise<Uint8Array> {
+  return poseidonHashBytesBE([
+    DOMAIN_FEE_KEY_BINDING,
+    bytesToBigIntBE(feeEpochKey),
+  ]);
+}
+
+/** `Poseidon4(36, fee_epoch_key, consumed_use_tag, role)`. */
 export async function deriveMatchFeeInner(
-  inputCommitment: Uint8Array,
+  feeEpochKey: Uint8Array,
+  consumedUseTag: Uint8Array,
   role: number,
 ): Promise<Uint8Array> {
   return poseidonHashBytesBE([
-    DOMAIN_MATCH_FEE_INNER,
-    bytesToBigIntBE(inputCommitment),
+    DOMAIN_FEE_INNER_V2,
+    bytesToBigIntBE(feeEpochKey),
+    bytesToBigIntBE(consumedUseTag),
     requireRole(role),
   ]);
 }

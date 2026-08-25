@@ -136,7 +136,6 @@ impl RealSettleHarness {
         depositor_token_account: &solana_address::Address,
         amount: u64,
         spending_key: &Fr,
-        owner_blinding: &Fr,
         recovery_nonce: &[u8; 32],
         tree_id: u8,
     ) -> R<DepositedNote> {
@@ -149,14 +148,9 @@ impl RealSettleHarness {
         // for the deposit path is covered by the SDK parity tests and the
         // devnet deposit/withdraw gate, not here.
         let note_secret = synthetic_note_secret(recovery_nonce);
-        let deposit = self.deposit_prover.prove(
-            spending_key,
-            owner_blinding,
-            &mint,
-            amount,
-            recovery_nonce,
-            &note_secret,
-        )?;
+        let deposit =
+            self.deposit_prover
+                .prove(spending_key, &mint, amount, recovery_nonce, &note_secret)?;
         let ix = vault::build_deposit_ix(
             tree_id,
             &payer.pubkey(),
@@ -185,16 +179,10 @@ impl RealSettleHarness {
     }
 
     /// Prove VALID_INPUT for `note`, witnessing against the shard it landed in.
-    pub fn prove(
-        &self,
-        spending_key: &Fr,
-        owner_blinding: &Fr,
-        note: &DepositedNote,
-    ) -> R<ValidInputProof> {
+    pub fn prove(&self, spending_key: &Fr, note: &DepositedNote) -> R<ValidInputProof> {
         let witness = self.shadows[note.tree_id as usize].witness(note.leaf_index as usize)?;
         self.input_prover.prove(
             spending_key,
-            owner_blinding,
             &note.inner_hash,
             &note.mint,
             note.amount,

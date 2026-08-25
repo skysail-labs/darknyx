@@ -67,7 +67,6 @@ export function createMergeClient(opts: MergeClientOptions): {
       merkleProofProvider: merkleProvider,
     },
     zkProver: nodeMergeProver(opts.artifacts),
-    ownerCommitmentBlinding: opts.keystore.ownerBlinding,
   });
   return { client, merkleProvider };
 }

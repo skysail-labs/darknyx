@@ -44,7 +44,6 @@ import {
   bn254ToBE32,
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
-import { nullifierV2 } from "../src/utxo/note.js";
 import {
   vaultConfigPda,
   buildMergeInstruction,
@@ -242,7 +241,6 @@ maybeDescribe(
             repoRoot: REPO_ROOT,
             k: 2,
             spendingKey: seller.spendingKey,
-            ownerCommitmentBlinding: seller.ownerBlinding,
             tokenMint: baseMint.toBytes(),
             merkleRootBE: root,
             slots: [
@@ -359,7 +357,6 @@ maybeDescribe(
             trading_key_signature: hex(sig),
             owner_commitment: hex(bn254ToBE32(p.ownerCommit)),
             note_inner_hash: hex(bn254ToBE32(note.innerHash)),
-            nullifier: hex(await nullifierV2(p.spendingKey, note.innerHash)),
             merkle_root: hex(vi.root),
             valid_input_proof: hex(vi.proofBytes),
             collateral_amount: Number(note.amount),

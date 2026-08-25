@@ -58,10 +58,9 @@ const beToBig = (x: Uint8Array): bigint => {
 describe("nodeMergeProver (real VALID_MERGE k=2)", () => {
   ait("proves a 2-note merge whose witness satisfies the circuit", async () => {
     const spendingKey = 12345678901234567890n;
-    const ownerBlinding = 42n;
     const tokenMint = new Uint8Array(32);
     tokenMint.set([1, 2, 3, 4]);
-    const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const owner = await ownerCommitment(spendingKey);
 
     // Two input notes (same owner + mint).
     const notes = [
@@ -89,7 +88,6 @@ describe("nodeMergeProver (real VALID_MERGE k=2)", () => {
       merkleRoot: beToBig(root),
       tokenMint: [mintLo, mintHi],
       spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
       isActive: [1, 1],
       amount: notes.map((n) => n.amount),
       innerHash: notes.map((n) => n.innerHash),
@@ -102,7 +100,7 @@ describe("nodeMergeProver (real VALID_MERGE k=2)", () => {
     expect(proof.piA).toHaveLength(64);
     expect(proof.piB).toHaveLength(128);
     expect(proof.piC).toHaveLength(64);
-    // public signals: outputCommitment, merkleRoot, mint_lo, mint_hi, k nullifiers
+    // public signals: outputCommitment, k input use tags, root, mint halves
     expect(proof.publicInputs.length).toBe(4 + 2);
   });
 

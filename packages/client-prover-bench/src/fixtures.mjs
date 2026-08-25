@@ -53,14 +53,13 @@ export async function buildFixtures() {
   const hash = (...values) => fr(poseidon(values));
 
   const spendingKey = 12345678901234567890n;
-  const ownerBlinding = 42n;
   const mint = [
     0x00112233445566778899aabbccddeeffn,
     0xffeeddccbbaa99887766554433221100n,
   ];
   const amounts = [1_000_000n, 2_000_000n, 3_000_000n, 4_000_000n];
   const innerHashes = [701n, 702n, 703n, 704n];
-  const owner = hash(1n, spendingKey, ownerBlinding);
+  const owner = hash(32n, spendingKey);
   const commitments = amounts.map((amount, index) =>
     hash(2n, mint[0], mint[1], amount, owner, innerHashes[index]),
   );
@@ -71,7 +70,7 @@ export async function buildFixtures() {
 
   const recoveryNonce = 112233445566778899n;
   const noteSecret = 998877665544332211n;
-  const depositInner = hash(27n, owner, recoveryNonce, noteSecret);
+  const depositInner = hash(33n, recoveryNonce, noteSecret);
   const depositAmount = 5_015_000n;
   const depositCommitment = hash(
     2n,
@@ -91,18 +90,17 @@ export async function buildFixtures() {
     tokenMint: strings(mint),
     amount: String(amounts[index]),
     spendingKey: String(spendingKey),
-    ownerCommitmentBlinding: String(ownerBlinding),
     innerHash: String(innerHashes[index]),
     ...path(index),
   });
 
   const merge = (k) => {
     const active = Array.from({ length: k }, (_, index) => index < k);
-    const masked = commitments.slice(0, k);
+    const masked = innerHashes.slice(0, k);
     while (masked.length < 4) masked.push(0n);
     const bitmap = (1n << BigInt(k)) - 1n;
     const outputAmount = amounts.slice(0, k).reduce((sum, x) => sum + x, 0n);
-    const outputInner = hash(26n, ...masked, bitmap);
+    const outputInner = hash(34n, ...masked, bitmap);
     const outputCommitment = hash(
       2n,
       mint[0],
@@ -116,7 +114,6 @@ export async function buildFixtures() {
         merkleRoot: String(tree.root),
         tokenMint: strings(mint),
         spendingKey: String(spendingKey),
-        ownerCommitmentBlinding: String(ownerBlinding),
         isActive: active.map((value) => (value ? "1" : "0")),
         amount: strings(amounts.slice(0, k)),
         innerHash: strings(innerHashes.slice(0, k)),
@@ -136,7 +133,6 @@ export async function buildFixtures() {
     };
   };
 
-  const nullifier = hash(3n, spendingKey, innerHashes[0]);
   const recipient = [
     0x1234567890abcdef1234567890abcdefn,
     0xfedcba0987654321fedcba0987654321n,
@@ -150,7 +146,6 @@ export async function buildFixtures() {
         amount: String(depositAmount),
         recoveryNonce: String(recoveryNonce),
         spendingKey: String(spendingKey),
-        ownerCommitmentBlinding: String(ownerBlinding),
         noteSecret: String(noteSecret),
       },
       expectedPublic: strings([
@@ -167,13 +162,11 @@ export async function buildFixtures() {
     spend: {
       input: {
         ...commonNote(0),
-        nullifier: String(nullifier),
         recipient: strings(recipient),
       },
       expectedPublic: strings([
         useTags[0],
         tree.root,
-        nullifier,
         ...mint,
         amounts[0],
         ...recipient,

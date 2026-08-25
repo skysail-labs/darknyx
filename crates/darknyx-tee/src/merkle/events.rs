@@ -183,7 +183,8 @@ const NO_LEAF: u64 = u64::MAX;
 /// match_index(1) || 4×32 siblings` (see
 /// `settle_batched::build_settle_batched_ix`). Post-sharding the payload
 /// starts at offset 9 (disc + the 1-byte `tree_id`). The width is
-/// `MatchResultPayload::WIRE_LEN` (payload v11 adds note-use/relock tags).
+/// `MatchResultPayload::WIRE_LEN` (payload v12 preserves the v11 Borsh shape
+/// while changing its canonical signature domain).
 pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
     const PAYLOAD_START: usize = 8 + 1; // disc + tree_id
     if ix_data.len() < PAYLOAD_START + MatchResultPayload::WIRE_LEN {

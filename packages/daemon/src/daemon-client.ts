@@ -1,7 +1,7 @@
 /**
  * createDaemonClient — a deposit-capable SDK `DarkPoolClient` for the daemon.
  *
- * Wires the daemon's keystore (seed + owner blinding) + the operator's payer
+ * Wires the daemon's keystore (seed-derived spending/recovery keys) + the operator's payer
  * keypair + a Helius connection into the SDK client that backs the daemon's
  * direct on-chain actions.
  *
@@ -76,6 +76,5 @@ export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
       spend: stubs.spend,
       merge: stubs.merge,
     },
-    ownerCommitmentBlinding: opts.keystore.ownerBlinding,
   });
 }

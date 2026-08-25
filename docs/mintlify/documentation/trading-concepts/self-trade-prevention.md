@@ -55,8 +55,8 @@ else.
 ## What it is not
 
 This is not proof of unique human identity. A user can deliberately create a
-second wallet identity—or rotate the owner blinding used for new notes—and the
-two owner commitments will look like distinct counterparties. Preventing that
+second wallet identity with another spending key, and the two owner commitments
+will look like distinct counterparties. Preventing that
 kind of pseudonymous wash trading requires an identity or surveillance policy
 outside the matching rule.
 

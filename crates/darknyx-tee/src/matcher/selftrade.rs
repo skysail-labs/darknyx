@@ -3,7 +3,7 @@
 //! Implemented in the matching algorithm itself, not here: a single behavior —
 //! two orders from the same OWNER are never matched against each other (a wash
 //! trade / no-op settle). The owner identity is the order's note-BOUND
-//! `owner_commitment` (`Poseidon2(spending_key, r_owner)`): intake pins it to the
+//! `owner_commitment` (`Poseidon2(32, spending_key)`): intake pins it to the
 //! collateral note via `verify_commitment`, so a *settling* wash cannot lie
 //! about it (the only way to present two different owners is two genuinely
 //! different note owners). It is
@@ -17,8 +17,8 @@
 //! tick.
 //!
 //! Still best-effort, not a hard guarantee: a determined user can register a
-//! SECOND wallet (a distinct `owner_commitment`, or deposit notes under a
-//! different `r_owner`) and wash across the two — that Sybil case is
+//! SECOND wallet (and therefore a distinct `owner_commitment`) and wash across
+//! the two — that Sybil case is
 //! fundamentally out of scope for any matcher rule in a pseudonymous pool.
 //!
 //! Why a single behavior (not cancel-taker/maker/both like a continuous CLOB):

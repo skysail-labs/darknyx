@@ -101,7 +101,7 @@ fn withdraw_then_settle_double_spend_is_blocked() {
     h.svm
         .airdrop(&depositor.pubkey(), 10_000_000_000)
         .expect("airdrop depositor");
-    let secret = NoteSecret::from_seeds(0x41, 0x42, 0x43);
+    let secret = NoteSecret::from_seeds(0x41, 0x43);
     let note = deposit_note(&mut h, &depositor, 0, secret, &mint, 1_234_567);
 
     // ── Withdraw X with a real VALID_SPEND proof. Tokens leave the vault. ──
@@ -168,7 +168,7 @@ fn settle_then_withdraw_double_spend_is_blocked() {
     h.svm
         .airdrop(&depositor.pubkey(), 10_000_000_000)
         .expect("airdrop depositor");
-    let secret = NoteSecret::from_seeds(0x51, 0x52, 0x53);
+    let secret = NoteSecret::from_seeds(0x51, 0x53);
     let note = deposit_note(&mut h, &depositor, 0, secret, &mint, 2_222_222);
 
     // ── Settle a batch that consumes X first ──

@@ -245,6 +245,94 @@ fn proof_bound_to_different_vault_config_rejected() {
     assert!(!batch_validity_marker_exists(&h, &root));
 }
 
+#[test]
+fn proof_bound_to_different_fee_key_rejected() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let mut wrong_key = [0x09u8; 32];
+    wrong_key[0] = 0;
+    let wrong_binding = darkpool_crypto::fee_key_binding(&wrong_key).unwrap();
+    set_vault_fee_key_config(&mut h, wrong_binding, 1);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
+
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
+    let tx = Transaction::new(
+        &[&h.tee],
+        Message::new(&[ix], Some(&h.tee.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a proof for another governed fee key must be rejected"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
+}
+
+#[test]
+fn stale_fee_epoch_argument_rejected() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
+
+    let ix = build_verify_match_batch_ix_with_recovery(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        &proof,
+        0,
+        [0u8; 272],
+    );
+    let tx = Transaction::new(
+        &[&h.tee],
+        Message::new(&[ix], Some(&h.tee.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a stale fee-key epoch must be rejected before proof acceptance"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
+}
+
+#[test]
+fn unregistered_verifier_payer_rejected() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
+    let outsider = solana_keypair::Keypair::new();
+    h.svm
+        .airdrop(&outsider.pubkey(), 10_000_000_000)
+        .expect("airdrop outsider");
+
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &outsider.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        &proof,
+    );
+    let tx = Transaction::new(
+        &[&outsider],
+        Message::new(&[ix], Some(&outsider.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "an unregistered payer must not authenticate a fee-recovery record"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
+}
+
 /// S-04 (audit 2026-07-25): a replayer cannot choose the marker's TTL.
 ///
 /// A caller-supplied `expiry_slot`, even bounded to
@@ -267,7 +355,8 @@ fn proof_bound_to_different_vault_config_rejected() {
 /// The TTL is derived on-chain now, so a replay is indistinguishable from the
 /// original submission and simply loses the `init` race — it can no longer
 /// choose a short window. This test pins that the instruction carries no
-/// caller-controlled expiry at all: the wire body is exactly root + proof.
+/// caller-controlled expiry at all: the remaining suffix is the fixed fee
+/// recovery envelope, not a marker-lifetime input.
 #[test]
 fn verify_ix_carries_no_caller_chosen_expiry() {
     let h = Harness::setup();
@@ -277,14 +366,15 @@ fn verify_ix_carries_no_caller_chosen_expiry() {
     let ix =
         build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
 
-    // 8-byte discriminator + 32-byte root + 256-byte proof, and nothing else.
-    // A regression that re-adds an expiry argument grows this by 8.
+    // 8-byte discriminator + 32-byte root + 256-byte proof + 8-byte governed
+    // fee epoch + 272-byte recovery ciphertext, and nothing else.
     assert_eq!(
         ix.data.len(),
-        8 + 32 + 256,
-        "verify_match_batch must take only (merkle_root, proof) — a \
-         caller-supplied marker TTL is the S-04 griefing lever"
+        8 + 32 + 256 + 8 + 272,
+        "verify_match_batch must not carry a caller-supplied marker TTL"
     );
     assert_eq!(&ix.data[8..40], &root[..]);
-    assert_eq!(&ix.data[40..], &proof[..]);
+    assert_eq!(&ix.data[40..296], &proof[..]);
+    assert_eq!(&ix.data[296..304], &1u64.to_le_bytes());
+    assert_eq!(&ix.data[304..], &[0u8; 272]);
 }

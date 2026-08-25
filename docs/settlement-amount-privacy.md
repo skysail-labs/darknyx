@@ -6,7 +6,7 @@
 > landed. The current leaf is an arity-12 `Poseidon12(DOMAIN_LEAF_V3=31, …)`
 > that binds consumed/relock note-use tags plus created commitments, the
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
-> `darknyx-match-v11` after the later unlinkable-note-use migration), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
+> `darknyx-match-v12` after the keyed-fee/private-merge cutover), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
 > binding are in the circuit, and `verify_match_batch` takes two public inputs
 > `[root, config_digest]`; the digest is recomputed on-chain over fee rate,
 > protocol owner, mint halves, and price scale.

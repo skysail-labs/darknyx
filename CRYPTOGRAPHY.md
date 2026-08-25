@@ -226,11 +226,10 @@ closes. Feeding `C` in restores the binding.
 **Why it is unlinkable.** An observer holds the commitment — it is a public
 leaf — but not `inner_hash`, which is private to the owner and the enclave. For
 a *deposit* note that inner is
-`Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`, where the nonce
-is a public instruction argument and `owner_commitment` is wallet-wide and
-reused. `note_secret` is the seed-derived per-note entropy that keeps one
-leaked owner commitment from recomputing every tag a wallet ever produced,
-retroactively. Output inners chain from consumed input inners
+`Poseidon3(33, recovery_nonce, note_secret)`, where the nonce is a public
+instruction argument. `note_secret` is the seed-derived per-note entropy that
+keeps the public nonce from recomputing the tag. Output inners chain from
+consumed input inners
 (`Poseidon3(24, input_inner, role)`), so every descendant inherits it.
 
 **Where the commitment deliberately stays.** Merkle leaves; `DepositedNoteEntry`
@@ -259,10 +258,10 @@ for this reason rather than because leaves changed (they did not).
 | Primitive | Where | Rationale |
 |---|---|---|
 | **BN254 Fr** | Field for all in-circuit arithmetic | Solana's `alt_bn128` syscalls give us groth16-solana on-chain; native EVM-compatible curve. |
-| **Poseidon over BN254 Fr** | Note commitments, use tags, nullifiers, owner commitments, and Merkle internal hashes | SNARK-efficient (sub-100 constraints per round vs. thousands for SHA). Identical Rust (`light-poseidon`) and circom (`circomlib`) implementations — parity verified. |
+| **Poseidon over BN254 Fr** | Note commitments, use tags, owner commitments, output inners, and Merkle internal hashes | SNARK-efficient (sub-100 constraints per round vs. thousands for SHA). Identical Rust (`light-poseidon`) and circom (`circomlib`) implementations — parity verified. |
 | **SHA-256** | TEE-signed canonical settlement/order digests and off-circuit encodings | Standard ambient hash. Match leaves and the batch tree use Poseidon, not SHA-256. |
 | **HKDF-SHA256** | Spending key, root Ed25519 seed, trading-key offset derivation | RFC 5869 standard. 512-bit output → mod-p for BN254 keys, 256-bit output → Ed25519 seed. |
-| **DarknyxShakeKdfV1** | Viewing key + per-note blinding factor | Versioned Darknyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
+| **DarknyxShakeKdfV1** | Viewing key + per-note secret | Versioned Darknyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
 | **Ed25519** | TEE signature on match payload, trading-key signatures | Solana-native (built-in precompile for verification). |
 | **Groth16** (BN254, snarkjs / `groth16-solana`) | All six circuit families (nine compiled instances) | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
 
@@ -320,13 +319,12 @@ master_seed (64 bytes, CSPRNG; securely stored and backed up encrypted)
   │
   ├── HKDF-SHA256("darkpool_trading_key_v1" ‖ offset_u64_le, 32B) → trading_key(offset) (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_spend_key_v1", 512b) → mod p     → spending_key (Fr)
-  ├── HKDF-SHA256("darknyx-viewing-enc-v2", 32B)             → X25519 fill-recovery key
-  └── deriveBlindingFactor(0xacc0_0000_0000)          → mod p → r_owner       (Fr)
+  └── HKDF-SHA256("darknyx-viewing-enc-v2", 32B)             → X25519 fill-recovery key
 
 Per-deposit recovery nonce (independent from the above):
   rejection_sample(CSPRNG, 0 < n < BN254_R) → recovery_nonce (Fr)
   note_secret = DarknyxShakeKdfV1(master_seed, "darknyx/note-secret/v1", recovery_nonce)
-  Poseidon4(DOMAIN_DEPOSIT_INNER=27, owner_commitment, recovery_nonce, note_secret) → inner_hash (Fr)
+  Poseidon3(DOMAIN_DEPOSIT_INNER_V2=33, recovery_nonce, note_secret) → inner_hash (Fr)
   (change / trade / fee / continuation notes derive inner_hash differently — see §5.)
 ```
 
@@ -335,15 +333,8 @@ The 512-bit→mod-p path is statistically uniform per the sampling note in §3.
 #### `owner_commitment`
 
 ```
-owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
+owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)
 ```
-
-Where `r_owner` (alternately `ownerCommitmentBlinding`) is a wallet-level
-blinding factor. **Reused across every note the user creates.** Canonical SDK
-wallets derive it from the master seed at the reserved
-`0xacc0_0000_0000` counter, separated from ordinary deposit indices. A caller
-may override it only if that separate identity secret is backed up alongside
-the seed; seed-only recovery uses the canonical derivation.
 
 This is the wallet-wide shielded owner identity inside every note preimage.
 The chain does **not** learn it at deposit, spend, order lock, merge, or match
@@ -353,37 +344,22 @@ different, intentionally governed value.
 
 `owner_commitment` is never a deposit instruction argument. `VALID_DEPOSIT`
 proves the public note commitment was formed from the signer-held spending key
-and owner blinding while keeping both `owner_commitment` and `inner_hash`
-private. The public recovery nonce is pseudorandom and useful only together
-with the seed-derived owner commitment. This closes audit C-06: the depositing
+while keeping both `owner_commitment` and `inner_hash` private. The public
+recovery nonce is pseudorandom and useful only with the seed-derived note
+secret. This closes audit C-06: the depositing
 Solana signer is still public, as is the gross deposit amount, but the
 wallet-wide shielded owner identity is no longer exposed or clustered there.
 
-Why a single `r_owner` (rather than per-note `r_owner`)? Cryptographically,
-the per-note `inner_hash` already provides note-level unlinkability. A
-shared `r_owner` simplifies key management (no need to track per-note
-ownership blinders). Two notes from the same user *would* be linkable if an
-attacker had their `spending_key` — but in that case the attacker has full
-authority anyway, so no marginal damage.
-
-### Why not just `owner_commitment = Poseidon(spending_key)`?
-
-Without `r_owner`, two different users with the same spending key (if such
-a degenerate case existed) would collide. More importantly, `r_owner`
-provides a layer of indirection so that:
-1. If the spending_key alone leaks (HSM compromise) but `r_owner` was kept
-   separately, the attacker can't derive `owner_commitment` and hence can't
-   identify which notes are yours.
-2. `r_owner` can be rotated for a *new* identity (different owner_commitment)
-   without changing the spending key — this is hypothetical key recovery
-   path.
+The retired `r_owner` was derived from and stored with the same master seed, so
+it was not an independent compromise barrier. Domain 32 makes the simpler
+single-secret security boundary explicit.
 
 ### Parity testing
 
 Every key derivation has byte-for-byte cross-environment parity tests:
 
 - `packages/sdk/tests/keys-parity.test.ts` covers spending,
-  trading-with-offset, per-note secrets, blinding, and canonical random deposit
+  trading-with-offset, per-note secrets, and canonical random deposit
   nonces. Cross-language cases
   shells out to a Rust helper binary (`crates/darkpool-crypto/examples/derive-keys`)
   and asserts byte-equality.
@@ -402,7 +378,7 @@ its 32-byte Poseidon commitment.
 struct Note {
     token_mint:       Pubkey,    // 32B — SPL mint
     amount:           u64,
-    owner_commitment: [u8; 32],  // Fr — Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
+    owner_commitment: [u8; 32],  // Fr — Poseidon2(DOMAIN_OWNER_V2=32, spending_key)
     inner_hash:       [u8; 32],  // Fr — the single per-note blinding (v2)
 }
 ```
@@ -438,33 +414,33 @@ constraint in `circuits/valid_spend/circuit.circom` +
 `circuits/templates/`. Parity test:
 `packages/sdk/tests/note-commitment-parity.test.ts`.
 
-### The nullifier
+### The public use tag
 
 ```
-nullifier = Poseidon3(DOMAIN_NULL = 3, spending_key, inner_hash)
+note_use_tag = Poseidon3(DOMAIN_NOTE_USE = 29, note_commitment, inner_hash)
 ```
 
-Crucially the nullifier is over `inner_hash`, **not** the commitment — so it
-is **amount-independent**. It becomes public only when a note is spent
-(`withdraw`) and stays hidden until then. VALID_MATCH_BATCH v3 derives match
-outputs from the consumed opening, so their nullifiers are reconstructed from
-the spending key plus that deterministic derived inner. Parity test:
-`packages/sdk/tests/nullifier-parity.test.ts`.
+The commitment appears on chain only when the note is created. Consumption
+publishes the tag, which is bound to that commitment but cannot be linked back
+without the private inner. Settle, withdraw, and merge all initialize the same
+tag-keyed `ConsumedNoteEntry`, so one handle provides both unlinkability and
+cross-path replay protection.
 
 ### Deriving `inner_hash` (recoverable, never random)
 
 * **Deposit notes** — the SDK samples a fresh canonical `recovery_nonce`, derives
   `note_secret` from `(masterSeed, recovery_nonce)`, then computes
-  `inner_hash = Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`.
+  `inner_hash = Poseidon3(33, recovery_nonce, note_secret)`.
   The instruction publishes only the nonce, mint, gross
   amount, and commitment; the owner and inner remain private witnesses. Cold
   recovery derives the canonical owner from the seed, reconstructs the inner,
   and accepts the event only after recomputing the commitment byte-for-byte.
 * **Match user outputs** — `Poseidon3(24, consumed_input_inner, role)` for
   trade and change roles.
-* **Match fee outputs** — `Poseidon3(25, consumed_input_commitment, role)` for
-  base/quote fee roles.
-* **Merge outputs** — `Poseidon6(26, c0, c1, c2, c3, active_bitmap)`.
+* **Match fee outputs** — `Poseidon4(36, fee_epoch_key, consumed_use_tag, role)`
+  for base/quote fee roles. `Poseidon2(35, fee_epoch_key)` is governed on chain.
+* **Merge outputs** — `Poseidon6(34, i0, i1, i2, i3, active_bitmap)` over
+  private input inners.
 
 Rust/TS KATs and parity tests pin each construction; see §7 and the
 cross-language contract table in CLAUDE.md.
@@ -538,27 +514,31 @@ Buyer plaintext is `(trade_base, change_quote)`; seller plaintext is
 HKDF domain `darknyx-fill-enc-v3`. The version trailer makes the clean cutover
 reject legacy one-u64 blobs.
 
-`recoverFillFromChain` resolves the payload's exact consumed commitment,
-re-verifies that opening, decrypts the tuple, derives both output inners by role,
-and accepts only byte-equal recomputed commitments. `recoverNotesFromChain`
+`recoverFillFromChain` matches the payload's consumed use tag against candidate
+owned openings, re-verifies that opening, decrypts the tuple, derives both
+output inners by role, and accepts only byte-equal recomputed commitments.
+`recoverNotesFromChain`
 then scans finalized vault instructions/events to bootstrap seed-owned deposits,
 restore trade/change shard + leaf positions, and reconstruct merge outputs from
-their consumed commitments. It iterates to a fixed point, so continuation and
+their private consumed inners. It iterates to a fixed point, so continuation and
 merge chains recover without live stream history or RPC result ordering.
 
 ### Protocol fee notes
 
 Both legs pay their own protocol fee. Each match derives its own fee inners from
-the real commitments it consumes:
+a governed epoch secret and the exact use tags it consumes:
 
 ```
-quote_fee.inner = Poseidon3(25, note_a.commitment, FEE_ROLE_QUOTE)
-base_fee.inner  = Poseidon3(25, note_b.commitment, FEE_ROLE_BASE)
+fee_key_binding = Poseidon2(35, fee_epoch_key)
+quote_fee.inner = Poseidon4(36, fee_epoch_key, note_a.use_tag, FEE_ROLE_QUOTE)
+base_fee.inner  = Poseidon4(36, fee_epoch_key, note_b.use_tag, FEE_ROLE_BASE)
 ```
 
 That match's Tx D appends the nonzero fee notes atomically with input
 consumption. There is no aggregate flush slot and no slot/reboot-derived fee
-opening. Both notes pay the protocol's governed `owner_commitment` and are
+opening. The private key defeats the old public-data dictionary attack, while
+Tx B carries a fixed encrypted recovery record authenticated by an authorized
+TEE payer. Both notes pay the protocol's governed `owner_commitment` and are
 spendable through standard `VALID_SPEND`.
 
 Each order must lock **at least** `nominal + its own fee` collateral (intake
@@ -583,8 +563,8 @@ surplus uses the same consumed-input-derived change construction.
 primitive (`vault::merge` + the `VALID_MERGE(K)` circuit, K∈{2,4}): consume K
 input notes (same owner + mint, each proven in the tree) and mint ONE output
 note = their sum — no external transfer, `OutstandingMint` unchanged. The output
-is a normal tree leaf whose inner is derived from the consumed commitments as
-`Poseidon6(26, c0, c1, c2, c3, active_bitmap)`, so recovery needs no mutable
+is a normal tree leaf whose inner is derived from the private consumed inners as
+`Poseidon6(34, inner0, inner1, inner2, inner3, active_bitmap)`, so recovery needs no mutable
 merge counter and the note is spendable like a deposit. The wallet's
 `consolidate` greedily merges the
 largest notes (fewest inputs → cheapest proof) and **chains** for >K, then the
@@ -722,12 +702,12 @@ fair execution price by the proof (see the §2 non-goals row).
 
 | Circuit | Constraints | Public inputs | Purpose |
 |---|---|---|---|
-| `VALID_DEPOSIT` | 2,501 | 5 | Bind a recoverable note commitment to the public mint, amount, and recovery nonce while hiding owner + inner |
-| `VALID_SPEND` | 12,664 | 8 signals (7 inputs + 1 output) | Prove note ownership + Merkle inclusion and bind the withdrawal destination |
-| `VALID_INPUT` | 12,058 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount and nullifier private |
-| `VALID_MATCH_BATCH` | 234,025 (N=16) | 2 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, config_digest]`, where `config_digest = Poseidon8(28, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale)` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
-| `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.5) |
-| `VALID_MERGE` (K=4) | 48,458 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
+| `VALID_DEPOSIT` | 2,413 | 5 | Bind a recoverable note commitment to the public mint, amount, and recovery nonce while hiding owner + inner |
+| `VALID_SPEND` | 12,576 | 7 signals (6 inputs + 1 output) | Prove note ownership + Merkle inclusion and bind the withdrawal destination |
+| `VALID_INPUT` | 12,575 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount private |
+| `VALID_MATCH_BATCH` | 290,424 (N=16) | 2 | Per-match keyed fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, config_digest]`, where `config_digest = Poseidon10(37, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale, fee_key_binding, fee_key_epoch)` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
+| `VALID_MERGE` (K=2) | 26,656 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with private-inner-derived inner (§5 / §7.5) |
+| `VALID_MERGE` (K=4) | 50,794 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
 The first four are custody/trade-path circuits; `VALID_MERGE(K)` is an auxiliary
 consolidation circuit (its own ix, `vault::merge`, not part of settle).
@@ -759,11 +739,11 @@ deposit measured 150,910 CU. Treat per-circuit CU gates as authoritative.
 3. `amount` — positive u64 gross deposit amount
 4. `recoveryNonce` — canonical random public Fr
 
-**Private witnesses**: `spendingKey`, `ownerCommitmentBlinding`, `noteSecret`.
+**Private witnesses**: `spendingKey`, `noteSecret`.
 
 ```circom
-owner = Poseidon3(1, spendingKey, ownerCommitmentBlinding)
-inner = Poseidon4(27, owner, recoveryNonce, noteSecret)
+owner = Poseidon2(32, spendingKey)
+inner = Poseidon3(33, recoveryNonce, noteSecret)
 noteCommitment === Poseidon6(2, mint_lo, mint_hi, amount, owner, inner)
 Num2Bits(128)(mint_lo); Num2Bits(128)(mint_hi)
 Num2Bits(64)(amount); amount != 0
@@ -771,46 +751,42 @@ Num2Bits(64)(amount); amount != 0
 
 The vault verifies this proof **before** transferring SPL tokens or mutating
 the Merkle tree/outstanding counter. Thus a tampered mint, amount, commitment,
-nonce, note secret, key, or owner blinding cannot move custody or append a leaf.
+nonce, note secret, or key cannot move custody or append a leaf.
 The public nonce preserves seed-plus-chain recovery: the client regenerates
 `noteSecret = deriveNoteSecret(master_seed, recoveryNonce)` without publishing
 an ordered wallet counter or either hidden note field.
 
-The current note-secret-hardened circuit has 2,632 constraints. The earlier
-2,501-constraint browser/CU spike predates that witness and must not be quoted
-as the current performance result; remeasure the client and on-chain verifier
-before freezing the production artifacts.
+The current circuit has 2,413 constraints. Client and on-chain latency remain
+release measurements rather than constants inferred from this count.
 
 ### 7.2 `VALID_SPEND`
 
-**Public signals** (8). Circom emits the OUTPUT first, then public inputs in
+**Public signals** (7). Circom emits the OUTPUT first, then public inputs in
 **template declaration order** — not in the order of the `public [...]` list:
 
 | Wire | Signal | Meaning |
 |---|---|---|
 | 1 | `noteUseTag` (**output**) | circuit-bound consume handle derived from the private commitment + inner hash |
 | 2 | `merkleRoot` | the tree root the proof was generated against (must be in the recent-roots ring) |
-| 3 | `nullifier` | `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)` |
-| 4 | `tokenMint[0]` | low 128 bits of the SPL mint pubkey |
-| 5 | `tokenMint[1]` | high 128 bits |
-| 6 | `amount` | u64, the amount the chain will SPL-transfer out |
-| 7 | `recipient[0]` | low 128 bits of the destination token account |
-| 8 | `recipient[1]` | high 128 bits |
+| 3 | `tokenMint[0]` | low 128 bits of the SPL mint pubkey |
+| 4 | `tokenMint[1]` | high 128 bits |
+| 5 | `amount` | u64, the amount the chain will SPL-transfer out |
+| 6 | `recipient[0]` | low 128 bits of the destination token account |
+| 7 | `recipient[1]` | high 128 bits |
 
 **Private witnesses**:
-- `spendingKey`, `ownerCommitmentBlinding` (= r_owner)
+- `spendingKey`
 - `innerHash` (per-note; v2 — replaces the old `nonce`/`blindingR` pair)
 - `merklePath[20]`, `merkleIndices[20]` — Merkle witness
 
 **Constraints**:
 
 ```circom
-owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
+owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spendingKey)
 note_commitment  = Poseidon6(DOMAIN_NOTE, tokenMint[0], tokenMint[1],
                              amount, owner_commitment, innerHash)
 MerkleTreeChecker(20)(leaf = note_commitment, root = merkleRoot,
                       pathElements = merklePath, pathIndices = merkleIndices)
-nullifier        === Poseidon3(DOMAIN_NULL=3, spendingKey, innerHash)
 noteUseTag       === Poseidon3(DOMAIN_NOTE_USE=29, note_commitment, innerHash)
 
 // The destination participates in no other constraint, so it is squared to
@@ -820,12 +796,12 @@ recipientHiSquare <== recipient[1] * recipient[1];
 ```
 
 What this proves to the chain: "I know a note whose Poseidon-commitment is at
-`merkleRoot`, I'm the owner (since I know the spending_key), here is the
-nullifier — verify it isn't spent yet — **and this proof authorises paying
-exactly this destination account.**"
+`merkleRoot`, I'm the owner (since I know the spending key), this is its
+unlinkable consume tag, and **this proof authorises paying exactly this
+destination account.**"
 
 > **Why the destination is bound.** Without it, the tuple
-> `(note_use_tag, nullifier, merkle_root, amount, proof)` was a **bearer
+> `(note_use_tag, merkle_root, amount, proof)` would be a **bearer
 > instrument**: the proof authorised destroying the note but said nothing about
 > where the value went, so whoever held those bytes first decided the
 > destination. Exploitable by front-running, and — needing no privileged
@@ -840,8 +816,7 @@ exactly this destination account.**"
 > The squares exist solely to put the limbs into the constraint system.
 
 A destination is a 256-bit Solana pubkey, which does not fit one BN254 Fr
-element, so it splits lo/hi exactly like the mint — hence 8 public signals, not
-7.
+element, so it splits lo/hi exactly like the mint — hence 7 public signals.
 
 Reference: `circuits/valid_spend/circuit.circom`, on-chain verification in
 `programs/vault/src/instructions/withdraw.rs`.
@@ -861,7 +836,7 @@ nonzero constraint.
 **Constraints**:
 
 ```circom
-owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
+owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spendingKey)
 noteHash         = Poseidon6(DOMAIN_NOTE, tokenMint[0], tokenMint[1],
                              amount, owner_commitment, innerHash)
 noteUseTag       === Poseidon3(DOMAIN_NOTE_USE=29, noteHash, innerHash)
@@ -870,16 +845,16 @@ amount != 0
 MerkleTreeChecker(20)(leaf = noteHash, root = merkleRoot, ...)
 ```
 
-Difference from VALID_SPEND: **no nullifier is computed or revealed**.
-This is critical for the lock-then-match-then-settle flow:
+Difference from VALID_SPEND: the destination and amount are not public because
+the note is only being locked. This is critical for the flow:
 - A user submits an order with a VALID_INPUT proof.
 - The TEE locks the note via `lock_note(noteUseTag, mint, proof, merkleRoot)`;
   the amount never enters instruction or event data.
 - If the order doesn't match, the lock expires and the note remains
-  spendable. No nullifier was burned.
+  spendable. No consume guard was created.
 - If the order does match, `tee_forced_settle` consumes the note via
-  `ConsumedNoteEntry` (which is keyed by `note_use_tag`, not by
-  nullifier). The user's eventual `VALID_SPEND`-based withdraw of this same
+  `ConsumedNoteEntry` keyed by `note_use_tag`. The user's eventual
+  `VALID_SPEND`-based withdraw of this same
   note would fail at the `consumed_note_slot` guard, so no double-spend
   risk.
 
@@ -899,7 +874,7 @@ verification in `programs/vault/src/instructions/lock_note.rs:80-115`.
 
 #### Why VALID_INPUT keeps the ownership constraint
 
-You might think you could drop the `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`
+You might think you could drop the `owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`
 constraint, since lock_note doesn't need to prove ownership (the proof is
 just attesting that the leaf exists). But:
 
@@ -911,7 +886,7 @@ could generate a fresh VALID_INPUT proof and lock the note. Deposit no longer
 publishes `owner_commitment` or `inner_hash`, but secrecy of an opening is not
 an ownership primitive.
 
-By requiring the prover know `spending_key` such that `Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
+By requiring the prover know `spending_key` such that `Poseidon2(DOMAIN_OWNER_V2=32, sk)
 == owner_commitment` (where `owner_commitment` is itself a private witness
 because it goes into the note's preimage), the proof can only be generated
 by someone who knows the spending key. The note's actual `owner_commitment`
@@ -991,7 +966,7 @@ leaf = Poseidon12(DOMAIN_LEAF_V3 = 31, active,
 
 Inner-node hashes use `Poseidon3(DOMAIN_BATCH_ROOT = 22, left, right)`. The two
 fee-note commitments are per-match. Each fee inner is
-`Poseidon3(25, consumed_input_commitment, role)` and each user output inner is
+`Poseidon4(36, fee_epoch_key, consumed_input_use_tag, role)` and each user output inner is
 `Poseidon3(24, consumed_input_inner, role)`, so a prover cannot select output
 randomness or reuse a slot-derived fee inner across distinct consumed notes.
 
@@ -1056,7 +1031,8 @@ spare slots are dummy-padded), and **chains** merges for >4.
                              ▼
             outputAmount := Σ isActive[i]·amount[i]   (Num2Bits(64))
             require Σ isActive[i] > 0 and outputAmount > 0
-            outputInner := Poseidon6(26, c0, c1, c2, c3, active_bitmap)
+            outputInner := Poseidon6(34, inner0, inner1, inner2, inner3,
+                                    active_bitmap)
             outputCommitment === Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi,
                                   outputAmount, owner_commitment,
                                   outputInner)
@@ -1066,8 +1042,8 @@ Public signals (circom output-first order, matching `merge.rs`'s `pi`
 array): `outputCommitment`, `inputUseTags[K]`, then the public inputs
 `merkleRoot`, `tokenMint[2]` (mint_lo, mint_hi) — **6 for K=2, 8 for K=4**.
 Private: one shared
-`spendingKey` + `ownerCommitmentBlinding` (this is what enforces *all K notes
-belong to the same owner*) and per-slot `isActive`, `amount`, `innerHash`,
+`spendingKey` (this is what enforces *all K notes belong to the same owner*)
+and per-slot `isActive`, `amount`, `innerHash`,
 `merklePath[20]`, `merkleIndices[20]`. There is no caller-selected output-inner
 witness.
 
@@ -1122,16 +1098,13 @@ Alice generates a 64-byte master seed (CSPRNG). From it she derives via
 - `trading_key(offset=0)` (Ed25519) via HKDF-SHA256 with offset 0
 - X25519 fill-recovery key via HKDF-SHA256
 
-The SDK derives `r_owner` deterministically from the CSPRNG master seed under a
-separate domain.
-
 She computes:
 
-- `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`
+- `owner_commitment = Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`
 
 Nothing is on-chain yet. The seed lives on her device and is exportable through
 the versioned encrypted backup format. Seed-plus-chain recovery re-derives the
-wallet blinders and deposit openings; no wallet-signature-derived seed mode
+deposit secrets and openings; no wallet-signature-derived seed mode
 exists.
 
 **Tests**: `keys-parity.test.ts` (TS ↔ Rust byte-equality for every shared
@@ -1441,7 +1414,7 @@ vault::tee_forced_settle_batched(
 )
 ```
 
-The payload is a 552-byte Borsh struct (v11). Its two consumed inputs are
+The payload is a 552-byte Borsh struct. Its two consumed inputs are
 note-use tags; its six created leaves remain user/fee note commitments. It also
 carries two order IDs, two re-lock `(order_id + expiry)` pairs, the two
 change-note relock tags, `batch_slot`, and the 128-byte fill-recovery ciphertext.
@@ -1700,7 +1673,6 @@ measurement rather than a protocol constant.
 vault::withdraw(
     tree_id:         u8,
     note_use_tag:    [u8; 32],
-    nullifier:       [u8; 32],
     merkle_root:     [u8; 32],
     amount:          u64,
     proof:           Groth16Proof,
@@ -1739,23 +1711,19 @@ Handler:
 5. **Accounting precheck**: assert `outstanding_mint.outstanding >= amount`. (If
    it were less, the TEE created a phantom note for this mint and the counter
    rejects the withdraw before the SPL transfer-out.)
-6. Write the `consumed_note` entry from step 2. This is the **only** guard
-   withdraw allocates. The second, nullifier-keyed guard was removed: it had
-   zero readers anywhere in the repo, and it was worse than redundant —
-   `nullifier = Poseidon3(3, sk, inner)` is amount- and mint-independent, so two
-   distinct notes of one owner sharing an `inner_hash` collide on it and the
-   second legitimate withdraw was bricked.
+6. Write the `consumed_note` entry from step 2. This is the only consume guard
+   withdraw allocates.
 7. Decrement `outstanding_mint.outstanding -= amount`.
-8. **Verify the Groth16 proof** against `vk_valid_spend` over **8** public
+8. **Verify the Groth16 proof** against `vk_valid_spend` over **7** public
    inputs, in wire order:
-   `[note_use_tag, merkle_root, nullifier, mint_lo, mint_hi, u64_be32(amount),
+   `[note_use_tag, merkle_root, mint_lo, mint_hi, u64_be32(amount),
    dest_lo, dest_hi]`. The trailing pair binds `destination_token_account`, so
    the proof authorises paying that account and no other — see §7.3.
 9. SPL `transfer_checked` from `vault_token_account` → `destination_token_account`.
 10. Reload `vault_token_account` and re-assert the solvency invariant.
 
 **Cryptographic primitives**:
-- **VALID_SPEND Groth16** — proves ownership + Merkle inclusion + nullifier and
+- **VALID_SPEND Groth16** — proves ownership + Merkle inclusion + use tag and
   destination binding. The litesvm roundtrip owns the current CU gate.
 - **PDA collision-based double-spend prevention**.
 
@@ -1838,7 +1806,7 @@ precompile, settle} is well over the cap. Napkin math:
 | `ComputeBudgetProgram.setComputeUnitLimit` ix | ~20 |
 | `lock_note` ix data (8 disc + 1 tree + 32 commit + 16 order_id + 8 expiry + 32 mint + 32 root + 256 proof) | 385 |
 | `lock_note` accounts (4 × 32) | 128 |
-| `verify_match_batch` ix data (8 disc + 32 root + 256 proof) | 296 |
+| `verify_match_batch` ix data (8 disc + 32 root + 256 proof + 8 epoch + 272 encrypted recovery) | 576 |
 | Ed25519 precompile ix (header + pubkey + sig + 32-byte msg) | ~150 |
 | `tee_forced_settle_batched` ix data (8 disc + 1 tree + 552 payload + 1 match_index + 4×32 siblings) | 690 |
 | Account keys for everything together (~13 distinct) | 416 |
@@ -1849,9 +1817,9 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 | Tx | Contents | Approx size | Cardinality |
 |---|---|---|---|
 | **Tx A — lock** | compute_budget + one lock_note (buyer/seller sent independently) | size-guarded below 800 B | 2N per batch |
-| **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init) | ~640 B | 1 per batch |
+| **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init, encrypted fee recovery) | measured below 982 B | 1 per batch |
 | **Tx C — per-batch ALT** | createLookupTable + chunked extendLookupTable(7 PDAs per match) | amortized | 1 per batch |
-| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1173 B worst case (v11) | N per batch |
+| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1173 B worst case | N per batch |
 | **Tx E — close** | compute_budget + close_batch_validity_marker | ~250 B | 1 per batch |
 
 All fit under 1232 B. Atomic dependency is enforced by account-existence
@@ -2053,20 +2021,20 @@ e2e flows route their settle through it.
 | Test | Legacy tx size | v0 + ALT tx size |
 |---|---|---|
 | devnet-trade-flow (exact fill) | ~1180 | ~1100 |
-| change + relock (current v11 variant) | n/a | **1173 ✅** (59 B headroom) |
+| change + relock | n/a | **1173 ✅** (59 B headroom) |
 
 All five change-note tests now pass.
 
 ### The canonical payload hash
 
 The TEE's Ed25519 signature is over a 32-byte SHA-256 hash, not the 552-byte
-payload directly. The current construction is v11: v8 added the 128-byte
-fill-recovery ciphertext, v9 removed the two unused nullifiers, v10 cut over
-the Darknyx namespace, and v11 introduced note-use and relock tags.
+payload directly. The current domain is v12; it invalidates signatures from
+before the note-lineage cryptographic cutover while retaining the 552-byte
+payload layout.
 
 ```rust
 canonical_payload_hash(p) = SHA256(
-    b"darknyx-match-v11",
+    b"darknyx-match-v12",
     p.match_id,
     p.note_a_use_tag, p.note_b_use_tag,
     p.note_c_commitment, p.note_d_commitment,
@@ -2088,10 +2056,10 @@ Reference: `programs/vault/src/instructions/settlement_shared.rs::canonical_payl
 mirror in `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash`.
 Cross-environment parity is locked down by a fixed-vector test in both:
 
-- Rust: `canonical_payload_hash_fixed_vector` expects
-  `0x63A10A...CFA2` for a specific input.
-- TS: `[hash_cross_env_parity]` in `settle-builder-batched.test.ts` asserts the same
-  bytes from the TS implementation.
+- Rust: `canonical_payload_hash_fixed_vector` pins the on-chain and TEE fixture
+  to `0xcc3a7f...12125a`.
+- TS: `[hash_cross_env_parity]` in `settle-builder-batched.test.ts` pins its
+  independently encoded fixture to `0x20effa...ba7e2`.
 
 If you ever change the payload shape, both sides must update in lock-step
 or settlements will start failing across the board.
@@ -2101,7 +2069,8 @@ or settlements will start failing across the board.
 > **Historical** — the `v5`/`v6` tags below are from this earlier mints-revert
 > episode. The tag has since advanced through v7 (amount privacy), v8
 > (fill recovery), **v9** (dead-nullifier removal), **v10** (the Darknyx
-> namespace cutover), and **v11** (note-use tags). The CURRENT
+> namespace cutover), **v11** (note-use tags), and **v12** (the keyed-fee,
+> private-merge-inner, owner-v2 cutover). The current
 > canonical hash is in *The canonical payload hash* above.
 
 The first cut of v3 added `quote_mint` and `base_mint` as fields in
@@ -2201,7 +2170,7 @@ paths burn the same layer-2 commitment guard.
 | File | Tests |
 |---|---|
 | `programs/vault/src/lib.rs` | `test_id` (program ID smoke), `canonical_payload_hash_fixed_vector` (canonical hash byte-stability) |
-| `crates/darkpool-crypto/src/{poseidon,note,nullifier,deposit,field,keys}.rs` | Poseidon round-trips, v2 note commitment + nullifier determinism/sensitivity, recoverable deposit-inner derivation, `fr_from_be_bytes` strictness, and live key derivations |
+| `crates/darkpool-crypto/src/{poseidon,note,note_use,deposit,merge,match_output,field,keys}.rs` | Poseidon round-trips, note commitment/use-tag sensitivity, keyed fee and private-inner merge derivations, recoverable deposit inner, field strictness, and live key derivations |
 | `crates/darkpool-matcher/` | the matching algorithm (`run_batch`/`run_batch_capped`), `order_canonical` (order/cancel signing), `change_note::derive_inner` KAT |
 
 ### Rust integration tests (litesvm — `programs/vault/tests/`)
@@ -2233,18 +2202,17 @@ feature- and hardware-gated.
 | File | Pins |
 |---|---|
 | `poseidon-parity.test.ts` | Poseidon arities 2/3/5/6 |
-| `keys-parity.test.ts` | spending / trading-offset / blinding / note-secret derivation and nonce sampling |
+| `keys-parity.test.ts` | spending / trading-offset / note-secret derivation and nonce sampling |
 | `note-commitment-parity.test.ts` | v2 `noteCommitmentV2` (canonical inputs, amount edges, field strictness) |
-| `nullifier-parity.test.ts` | v2 `nullifierV2` (sk/inner_hash sensitivity) |
 | `inner-hash-parity.test.ts` + `change-note-inner-parity.test.ts` | the `inner_hash` / `derive_inner` derivation (KAT) |
-| `deposit-inner-parity.test.ts` | `Poseidon4(27, owner, recovery_nonce, note_secret)` Rust/TS byte equality |
+| `deposit-inner-parity.test.ts` | `Poseidon3(33, recovery_nonce, note_secret)` Rust/TS byte equality |
 | `order-canonical-parity.test.ts` | the order/cancel canonical digests + signed viewing/session fields + wrong-width guards |
 
 ### SDK ZK prover tests
 
 | File | Pins |
 |---|---|
-| `valid-deposit-prover.test.ts` | VALID_DEPOSIT public-input order + altered mint/amount/commitment/nonce/key/blinding rejection |
+| `valid-deposit-prover.test.ts` | VALID_DEPOSIT public-input order + altered mint/amount/commitment/nonce/key/secret rejection |
 | `valid-input-prover.test.ts` | VALID_INPUT (exact + misroute-rejection + public-input ordering) |
 | `match-batch-prototype.test.ts` | VALID_MATCH_BATCH at N=2/4/16 (mixed-shape) + leaf-byte parity with on-chain `compute_match_leaf` |
 
@@ -2315,9 +2283,11 @@ Sorted roughly by cryptographic impact:
 
 3. **Real protocol-owner keypair** — fee notes mint to the protocol's
    `owner_commitment`; withdrawing them needs a real owner keypair plus durable
-   fee-opening accounting. The inner derives from the consumed input commitment
-   and the base/quote fee role (`Poseidon3(25, input_commitment, role)`), never
-   from a slot; the private fee amount must also be retained/recovered.
+   fee-opening accounting. The inner derives from the governed epoch key, the
+   consumed input use tag, and the base/quote fee role
+   (`Poseidon4(36, epoch_key, input_use_tag, role)`), never from a slot. Phase 4
+   completes operator recovery and epoch-rotation tooling around the encrypted
+   Tx B record.
 
 4. **Production browser proving performance** — the deferred browser Worker supports
    VALID_DEPOSIT and VALID_SPEND, while the SDK exposes
@@ -2339,15 +2309,15 @@ Sorted roughly by cryptographic impact:
 - **Self-trade prevention — DONE (owner-level, note-bound).** The matcher
   (`darkpool_matcher::algorithm::generate_matches`) never crosses two orders from
   the same owner, keyed on the note-**bound** `owner_commitment`
-  (`Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`, pinned to the collateral note at intake by
+  (`Poseidon2(DOMAIN_OWNER_V2=32, spending_key)`, pinned to the collateral note at intake by
   `verify_commitment`, reused across all of a user's notes). So it catches one
   user trading under *two trading keys* (a free `offset` rotation, deliberately
   NOT part of the owner identity), and — because `owner_commitment` is bound, not
   client-asserted — a *settling* wash cannot lie about its owner. `trading_key`
   equality is kept as a cheap belt-and-suspenders. **Caveat:** still best-effort,
-  not a hard guarantee — a user can register a SECOND wallet (a distinct
-  `owner_commitment`, or notes under a different `r_owner`) and wash across the
-  two; that Sybil case is out of scope for any matcher rule.
+  not a hard guarantee — a user can create a SECOND wallet with a distinct
+  `owner_commitment` and wash across the two; that Sybil case is out of scope
+  for any matcher rule.
 
 ---
 
@@ -2357,7 +2327,7 @@ Sorted roughly by cryptographic impact:
 darknyx-monorepo/
 ├── circuits/
 │   ├── valid_deposit/circuit.circom          5 public inputs (owner + inner private)
-│   ├── valid_spend/circuit.circom            8 public signals (recipient-bound)
+│   ├── valid_spend/circuit.circom            7 public signals (recipient-bound)
 │   ├── valid_input/circuit.circom            4 public inputs (v2 inner_hash)
 │   ├── valid_merge_k2/  valid_merge_k4/      6 / 8 public signals
 │   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 2 public inputs
@@ -2367,8 +2337,8 @@ darknyx-monorepo/
 │   ├── darkpool-crypto/                       single source of truth (host crypto)
 │   │   ├── src/poseidon.rs                    light-poseidon BN254 wrapper
 │   │   ├── src/note.rs                        commitment_from_fields_v2 (Poseidon6)
-│   │   ├── src/nullifier.rs                   Poseidon3(DOMAIN_NULL, sk, inner_hash)
-│   │   ├── src/keys.rs                        HKDF-SHA256 + DarknyxShakeKdfV1 + deriveBlindingFactor
+│   │   ├── src/fee_recovery.rs                governed fee-record AEAD + KDF
+│   │   ├── src/keys.rs                        HKDF-SHA256 + DarknyxShakeKdfV1
 │   │   ├── src/field.rs  examples/*
 │   ├── darkpool-matcher/                       run_batch(_capped) + order_canonical + change_note
 │   ├── darknyx-tee/                                the in-CVM engine (api/matcher/settle/prover/merkle/…)

@@ -140,4 +140,8 @@ pub enum VaultError {
     DuplicateMergeInput,
     #[msg("Account uses a retired or otherwise invalid data layout")]
     InvalidAccountLayout,
+    #[msg("Protocol fee-key binding is not initialized")]
+    FeeKeyBindingUnset,
+    #[msg("Protocol fee-key epoch is zero, stale, or changed without rotation")]
+    InvalidFeeKeyEpoch,
 }

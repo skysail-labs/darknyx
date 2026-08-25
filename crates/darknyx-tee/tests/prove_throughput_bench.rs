@@ -123,6 +123,9 @@ fn build_slots() -> Vec<MatchSlotWitness> {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
+        fee_epoch_key: fr_safe(0x08),
+        fee_key_binding: darkpool_crypto::fee_key_binding(&fr_safe(0x08)).unwrap(),
+        fee_key_epoch: 1,
         price_scale: 1,
         // Single real match → batch index 0 (C-08: batch_slot[0] === 0).
         slot_index: 0,

@@ -88,6 +88,8 @@ jobs:
           fetch-depth: 0
       - name: Reject stale pre-Darknyx namespaces
         run: bash scripts/check-brand-namespace.sh
+      - name: Check authoritative Poseidon domain registry
+        run: node scripts/check-domain-registry.mjs
       - name: Debug endpoints must stay off by default
         run: bash scripts/check-no-debug-endpoints.sh
       # Header comments must say what is true now, not which PR made it true.
@@ -292,7 +294,7 @@ jobs:
         run: cargo test -p vault --lib
 
       # SDK parity tests shell out to these helper binaries via spawnSync.
-      # They cross-validate TS Poseidon / note-commitment / nullifier /
+      # They cross-validate TS Poseidon / note-commitment /
       # user-commitment / key-derivation against the canonical Rust impl.
       - name: Build darkpool-crypto example binaries
         run: cargo build -p darkpool-crypto --examples
@@ -305,7 +307,6 @@ jobs:
             target/debug/examples/poseidon-hash
             target/debug/examples/user-commitment
             target/debug/examples/note-commitment-v2
-            target/debug/examples/nullifier-v2
             target/debug/examples/derive-keys
           if-no-files-found: error
           retention-days: 1

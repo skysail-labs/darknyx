@@ -97,7 +97,7 @@ pub const JOURNAL_DB_FILE: &str = "settle_journal.db";
 ///
 /// A version mismatch is NOT treated as "start empty" the way the best-effort
 /// bookkeeping snapshots are — see [`JournalLoad`].
-const JOURNAL_VERSION: u32 = 2;
+const JOURNAL_VERSION: u32 = 3;
 
 /// Where a job had got to when it was last journaled. Deliberately a small
 /// closed enum rather than a reuse of `SettleJobStage`: this is an on-disk
@@ -857,10 +857,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_version_mismatch_is_damaged_not_empty() {
+    fn a_v2_journal_is_damaged_not_empty_after_fee_recovery_cutover() {
         let dir = tempfile::tempdir().unwrap();
         let bad = JournalSnapshot {
-            version: JOURNAL_VERSION + 42,
+            version: 2,
             entries: vec![entry(1, 0, JournalStage::Prepared)],
         };
         std::fs::write(
@@ -871,7 +871,8 @@ pub(super) mod tests {
         let (_, load) = SettleJournal::open(Some(dir.path()));
         match load {
             JournalLoad::Damaged { reason } => {
-                assert!(reason.contains("version"), "got: {reason}")
+                assert!(reason.contains("version"), "got: {reason}");
+                assert!(reason.contains("2"), "got: {reason}");
             }
             other => panic!("expected Damaged, got {other:?}"),
         }

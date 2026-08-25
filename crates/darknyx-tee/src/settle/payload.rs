@@ -36,7 +36,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"darknyx-match-v11"`.
+//!   `b"darknyx-match-v12"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -52,7 +52,7 @@ use sha2::{Digest, Sha256};
 /// `v9`→`v10` for the clean Darknyx namespace cutover; and `v10`→`v11` when the
 /// consumed commitments became note-use TAGS and the two relock tags were
 /// appended (488 → 552 bytes).
-pub const CANONICAL_DOMAIN: &[u8] = b"darknyx-match-v11";
+pub const CANONICAL_DOMAIN: &[u8] = b"darknyx-match-v12";
 
 /// Settle payload. Field order is the on-chain struct's declaration order —
 /// `#[derive(BorshSerialize)]` then produces byte-identical output to
@@ -181,9 +181,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0xC7, 0xFF, 0x67, 0xAC, 0xDA, 0x24, 0x5D, 0x16, 0x4C, 0x12, 0x48, 0xDC, 0x51, 0xDC,
-            0x2D, 0x97, 0x05, 0x2C, 0x3A, 0xBE, 0x76, 0x96, 0x41, 0x3D, 0x54, 0xE6, 0x53, 0x6E,
-            0xD0, 0x15, 0x6D, 0x45,
+            0xCC, 0x3A, 0x7F, 0xF2, 0xCB, 0x97, 0xFE, 0x64, 0x3E, 0x06, 0xE7, 0x4D, 0x74, 0xE4,
+            0xE0, 0x58, 0x09, 0x8D, 0x7E, 0xF5, 0xDE, 0x44, 0xC2, 0x7A, 0xBE, 0xB3, 0x77, 0xFC,
+            0x5C, 0x92, 0x12, 0x5A,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(

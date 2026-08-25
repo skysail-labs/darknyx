@@ -65,7 +65,7 @@ fn deposit_one(h: &mut Harness) -> (DepositedNote, Keypair, Pubkey) {
     h.svm
         .airdrop(&depositor.pubkey(), 10_000_000_000)
         .expect("airdrop depositor");
-    let secret = NoteSecret::from_seeds(0x51, 0x52, 0x53);
+    let secret = NoteSecret::from_seeds(0x51, 0x53);
     let note = deposit_note(h, &depositor, 0, secret, &mint, 2_500_000);
     let dest = create_spl_token_account(h, &mint, &depositor.pubkey(), 0);
     (note, depositor, dest)

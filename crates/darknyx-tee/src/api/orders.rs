@@ -83,15 +83,15 @@ pub struct PlaceOrderRequest {
     // they're cryptographically pinned without expanding the signed
     // canonical body) and held in enclave memory only. See
     // `crate::matcher::openings`.
-    /// 32-byte note owner commitment `Poseidon3(1, spending_key, r_owner)`,
+    /// 32-byte note owner commitment `Poseidon2(32, spending_key)`,
     /// hex. Intake re-derives `note_commitment` from it, so it is the only
     /// note-bound owner identity an order carries — the only one intake
     /// verifies, and the one output notes derive back to. A separate,
     /// unverified `user_commitment` also rode the wire until audit 2026-07-25
     /// (T-07 / PF-10); nothing read it.
     pub owner_commitment: String,
-    /// 32-byte v2 note `inner_hash`, hex (replaces the old note_nonce +
-    /// note_blinding pair). Anchors both the commitment and the nullifier.
+    /// 32-byte note `inner_hash`, hex. Anchors the commitment and the
+    /// unlinkable note-use tag.
     pub note_inner_hash: String,
 
     // ─── VALID_INPUT proof relay ─────────────────────────────────

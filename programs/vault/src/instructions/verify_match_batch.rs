@@ -1,6 +1,6 @@
 //! v3 — VALID_MATCH_BATCH proof verification.
 //!
-//! The TEE (or any relayer) lands this ix BEFORE the N settle txs in
+//! An authorized TEE lands this ix BEFORE the N settle txs in
 //! a batch. It verifies a single Groth16 proof attesting that the
 //! VALID_CREATE + VALID_PRICE constraints hold for EVERY match in a
 //! batch of N (N ∈ {2, 4, 16}; only N=16 is wired on-chain for now —
@@ -19,10 +19,9 @@
 //! TEE-side proof generation (one 6.7s proof instead of 64 × ~30s
 //! per-match proofs).
 //!
-//! Anyone can pay rent + submit the proof — authorisation is implicit
-//! in the Groth16 verification. A forged proof fails verification and
-//! no marker is created (so the subsequent settle txs fail when they
-//! can't find the marker).
+//! The payer must be a finalized authorized TEE signer because its transaction
+//! signature authenticates the encrypted fee-recovery record carried by Tx B.
+//! A forged proof still fails verification and creates no marker.
 
 use crate::errors::VaultError;
 use crate::state::{
@@ -35,9 +34,9 @@ use darkpool_crypto::match_config_digest;
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32])]
 pub struct VerifyMatchBatch {
-    /// Anyone can pay rent / submit the proof. Authorization is the proof itself —
-    /// a forged proof simply fails Groth16 verification and no marker is created.
-    #[account(mut)]
+    /// Authorized TEE payer. Its transaction signature authenticates the
+    /// fee-recovery ciphertext against front-running replacement.
+    #[account(mut, constraint = vault_config.is_authorized_tee(payer.address()) @ VaultError::Unauthorized)]
     pub payer: Signer,
 
     /// Read-only — supplies the fee rate + protocol owner preimage for the
@@ -78,21 +77,15 @@ pub fn verify_match_batch_handler(
     ctx: &mut Context<VerifyMatchBatch>,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
+    fee_key_epoch: u64,
+    _fee_recovery_ciphertext: [u8; 272],
 ) -> Result<()> {
     let clock = Clock::get()?;
     // S-04: the TTL is DERIVED, never supplied.
     //
-    // A caller-supplied `expiry_slot`, even bounded to
-    // `(clock.slot, clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, hands
-    // any observer a lever. Paired with a deliberately unauthenticated `payer`
-    // ("anyone can push a valid proof" — a real liveness property worth
-    // keeping) and an `init` marker that lets exactly ONE party set the TTL per
-    // root, an attacker can replay the SAME proof
-    // and root with `expiry_slot = clock.slot + 1`, land first, and the TEE's
-    // own verify then fails on the `init` collision while all N settles in the
-    // batch fail `BatchValidityMarkerExpired`. Meanwhile the 2N `lock_note`
-    // transactions have already landed, so up to 32 users' notes are pinned for
-    // the full lock TTL. Cost to the griefer: one transaction fee.
+    // A caller-supplied `expiry_slot`, even when bounded, gives any authorized
+    // signer a lever to land the same proof with a one-slot TTL and make the
+    // batch unusable after its locks have landed.
     //
     // Deriving it removes the degree of freedom entirely — nothing in the
     // protocol ever needed a caller-chosen TTL, and the constant was already
@@ -103,10 +96,20 @@ pub fn verify_match_batch_handler(
 
     // Public inputs, in circuit order: [root, config_digest]. The digest is
     // recomputed from authoritative accounts, never accepted from the prover.
-    let (fee_rate_bps, protocol_owner) = {
+    let (fee_rate_bps, protocol_owner, fee_key_binding, governed_fee_key_epoch) = {
         let cfg = &ctx.accounts.vault_config;
-        (cfg.fee_rate_bps.get() as u64, cfg.protocol_owner_commitment)
+        (
+            cfg.fee_rate_bps.get() as u64,
+            cfg.protocol_owner_commitment,
+            cfg.fee_key_binding,
+            cfg.fee_key_epoch.get(),
+        )
     };
+    require!(fee_key_binding != [0u8; 32], VaultError::FeeKeyBindingUnset);
+    require!(
+        fee_key_epoch == governed_fee_key_epoch,
+        VaultError::InvalidFeeKeyEpoch
+    );
     let market = &ctx.accounts.market_config;
     require!(bool::from(market.enabled), VaultError::MarketDisabled);
     require!(
@@ -119,6 +122,8 @@ pub fn verify_match_batch_handler(
         &market.base_mint.to_bytes(),
         &market.quote_mint.to_bytes(),
         market.price_scale.get(),
+        &fee_key_binding,
+        governed_fee_key_epoch,
     )
     .map_err(|_| Error::from(VaultError::InvalidProof))?;
     let public_inputs: [[u8; 32]; 2] = [merkle_root, config_digest];

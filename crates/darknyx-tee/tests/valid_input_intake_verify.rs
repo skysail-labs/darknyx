@@ -91,7 +91,6 @@ fn prove_fixture() -> Option<Fixture> {
 
     // ----- A real note -----
     let spending_key = darkpool_crypto::field::fr_from_uniform_bytes(&[7u8; 32]);
-    let r_owner = darkpool_crypto::field::fr_from_uniform_bytes(&[11u8; 32]);
     let inner_hash = darkpool_crypto::field::fr_to_be_bytes(
         &darkpool_crypto::field::fr_from_uniform_bytes(&[13u8; 32]),
     );
@@ -103,7 +102,7 @@ fn prove_fixture() -> Option<Fixture> {
     }
 
     let owner_commitment =
-        darkpool_crypto::note::owner_commitment(&spending_key, &r_owner).expect("owner commitment");
+        darkpool_crypto::note::owner_commitment(&spending_key).expect("owner commitment");
     let note_commitment = darkpool_crypto::note::commitment_from_fields_v2(
         &token_mint,
         amount,
@@ -160,10 +159,6 @@ fn prove_fixture() -> Option<Fixture> {
     builder.push_input(
         "spendingKey",
         be32_to_bigint(&darkpool_crypto::field::fr_to_be_bytes(&spending_key)),
-    );
-    builder.push_input(
-        "ownerCommitmentBlinding",
-        be32_to_bigint(&darkpool_crypto::field::fr_to_be_bytes(&r_owner)),
     );
     builder.push_input("innerHash", be32_to_bigint(&inner_hash));
     for s in incl.siblings.iter() {

@@ -87,7 +87,7 @@ Two workspace crates are load-bearing:
 
 - `darkpool-matcher` is the single source of truth for matching,
   canonical order/cancel digests, FIFO/tie rules, and continuation derivation.
-- `darkpool-crypto` is the Rust source for Poseidon, note/nullifier, key, and
+- `darkpool-crypto` is the Rust source for Poseidon, note/use-tag, key, and
   match-config primitives that must remain byte-identical to the TypeScript SDK.
 
 There is no `darknyx-tee-types` crate. On-chain Borsh layouts are hand-mirrored
@@ -199,7 +199,7 @@ The current order domain is `darknyx-order-v5`. The canonical bytes sign:
 
 The request additionally carries the private collateral opening
 (`owner_commitment`, `note_inner_hash`, amount), tree/root, and VALID_INPUT
-proof. It does not carry or reveal the spending key or nullifier.
+proof. It does not carry or reveal the spending key.
 
 Intake performs, before mutating the book:
 
@@ -327,15 +327,16 @@ Important properties:
 
 - `lock_note` re-verifies VALID_INPUT, caps order/lock lifetime to 4,500 slots,
   and refuses a note-use tag already consumed.
-- `verify_match_batch` accepts any payer because the proof is authorization.
-  Marker expiry is derived on-chain as `current_slot + 300`, so a competing
-  relayer cannot shorten it.
-- Tx D verifies the Ed25519 canonical v11 digest, recomputes the Poseidon12 v3 slot
+- `verify_match_batch` requires a finalized authorized TEE payer because that
+  signature authenticates the encrypted fee-recovery record. Marker expiry is
+  derived on-chain as `current_slot + 300`.
+- Tx D verifies the Ed25519 canonical v12 digest, recomputes the Poseidon12 v3 slot
   leaf, walks the depth-4 batch path, and reads (never mutates) the marker.
 - Tx D rejects at or after either input-lock expiry or marker expiry.
 - Settle, withdraw, and merge initialize the same tag-keyed
   `ConsumedNoteEntry`.
-- Output inners and fee inners are derived in-circuit from consumed inputs.
+- User-output inners derive from private consumed inners. Fee inners derive
+  from the governed epoch key, consumed use tag, and role.
 - The 128-byte recovery envelope is signed but opaque to L1.
 - A worst-case v0 Tx D stacks the static settle ALT and a per-batch ALT; the
   committed size regression keeps it below the 1,232-byte cap.

@@ -8,7 +8,7 @@
  * Fixed-offset parser mirroring `programs/vault/src/state.rs::VaultConfig`
  * (and the TEE-side `crates/darknyx-tee/src/solana_rpc/vault_config.rs`). Layout
  * after the 8-byte discriminator: `admin` (32) then `tee_pubkeys: [Pubkey; 16]`
- * at offset 40; `num_tee_keys: u8` sits at offset 1258. Offsets are pinned by a
+ * at offset 40; `num_tee_keys: u8` sits at offset 1298. Offsets are pinned by a
  * unit test. Per-market parameters live in the separate `MarketConfig` PDA.
  */
 
@@ -24,12 +24,14 @@ export const TEE_PUBKEYS_OFFSET = DISCRIMINATOR + ADMIN_LEN; // 40
 const PUBKEY_LEN = 32;
 const MAX_TEE_KEYS = 16;
 /** Offset of `num_tee_keys: u8`. */
-export const NUM_TEE_KEYS_OFFSET = 1258;
+export const NUM_TEE_KEYS_OFFSET = 1298;
 /** Offset of `num_trees: u8`. */
-export const NUM_TREES_OFFSET = 1259;
+export const NUM_TREES_OFFSET = 1299;
 /** Offset of global `fee_rate_bps: u16` (little-endian). */
-export const FEE_RATE_BPS_OFFSET = 1256;
-export const VAULT_CONFIG_ACCOUNT_LEN = 1264;
+export const FEE_KEY_BINDING_OFFSET = 1256;
+export const FEE_KEY_EPOCH_OFFSET = 1288;
+export const FEE_RATE_BPS_OFFSET = 1296;
+export const VAULT_CONFIG_ACCOUNT_LEN = 1304;
 
 const VAULT_CONFIG_DISCRIMINATOR = sha256(
   new TextEncoder().encode("account:VaultConfig"),
@@ -80,6 +82,8 @@ export function vaultConfigTeePubkeys(data: Uint8Array): string[] {
 export function vaultConfigTradingParameters(data: Uint8Array): {
   feeRateBps: number;
   numTrees: number;
+  feeKeyBinding: Uint8Array;
+  feeKeyEpoch: bigint;
 } {
   // Reuse the strict length/discriminator/signer-count validation above.
   vaultConfigTeePubkeys(data);
@@ -90,7 +94,13 @@ export function vaultConfigTradingParameters(data: Uint8Array): {
   ).getUint16(FEE_RATE_BPS_OFFSET, true);
   if (feeRateBps > 10_000)
     throw new Error("vault_config fee rate exceeds 100%");
-  return { feeRateBps, numTrees: data[NUM_TREES_OFFSET] };
+  const feeKeyBinding = data.slice(FEE_KEY_BINDING_OFFSET, FEE_KEY_BINDING_OFFSET + 32);
+  const feeKeyEpoch = new DataView(
+    data.buffer,
+    data.byteOffset,
+    data.byteLength,
+  ).getBigUint64(FEE_KEY_EPOCH_OFFSET, true);
+  return { feeRateBps, numTrees: data[NUM_TREES_OFFSET], feeKeyBinding, feeKeyEpoch };
 }
 
 /**

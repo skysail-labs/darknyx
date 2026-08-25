@@ -323,9 +323,9 @@ pub fn run_batch(
 ///
 /// `single_fill_per_order` (the in-TEE matcher passes `true`) caps each
 /// order to one fill per batch — no intra-batch relock chain — so every
-/// match consumes an original input note whose opening + nullifier are
-/// in the settle store, never a TEE-created change note (whose nullifier
-/// needs the user spending key the TEE doesn't hold). The uncapped
+/// match consumes an original input note whose opening + VALID_INPUT proof are
+/// in the settle store, never a TEE-created change note for which the client
+/// has not supplied a lock proof. The uncapped
 /// compatibility wrapper passes `false`.
 pub fn run_batch_capped(
     book: &OrderBook,

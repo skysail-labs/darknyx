@@ -20,7 +20,6 @@ import {
   deriveBlindingFactor,
   deriveDepositInnerHash,
   deriveNoteSecret,
-  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   noteCommitmentV2,
   ownerCommitment,
@@ -68,13 +67,9 @@ const u64le = (value) => {
 };
 
 async function recoveryFixture() {
-  const owner = await ownerCommitment(
-    deriveSpendingKey(expectedSeed),
-    deriveOwnerCommitmentBlinding(expectedSeed),
-  );
+  const owner = await ownerCommitment(deriveSpendingKey(expectedSeed));
   const nonce = bn254ToBE32(deriveBlindingFactor(expectedSeed, 77n));
   const inner = await deriveDepositInnerHash(
-    bn254ToBE32(owner),
     nonce,
     bn254ToBE32(deriveNoteSecret(expectedSeed, nonce)),
   );

@@ -85,6 +85,9 @@ pub struct MatchSlotWitness {
     /// Protocol fee-note owner, bound through the MatchBatch config digest to
     /// `VaultConfig.protocol_owner_commitment`. Read from `slots[0]`.
     pub protocol_owner_commitment: [u8; 32],
+    pub fee_epoch_key: [u8; 32],
+    pub fee_key_binding: [u8; 32],
+    pub fee_key_epoch: u64,
     /// Governed fixed-point denominator in the MatchBatch config preimage.
     pub price_scale: u64,
     /// Canonical derived fee inners retained for recovery/parity. The circuit
@@ -101,6 +104,11 @@ pub struct MatchSlotWitness {
 /// every leaf-visible commitment in an inactive slot to be zero.
 pub fn dummy_slot() -> MatchSlotWitness {
     let zero32 = [0u8; 32];
+    // Even an all-padding batch must satisfy the batch-level fee-key binding.
+    // The private epoch key is zero in this synthetic fixture, but its public
+    // binding is still Poseidon2(DOMAIN_FEE_KEY_BINDING, 0), not zero.
+    let fee_key_binding =
+        darkpool_crypto::fee_key_binding(&zero32).expect("zero is a canonical fee epoch key");
 
     MatchSlotWitness {
         note_a_commitment: zero32,
@@ -135,6 +143,9 @@ pub fn dummy_slot() -> MatchSlotWitness {
         note_fee_quote_commitment: zero32,
         fee_rate_bps: 0,
         protocol_owner_commitment: zero32,
+        fee_epoch_key: zero32,
+        fee_key_binding,
+        fee_key_epoch: 0,
         price_scale: 1,
         fee_base_inner: zero32,
         fee_quote_inner: zero32,

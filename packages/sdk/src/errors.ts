@@ -10,7 +10,7 @@
  *   "merkle-position-fetch"  — cannot read vault leaf_count; retry.
  *   "note-build"             — local math error (e.g., nonce out of field); fix params.
  *   "proof-generation"       — client-side ZK failure (usually witness invalid).
- *   "transaction-send"       — Solana RPC error; safe to retry after checking nullifier state.
+ *   "transaction-send"       — Solana RPC error; reconcile the tag-keyed consume state before retrying.
  *   "transaction-validate"   — tx was sent but rejected; re-fetch Merkle root and retry.
  *   "instruction-build"      — logic error in SDK or user-supplied params.
  *   "parameter"              — caller-supplied parameter failed validation. Never retry.

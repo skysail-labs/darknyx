@@ -57,7 +57,7 @@ Solana transaction. Only the *result* settles.
 |---|---|
 | Custody of funds | Order intent (side, size, limit price) |
 | The Merkle tree of note commitments | The order book |
-| Withdrawal nullifiers and settlement consumed-note guards | The matching computation and traders' limits |
+| Shared tag-keyed consumed-note guards | The matching computation and traders' limits |
 | The Groth16 proof verifier | The clearing-price calculation |
 | Every settlement transaction + its proof | The link from a trade to a wallet |
 

@@ -84,7 +84,7 @@ Darknyx is three layers that compose into one trust chain.
 ```
 
 - **Custody (Solana).** A single program owns custody: the incremental Merkle
-  tree of note commitments, the nullifier and consumed-note sets that prevent
+  tree of note commitments, the shared consumed-note set that prevents
   double-spends, the Groth16 verifier, and the atomic batched-settlement path.
 - **Matching (the CVM).** The engine accepts orders over an authenticated
   HTTPS/WebSocket surface, enforces limits and an oracle circuit-breaker policy,

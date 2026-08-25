@@ -3,8 +3,8 @@
  *
  * Builds the witness for a K-slot merge — M real input notes (same owner + mint)
  * + (K−M) dummy padding slots — and proves it. A dummy slot has `isActive=0`,
- * amount 0, zero inner_hash/path, and a public nullifier of 0; the circuit skips
- * its membership + nullifier binding.
+ * amount 0, zero inner_hash/path, and a public use tag of 0; the circuit skips
+ * its membership and ownership binding.
  */
 
 import { resolve } from "node:path";
@@ -41,7 +41,6 @@ export interface MergeProveParams {
   k: 2 | 4;
   /** Shared owner. */
   spendingKey: bigint;
-  ownerCommitmentBlinding: bigint;
   /** 32-byte mint (all inputs + output share it). */
   tokenMint: Uint8Array;
   /** 32-byte BE merkle root the active slots prove membership against. */
@@ -63,7 +62,7 @@ export interface MergeProveResult {
   inputUseTagsBE: NoteUseTag[];
   /** The merged-note commitment (32B BE). */
   outputCommitmentBE: NoteCommitment;
-  /** Commitment-derived merged-note inner hash. */
+  /** Private-input-inner-derived merged-note inner hash. */
   outputInnerHash: bigint;
   outputAmount: bigint;
 }
@@ -84,10 +83,7 @@ export async function proveValidMerge(
     throw new Error(`merge needs 1..${k} real slots; got ${slots.length}`);
   }
 
-  const owner = await ownerCommitment(
-    args.spendingKey,
-    args.ownerCommitmentBlinding,
-  );
+  const owner = await ownerCommitment(args.spendingKey);
   const [mintLo, mintHi] = pubkeyToFrPair(args.tokenMint);
 
   // Per-slot arrays, padded to k with dummies.
@@ -139,7 +135,11 @@ export async function proveValidMerge(
     ),
   );
 
-  const outputInnerHash = await deriveMergeOutputInnerHash(inputCommitments);
+  const outputInnerHash = await deriveMergeOutputInnerHash(
+    Array.from({ length: k }, (_, i) =>
+      slots[i] ? bn254ToBE32(slots[i]!.innerHash) : new Uint8Array(32),
+    ),
+  );
   const outputCommitmentBE = await noteCommitmentV2({
     tokenMint: args.tokenMint,
     amount: sum,
@@ -151,7 +151,6 @@ export async function proveValidMerge(
     merkleRoot: be32ToDec(args.merkleRootBE),
     tokenMint: [mintLo.toString(), mintHi.toString()],
     spendingKey: args.spendingKey.toString(),
-    ownerCommitmentBlinding: args.ownerCommitmentBlinding.toString(),
     isActive,
     amount,
     innerHash,

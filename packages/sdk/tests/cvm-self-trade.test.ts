@@ -51,7 +51,6 @@ import {
   bn254ToBE32,
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
-import { nullifierV2 } from "../src/utxo/note.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
 import {
   orderCanonicalDigest,
@@ -300,7 +299,6 @@ maybeDescribe("CVM self-trade prevention", () => {
             trading_key_signature: hex(sig),
             owner_commitment: hex(bn254ToBE32(p.ownerCommit)),
             note_inner_hash: hex(bn254ToBE32(note.innerHash)),
-            nullifier: hex(await nullifierV2(p.spendingKey, note.innerHash)),
             merkle_root: hex(vi.root),
             valid_input_proof: hex(vi.proofBytes),
             collateral_amount: Number(note.amount),

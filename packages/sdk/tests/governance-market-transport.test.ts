@@ -181,18 +181,23 @@ describe("MarketConfig transport", () => {
 
   it("separates protocol fee wire data from market parameters", async () => {
     const owner = new Uint8Array(32).fill(7);
+    const feeKeyBinding = new Uint8Array(32).fill(8);
     const protocol = await buildSetProtocolConfigInstruction({
       programId: PROGRAM_ID,
       admin,
       protocolOwnerCommitment: owner,
       feeRateBps: 30,
+      feeKeyBinding,
+      feeKeyEpoch: 9n,
     });
-    expect(protocol.data).toHaveLength(42);
+    expect(protocol.data).toHaveLength(82);
     expect(protocol.data.subarray(0, 8)).toEqual(
       discriminator("global", "set_protocol_config"),
     );
     expect(protocol.data.subarray(8, 40)).toEqual(new Uint8Array(owner));
     expect(u16le(protocol.data, 40)).toBe(30);
+    expect(protocol.data.subarray(42, 74)).toEqual(feeKeyBinding);
+    expect(readU64(protocol.data, 74)).toBe(9n);
   });
 
   it("requires valid bounded parameters and distinct mints", async () => {
