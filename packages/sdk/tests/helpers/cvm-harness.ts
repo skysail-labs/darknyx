@@ -616,14 +616,32 @@ export class CvmHarness {
       recoveryNonce: bn254ToBE32(recoveryNonce),
       proof,
     });
-    const sig = await sendAndConfirmTransaction(
-      this.conn,
-      new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
-        ix,
-      ),
-      [p.payer],
-    );
+    let sig: string | undefined;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        // Rebuild the Transaction on every attempt. web3.js mutates it with a
+        // recent blockhash and signatures, so reusing the same instance would
+        // merely resend the stale blockhash that triggered the retry.
+        sig = await sendAndConfirmTransaction(
+          this.conn,
+          new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+            ix,
+          ),
+          [p.payer],
+        );
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("Blockhash not found") || attempt === 3) {
+          throw error;
+        }
+        console.warn(
+          `  · deposit RPC rejected an expired blockhash; retrying with a fresh transaction (${attempt}/3)`,
+        );
+      }
+    }
+    if (!sig) throw new Error("deposit exhausted blockhash retries");
     const recovered = await readNoteCreated(
       this.conn,
       sig,
