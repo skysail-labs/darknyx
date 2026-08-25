@@ -20,7 +20,7 @@
 //
 // Env:
 //   ADMIN_KEYPAIR     vault admin keypair JSON (default .devnet/keypairs/admin.json)
-//   SOLANA_RPC_URL    RPC endpoint (default https://api.devnet.solana.com)
+//   SOLANA_RPC_URL    required private RPC endpoint
 //   VAULT_PROGRAM_ID  vault program id (default the devnet id below)
 
 import { createHash } from "node:crypto";
@@ -34,21 +34,34 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC = process.env.SOLANA_RPC_URL;
+if (!RPC) {
+  throw new Error(
+    "SOLANA_RPC_URL is required (use the configured private RPC)",
+  );
+}
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-// `num_trees` byte offset inside VaultConfig data (after the 8-byte Anchor
-// disc): admin(32) + tee_pubkeys(16×32=512) + root_key(32)
-// + zero_subtree_roots(20×32=640) + protocol_owner(32)
-// + fee_key_binding(32) + fee_key_epoch(8) + fee_rate(2)
-// + num_tee_keys(1) = 1299. Keep this in lockstep with the generated account
-// layout fixture and packages/sdk/src/tee/vault-config.ts.
-const NUM_TREES_OFFSET =
-  8 + 32 + 16 * 32 + 32 + 20 * 32 + 32 + 32 + 8 + 2 + 1;
+// Consume the fixture generated from the Rust account struct rather than
+// duplicating a byte offset here. A previous literal survived a VaultConfig
+// field insertion and made this script interpret fee-key bytes as shard count.
+const vaultLayout = JSON.parse(
+  readFileSync("programs/vault/account-layout.json", "utf8"),
+).accounts?.VaultConfig;
+const VAULT_CONFIG_ACCOUNT_LEN = vaultLayout?.account_len;
+const NUM_TREES_OFFSET = vaultLayout?.num_trees?.offset;
+if (
+  !Number.isInteger(VAULT_CONFIG_ACCOUNT_LEN) ||
+  !Number.isInteger(NUM_TREES_OFFSET)
+) {
+  throw new Error(
+    "generated VaultConfig layout fixture is missing required fields",
+  );
+}
 const MAX_TREES = 16;
 
 const admin = await Keypair.fromSecretKey(
@@ -111,8 +124,12 @@ if (treeFlag !== -1) {
     );
     process.exit(1);
   }
-  const numTrees =
-    info.data.length > NUM_TREES_OFFSET ? info.data[NUM_TREES_OFFSET] : 1;
+  if (info.data.length !== VAULT_CONFIG_ACCOUNT_LEN) {
+    throw new Error(
+      `VaultConfig layout mismatch: expected ${VAULT_CONFIG_ACCOUNT_LEN} bytes, got ${info.data.length}`,
+    );
+  }
+  const numTrees = info.data[NUM_TREES_OFFSET];
   if (numTrees < 1 || numTrees > MAX_TREES) {
     throw new Error(`vault_config num_trees out of range: ${numTrees}`);
   }

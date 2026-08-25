@@ -20,7 +20,7 @@
 //
 // Env:
 //   ADMIN_KEYPAIR     vault admin keypair JSON (default .devnet/keypairs/admin.json)
-//   SOLANA_RPC_URL    RPC endpoint (default https://api.devnet.solana.com)
+//   SOLANA_RPC_URL    required private RPC endpoint
 //   VAULT_PROGRAM_ID  vault program id (default the devnet id below)
 
 import { createHash } from "node:crypto";
@@ -71,7 +71,12 @@ if (
   process.exit(1);
 }
 
-const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC = process.env.SOLANA_RPC_URL;
+if (!RPC) {
+  throw new Error(
+    "SOLANA_RPC_URL is required (use the configured private RPC)",
+  );
+}
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
@@ -99,13 +104,22 @@ if (!vaultAccount || vaultAccount.owner.toBase58() !== VAULT.toBase58()) {
     `VaultConfig ${vaultConfig.toBase58()} is missing or has the wrong owner`,
   );
 }
-const NUM_TREES_OFFSET = 1259;
-if (vaultAccount.data.length !== 1264) {
+const vaultLayout = JSON.parse(
+  readFileSync("programs/vault/account-layout.json", "utf8"),
+).accounts?.VaultConfig;
+const expectedVaultLen = vaultLayout?.account_len;
+const numTreesOffset = vaultLayout?.num_trees?.offset;
+if (!Number.isInteger(expectedVaultLen) || !Number.isInteger(numTreesOffset)) {
   throw new Error(
-    `VaultConfig layout mismatch: expected 1264 bytes, got ${vaultAccount.data.length}`,
+    "generated VaultConfig layout fixture is missing required fields",
   );
 }
-const numTrees = vaultAccount.data[NUM_TREES_OFFSET];
+if (vaultAccount.data.length !== expectedVaultLen) {
+  throw new Error(
+    `VaultConfig layout mismatch: expected ${expectedVaultLen} bytes, got ${vaultAccount.data.length}`,
+  );
+}
+const numTrees = vaultAccount.data[numTreesOffset];
 if (teePubkeys.length !== numTrees) {
   throw new Error(
     `refusing partial signer rotation: got ${teePubkeys.length} keys for num_trees=${numTrees}`,
