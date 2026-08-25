@@ -20,8 +20,9 @@
 complete on `privacy/fee-recovery-v2` (PR #207). Phase 5 local, devnet,
 multimatch, merge-then-order, two-epoch rotation/recovery/spend, and RA-TLS
 evidence is recorded. The explicit PA-01/PA-02 observer-negative assertions,
-settlement crash-recovery drill, final bookkeeping, and safe CVM shutdown are
-paused and remain mandatory before Phase 5/6 completion.
+settlement crash-recovery drill, and final bookkeeping are paused and remain
+mandatory before Phase 5/6 completion. The checkpoint CPU CVM was safely
+drained and stopped.
 
 **Mainnet status:** blocked on mandatory implementation, devnet/CVM evidence,
 independent circuit/privacy review, and Phase-2 ceremony
@@ -78,7 +79,7 @@ review, and ceremony.
 | 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
 | 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | **Merged; local gates passed** | PR #206 / `3e720377` | hosted/external gates remain |
 | 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending** | PR #207 / `9a2c9d48` | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; Phase 5 hosted rotation/recovery/spend evidence exists |
-| 5 | `privacy/release-assurance` | devnet/CVM evidence and operational release assurance | **In progress; checkpoint recorded** | stacked branch `privacy/release-assurance` | principal local/devnet/CVM suites passed; PA-01/PA-02 observer-negative assertions, crash-recovery drill, final bookkeeping, and shutdown remain |
+| 5 | `privacy/release-assurance` | devnet/CVM evidence and operational release assurance | **In progress; checkpoint recorded** | stacked branch `privacy/release-assurance` | principal local/devnet/CVM suites passed and the checkpoint CVM was safely stopped; PA-01/PA-02 observer-negative assertions, crash-recovery drill, and final bookkeeping remain |
 
 Phase 3 must not be split into independently deployable old/new semantics. It
 may contain reviewable commits, but all consume paths, circuits, artifacts,

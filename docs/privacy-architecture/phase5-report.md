@@ -72,6 +72,9 @@ closure.
   VALID_SPEND:
   - epoch A: `evgYKyfVamF5pNrMnjTKk1H2z747kCUMKNtkDQ8sFgYQ4w9JdSBAc9Z2qu2tTpjhfb8weGZXLgjCPmELxXckEFX`
   - epoch B: `4UqYaz7Ckf6yRyex9rEVPKoBancgP3hA1EwyZGSkf4EqPfChCQKx1SiskzaC3kys8RETo2A3FZM7sdE8MFdzyz8U`
+- After this checkpoint was pushed, the CPU CVM was placed in drain mode. It
+  reported `in_flight_settlements=0` and `safe_to_stop=true`; the Phala control
+  plane then confirmed `status=stopped`, `in_progress=false`, and `gpus=0`.
 
 The measured proof times remain in the expected prod9 CPU range. This run did
 not expose the earlier host-throttling regression.
@@ -110,8 +113,9 @@ Resume these items on this branch before claiming Phase 5/6 completion:
    from the same history floor, verify reconciliation/unlock, rerun settlement,
    and capture final drain plus journal latency evidence.
 4. **Release bookkeeping.** Fold those results into this report, advance
-   tracker rows only as far as evidence supports, run the focused tests for the
-   remaining harness changes, and perform the final safe drain/CPU-CVM stop.
+   tracker rows only as far as evidence supports, and run the focused tests for
+   the remaining harness changes. The checkpoint CVM is already safely stopped;
+   a later hosted continuation must start it again deliberately.
 
 Independent privacy/circuit review, Phase-2 ceremony, mainnet-without-
 `devnet-admin` verification, authority/hash checks, and the post-ceremony CVM
