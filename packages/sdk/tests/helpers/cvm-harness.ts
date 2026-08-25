@@ -438,6 +438,17 @@ export interface DepositedNote {
   leafIndex: number;
 }
 
+export interface MerkleLeafPage {
+  leaves: Array<{ leafIndex: number; value: Uint8Array }>;
+  merkleRoot: Uint8Array;
+}
+
+export type MerkleLeafPageLoader = (
+  treeId: number,
+  from: number,
+  to: number,
+) => Promise<MerkleLeafPage>;
+
 /**
  * Shard-aware deposit + witness harness. One `MerkleShadow` per shard; each
  * deposit recovers its real `(tree_id, leaf_index)` from the NoteCreated event
@@ -462,6 +473,75 @@ export class CvmHarness {
       Array.from({ length: k }, () => MerkleShadow.create()),
     );
     return new CvmHarness(conn, vaultProgramId, k, shadows);
+  }
+
+  /**
+   * Rebuild every test shadow from an already-running CVM mirror.
+   *
+   * Normal leaf-count suites intentionally start from an empty reset. The fee
+   * epoch drill is different: epoch-B settlement must preserve epoch-A leaves
+   * so the old fee notes remain spendable. After the required cold boot this
+   * loader pages the authenticated `/tree/leaves` surface, checks that every
+   * shard is contiguous, and verifies the locally replayed root before any new
+   * deposit or VALID_INPUT proof is attempted.
+   */
+  static async createHydrated(
+    conn: Connection,
+    vaultProgramId: PublicKey,
+    numTrees: number,
+    loadPage: MerkleLeafPageLoader,
+  ): Promise<CvmHarness> {
+    const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
+    const pageSize = 10_000;
+
+    for (let treeId = 0; treeId < harness.numTrees; treeId++) {
+      let from = 0;
+      let advertisedRoot: Uint8Array | undefined;
+      for (;;) {
+        const page = await loadPage(treeId, from, from + pageSize);
+        if (page.merkleRoot.length !== 32) {
+          throw new Error(`tree ${treeId} returned a malformed Merkle root`);
+        }
+        if (
+          advertisedRoot &&
+          !Buffer.from(advertisedRoot).equals(Buffer.from(page.merkleRoot))
+        ) {
+          throw new Error(`tree ${treeId} changed while its leaves were paged`);
+        }
+        advertisedRoot = page.merkleRoot;
+
+        for (const leaf of page.leaves) {
+          if (leaf.leafIndex !== from || leaf.value.length !== 32) {
+            throw new Error(
+              `tree ${treeId} returned a non-contiguous or malformed leaf at ${from}`,
+            );
+          }
+          await harness.shadows[treeId].append(leaf.value);
+          from += 1;
+        }
+        if (page.leaves.length < pageSize) break;
+      }
+
+      if (!advertisedRoot) {
+        throw new Error(`tree ${treeId} returned no Merkle-root snapshot`);
+      }
+      const replayedRoot = await harness.shadows[treeId].computeRoot();
+      if (!Buffer.from(replayedRoot).equals(Buffer.from(advertisedRoot))) {
+        throw new Error(`tree ${treeId} replay root disagrees with the CVM`);
+      }
+    }
+
+    const mirroredCount = harness.shadows.reduce(
+      (sum, shadow) => sum + shadow.leafCount,
+      0,
+    );
+    const onchainCount = await harness.leafCount();
+    if (mirroredCount !== onchainCount) {
+      throw new Error(
+        `hydrated ${mirroredCount} leaves but on-chain shards report ${onchainCount}`,
+      );
+    }
+    return harness;
   }
 
   /** Total on-chain leaf count summed across the K `MerkleTree` shards
