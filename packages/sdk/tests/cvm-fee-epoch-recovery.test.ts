@@ -135,6 +135,11 @@ maybeDescribe("CVM protocol fee recovery across key epochs", () => {
         | {
             stored: (typeof candidates)[number];
             noteUseTag: Awaited<ReturnType<typeof deriveNoteUseTag>>;
+            inclusion: {
+              leaf_index: number;
+              merkle_root: string;
+              siblings: string[];
+            };
           }
         | undefined;
       for (const stored of candidates) {
@@ -149,10 +154,34 @@ maybeDescribe("CVM protocol fee recovery across key epochs", () => {
           note.innerHash,
         );
         const [consumed] = await consumedNotePda(programId, noteUseTag);
-        if (!(await conn.getAccountInfo(consumed))) {
-          selected = { stored, noteUseTag };
-          break;
+        if (await conn.getAccountInfo(consumed)) continue;
+
+        // Devnet rehearsals intentionally reset the trees between independent
+        // CVM suites. The archival inventory still contains those correctly
+        // recovered historical notes, but only a note retained by the final
+        // no-reset A→B tree is spendable in this drill.
+        const inclusionUrl = new URL(`${GATEWAY}/tree/inclusion`);
+        inclusionUrl.searchParams.set(
+          "commitment",
+          Buffer.from(note.commitment).toString("hex"),
+        );
+        inclusionUrl.searchParams.set("tree_id", String(note.treeId));
+        const inclusionResponse = await gwFetch(inclusionUrl.toString(), {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (inclusionResponse.status === 404) continue;
+        if (!inclusionResponse.ok) {
+          throw new Error(
+            `epoch ${epoch} inclusion failed (${inclusionResponse.status}): ${await inclusionResponse.text()}`,
+          );
         }
+        const inclusion = (await inclusionResponse.json()) as {
+          leaf_index: number;
+          merkle_root: string;
+          siblings: string[];
+        };
+        selected = { stored, noteUseTag, inclusion };
+        break;
       }
       if (!selected) {
         throw new Error(`epoch ${epoch} has no unconsumed recovered fee note`);
@@ -161,25 +190,7 @@ maybeDescribe("CVM protocol fee recovery across key epochs", () => {
       const note = openStoredFeeNote(selected.stored);
       const mint = new PublicKey(note.tokenMint);
       const destination = await associatedTokenAddress(mint, payer.publicKey);
-      const inclusionUrl = new URL(`${GATEWAY}/tree/inclusion`);
-      inclusionUrl.searchParams.set(
-        "commitment",
-        Buffer.from(note.commitment).toString("hex"),
-      );
-      inclusionUrl.searchParams.set("tree_id", String(note.treeId));
-      const inclusionResponse = await gwFetch(inclusionUrl.toString(), {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!inclusionResponse.ok) {
-        throw new Error(
-          `epoch ${epoch} inclusion failed (${inclusionResponse.status}): ${await inclusionResponse.text()}`,
-        );
-      }
-      const inclusion = (await inclusionResponse.json()) as {
-        leaf_index: number;
-        merkle_root: string;
-        siblings: string[];
-      };
+      const { inclusion } = selected;
       expect(inclusion.leaf_index).toBe(Number(note.leafIndex));
       expect(inclusion.siblings).toHaveLength(20);
       const root = Uint8Array.from(Buffer.from(inclusion.merkle_root, "hex"));

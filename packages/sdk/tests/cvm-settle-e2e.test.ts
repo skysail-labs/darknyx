@@ -422,7 +422,7 @@ maybeDescribe(
         // shadow root must equal on-chain current_root (so the VALID_INPUT
         // proof root is in the vault's recent ring at lock time).
         const depositCount = await harness.leafCount();
-        expect(depositCount).toBe(REMATCH ? 3 : 2);
+        expect(depositCount).toBe(startCount + (REMATCH ? 3 : 2));
 
         // ── 3. VALID_INPUT proofs (relayed to lock_note via the order) ──
         // harness.viProof witnesses against the shard the note landed in.

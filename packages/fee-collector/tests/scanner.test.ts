@@ -200,4 +200,26 @@ describe("Helius finalized vault-history scanner", () => {
     ).rejects.toThrow(/transport failed after 4 attempts/);
     expect(fetchFn).toHaveBeenCalledTimes(4);
   });
+
+  it("retries a transient transport failure without changing the page", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ result: { data: [], paginationToken: null } }),
+        ),
+      );
+    await expect(
+      scanFinalizedVaultHistory({
+        rpcUrl: "https://example.invalid/?api-key=secret",
+        programId: "vault-program",
+        sinceSlot: 10,
+        fetchFn,
+        retryDelayMs: 0,
+      }),
+    ).resolves.toEqual([]);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(fetchFn.mock.calls[1][1]?.body).toBe(fetchFn.mock.calls[0][1]?.body);
+  });
 });
