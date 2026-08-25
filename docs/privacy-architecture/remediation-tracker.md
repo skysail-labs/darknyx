@@ -71,7 +71,7 @@ review, and ceremony.
 | 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0` | complete; final external/release assurance remains |
 | 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
 | 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | **Merged; local gates passed** | PR #206 / `3e720377` | hosted/external gates remain |
-| 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR pending** | pending | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; hosted drill remains |
+| 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending** | PR #207 / `9a2c9d48` | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; hosted drill remains |
 | 5 | `privacy/release-assurance` | devnet/CVM evidence, docs, external gates | Not started | — | final evidence table, independent review, ceremony, mainnet build/deploy checks |
 
 Phase 3 must not be split into independently deployable old/new semantics. It
@@ -137,7 +137,7 @@ instructions as implementation proceeds.
 
 - **Owner:** Phase 3/4 implementation agents
 - **PR/commit:** Phase 3 PR #206 / merge `3e720377`; Phase 4
-  `privacy/fee-recovery-v2`, PR pending
+  PR #207 / commit `9a2c9d48`
 - **Invariant:** no public-data fee dictionary without the governed epoch key;
   protocol recovers every finalized fee note after online-state loss.
 - **Local evidence required:** fixed vector parity; wrong-key/stale-epoch proof
@@ -185,7 +185,7 @@ instructions as implementation proceeds.
 ### PA-02 — merge lineage
 
 - **Owner:** Phase 3 implementation agent
-- **PR/commit:** `privacy/note-lineage-v2`; PR pending
+- **PR/commit:** PR #206 / merge `3e720377`
 - **Invariant:** public commitments and bitmap cannot derive a merge descendant
   tag; owned private inners recover it byte-for-byte.
 - **Local evidence required:** K2/K4 artifacts and parity; cold recovery;
@@ -334,7 +334,7 @@ instructions as implementation proceeds.
 ### PA-07 / PA-08 / PA-09 / PA-11 / PA-12 — Phase 3 proof cleanup
 
 - **Owner:** Phase 3 implementation agent
-- **PR/commit:** `privacy/note-lineage-v2`; PR pending
+- **PR/commit:** PR #206 / merge `3e720377`
 - **Invariant:** proof statements contain only live identities, one authoritative
   domain registry, and byte-identical Rust/TS/Circom meanings.
 - **Local evidence required:** all circuit artifacts, public-input order tests,
