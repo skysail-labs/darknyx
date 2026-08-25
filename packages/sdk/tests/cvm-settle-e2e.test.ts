@@ -88,6 +88,7 @@ import {
   CvmHarness,
   makePersona,
   gwFetch,
+  authToken,
   fetchOracleAnchor,
   fetchBootSessionId,
   hex,
@@ -135,6 +136,13 @@ const FILLS = INDEXER_URL !== "";
 // deposit, trade, and continuation openings. No live memo or indexer row is
 // supplied to the recovery routine.
 const CHAIN_RECOVERY = process.env.DARKNYX_CVM_CHAIN_RECOVERY === "1";
+
+// The fee-key epoch drill deliberately settles epoch B without resetting the
+// epoch-A leaves. This mode cold-boots the CVM, authenticates to its mirror,
+// and replays every shard into the local witness trees before depositing the
+// second crossing pair. Ordinary leaf-count suites keep the stricter empty-tree
+// precondition.
+const REUSE_EXISTING_TREE = process.env.DARKNYX_CVM_REUSE_EXISTING_TREE === "1";
 
 // Cross-batch re-match (opt-in, requires FILLS). After the buyer's residual
 // relocks onto an anchor in batch 1, submit a SECOND ask so the matcher
@@ -235,15 +243,61 @@ maybeDescribe(
         // (tree_id, leaf_index) from its NoteCreated event.
         const numTrees =
           (cfg as unknown as { numTrees?: number }).numTrees ?? 1;
-        const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
+        const harness = REUSE_EXISTING_TREE
+          ? await CvmHarness.createHydrated(
+              conn,
+              vaultProgramId,
+              numTrees,
+              async (treeId, from, to) => {
+                const token = await authToken(GATEWAY);
+                const url = new URL(`${GATEWAY}/tree/leaves`);
+                url.searchParams.set("tree_id", String(treeId));
+                url.searchParams.set("from", String(from));
+                url.searchParams.set("to", String(to));
+                const response = await gwFetch(url.toString(), {
+                  headers: { authorization: `Bearer ${token}` },
+                });
+                if (!response.ok) {
+                  throw new Error(
+                    `/tree/leaves failed (${response.status}): ${await response.text()}`,
+                  );
+                }
+                const body = (await response.json()) as {
+                  leaves: Array<{ leaf_index: number; value: string }>;
+                  merkle_root: string;
+                };
+                if (!/^[0-9a-f]{64}$/i.test(body.merkle_root)) {
+                  throw new Error("/tree/leaves returned a malformed root");
+                }
+                return {
+                  leaves: body.leaves.map((leaf) => ({
+                    leafIndex: leaf.leaf_index,
+                    value: Uint8Array.from(Buffer.from(leaf.value, "hex")),
+                  })),
+                  merkleRoot: Uint8Array.from(
+                    Buffer.from(body.merkle_root, "hex"),
+                  ),
+                };
+              },
+            )
+          : await CvmHarness.create(conn, vaultProgramId, numTrees);
 
-        // The tree must be empty (fresh reset) so each shard's shadow starts from
-        // 0 and matches on-chain.
+        // Normal suites start from a fresh reset. The two-epoch fee drill is
+        // the sole exception: it has just hydrated all epoch-A leaves and must
+        // preserve them so their recovered notes remain spendable.
         const startCount = await harness.leafCount();
-        expect(
-          startCount,
-          "tree not empty — run devnet-setup (reset) first",
-        ).toBe(0);
+        if (REUSE_EXISTING_TREE) {
+          expect(
+            startCount,
+            "epoch-B rehearsal expected preserved epoch-A leaves",
+          ).toBeGreaterThan(0);
+          console.log(`  · hydrated ${startCount} preserved leaves`);
+        } else {
+          expect(
+            startCount,
+            "tree not empty — run devnet-setup (reset) first",
+          ).toBe(0);
+        }
         const recoveryFloorSlot = CHAIN_RECOVERY
           ? slotToNumber(await conn.getSlot("finalized"))
           : undefined;
