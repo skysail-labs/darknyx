@@ -20,7 +20,7 @@
 //
 // Env:
 //   ADMIN_KEYPAIR     vault admin keypair JSON (default .devnet/keypairs/admin.json)
-//   SOLANA_RPC_URL    RPC endpoint (default https://api.devnet.solana.com)
+//   SOLANA_RPC_URL    required private RPC endpoint
 //   VAULT_PROGRAM_ID  vault program id (default the devnet id below)
 
 import { createHash } from "node:crypto";
@@ -33,19 +33,31 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { requirePrivateRpcUrl } from "./private-rpc.mjs";
 
-const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC = requirePrivateRpcUrl(process.env.SOLANA_RPC_URL);
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-// `num_trees` byte offset inside VaultConfig data (after the 8-byte Anchor
-// disc): admin(32) + tee_pubkeys(16×32=512) + root_key(32)
-// + zero_subtree_roots(20×32=640) + protocol_owner(32) + fee_rate(2)
-// + num_tee_keys(1) = 1259.
-const NUM_TREES_OFFSET = 8 + 32 + 16 * 32 + 32 + 20 * 32 + 32 + 2 + 1;
+// StaleLayoutDecode: consume the generated Rust layout so fee-key bytes can
+// never be interpreted as `num_trees`.
+const vaultLayout = JSON.parse(
+  readFileSync("programs/vault/account-layout.json", "utf8"),
+).accounts?.VaultConfig;
+const VAULT_CONFIG_ACCOUNT_LEN = vaultLayout?.account_len;
+const NUM_TREES_OFFSET = vaultLayout?.num_trees?.offset;
+if (
+  !Number.isInteger(VAULT_CONFIG_ACCOUNT_LEN) ||
+  !Number.isInteger(NUM_TREES_OFFSET)
+) {
+  throw new Error(
+    "generated VaultConfig layout fixture is missing required fields",
+  );
+}
+const MAX_TREES = 16;
 
 const admin = await Keypair.fromSecretKey(
   new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
@@ -107,9 +119,16 @@ if (treeFlag !== -1) {
     );
     process.exit(1);
   }
-  const numTrees =
-    info.data.length > NUM_TREES_OFFSET ? info.data[NUM_TREES_OFFSET] : 1;
-  treeIds = Array.from({ length: Math.max(1, numTrees) }, (_, i) => i);
+  if (info.data.length !== VAULT_CONFIG_ACCOUNT_LEN) {
+    throw new Error(
+      `VaultConfig layout mismatch: expected ${VAULT_CONFIG_ACCOUNT_LEN} bytes, got ${info.data.length}`,
+    );
+  }
+  const numTrees = info.data[NUM_TREES_OFFSET];
+  if (numTrees < 1 || numTrees > MAX_TREES) {
+    throw new Error(`vault_config num_trees out of range: ${numTrees}`);
+  }
+  treeIds = Array.from({ length: numTrees }, (_, i) => i);
 }
 
 for (const treeId of treeIds) {

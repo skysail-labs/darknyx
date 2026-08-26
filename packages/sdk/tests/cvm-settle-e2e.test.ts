@@ -66,7 +66,14 @@ import {
 import { fetchOrderFills } from "../src/fills/history.js";
 import { recoverNotesFromChain } from "../src/fills/cold-recovery.js";
 import { recoverFillFromChain } from "../src/fills/recover.js";
-import { decodeSettleFills } from "../src/fills/chain-history.js";
+import {
+  decodeSettleFeeCommitments,
+  decodeSettleFills,
+} from "../src/fills/chain-history.js";
+import {
+  MATCH_ROLE_FEE_BASE,
+  MATCH_ROLE_FEE_QUOTE,
+} from "../src/utxo/match-output.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -83,11 +90,17 @@ import {
   loadKeypairRel,
   mintToIx,
   reportSettleTimeline,
+  be32ToBigInt,
 } from "./helpers/e2e-helpers.js";
+import {
+  feeDictionaryCeiling,
+  searchLegacyFeeDictionary,
+} from "./helpers/privacy-observer.js";
 import {
   CvmHarness,
   makePersona,
   gwFetch,
+  authToken,
   fetchOracleAnchor,
   fetchBootSessionId,
   hex,
@@ -135,6 +148,13 @@ const FILLS = INDEXER_URL !== "";
 // deposit, trade, and continuation openings. No live memo or indexer row is
 // supplied to the recovery routine.
 const CHAIN_RECOVERY = process.env.DARKNYX_CVM_CHAIN_RECOVERY === "1";
+
+// The fee-key epoch drill deliberately settles epoch B without resetting the
+// epoch-A leaves. This mode cold-boots the CVM, authenticates to its mirror,
+// and replays every shard into the local witness trees before depositing the
+// second crossing pair. Ordinary leaf-count suites keep the stricter empty-tree
+// precondition.
+const REUSE_EXISTING_TREE = process.env.DARKNYX_CVM_REUSE_EXISTING_TREE === "1";
 
 // Cross-batch re-match (opt-in, requires FILLS). After the buyer's residual
 // relocks onto an anchor in batch 1, submit a SECOND ask so the matcher
@@ -235,15 +255,61 @@ maybeDescribe(
         // (tree_id, leaf_index) from its NoteCreated event.
         const numTrees =
           (cfg as unknown as { numTrees?: number }).numTrees ?? 1;
-        const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
+        const harness = REUSE_EXISTING_TREE
+          ? await CvmHarness.createHydrated(
+              conn,
+              vaultProgramId,
+              numTrees,
+              async (treeId, from, to) => {
+                const token = await authToken(GATEWAY);
+                const url = new URL(`${GATEWAY}/tree/leaves`);
+                url.searchParams.set("tree_id", String(treeId));
+                url.searchParams.set("from", String(from));
+                url.searchParams.set("to", String(to));
+                const response = await gwFetch(url.toString(), {
+                  headers: { authorization: `Bearer ${token}` },
+                });
+                if (!response.ok) {
+                  throw new Error(
+                    `/tree/leaves failed (${response.status}): ${await response.text()}`,
+                  );
+                }
+                const body = (await response.json()) as {
+                  leaves: Array<{ leaf_index: number; value: string }>;
+                  merkle_root: string;
+                };
+                if (!/^[0-9a-f]{64}$/i.test(body.merkle_root)) {
+                  throw new Error("/tree/leaves returned a malformed root");
+                }
+                return {
+                  leaves: body.leaves.map((leaf) => ({
+                    leafIndex: leaf.leaf_index,
+                    value: Uint8Array.from(Buffer.from(leaf.value, "hex")),
+                  })),
+                  merkleRoot: Uint8Array.from(
+                    Buffer.from(body.merkle_root, "hex"),
+                  ),
+                };
+              },
+            )
+          : await CvmHarness.create(conn, vaultProgramId, numTrees);
 
-        // The tree must be empty (fresh reset) so each shard's shadow starts from
-        // 0 and matches on-chain.
+        // Normal suites start from a fresh reset. The two-epoch fee drill is
+        // the sole exception: it has just hydrated all epoch-A leaves and must
+        // preserve them so their recovered notes remain spendable.
         const startCount = await harness.leafCount();
-        expect(
-          startCount,
-          "tree not empty — run devnet-setup (reset) first",
-        ).toBe(0);
+        if (REUSE_EXISTING_TREE) {
+          expect(
+            startCount,
+            "epoch-B rehearsal expected preserved epoch-A leaves",
+          ).toBeGreaterThan(0);
+          console.log(`  · hydrated ${startCount} preserved leaves`);
+        } else {
+          expect(
+            startCount,
+            "tree not empty — run devnet-setup (reset) first",
+          ).toBe(0);
+        }
         const recoveryFloorSlot = CHAIN_RECOVERY
           ? slotToNumber(await conn.getSlot("finalized"))
           : undefined;
@@ -368,7 +434,7 @@ maybeDescribe(
         // shadow root must equal on-chain current_root (so the VALID_INPUT
         // proof root is in the vault's recent ring at lock time).
         const depositCount = await harness.leafCount();
-        expect(depositCount).toBe(REMATCH ? 3 : 2);
+        expect(depositCount).toBe(startCount + (REMATCH ? 3 : 2));
 
         // ── 3. VALID_INPUT proofs (relayed to lock_note via the order) ──
         // harness.viProof witnesses against the shard the note landed in.
@@ -662,7 +728,12 @@ maybeDescribe(
             { limit: 20, vaultProgramId: cfg.vaultProgramId },
           );
           let matched:
-            | { wire: Buffer; outputs: Uint8Array[]; signature: string }
+            | {
+                wire: Buffer;
+                outputs: Uint8Array[];
+                fees: { base: Uint8Array; quote: Uint8Array };
+                signature: string;
+              }
             | undefined;
           for (const row of timeline
             .filter((r) => r.stage === "tee_forced_settle_batched")
@@ -690,6 +761,11 @@ maybeDescribe(
               ) {
                 continue;
               }
+              const fees = decodeSettleFeeCommitments(ix.data);
+              expect(
+                fees,
+                "Tx D fee commitments were not decodable",
+              ).toBeTruthy();
               matched = {
                 // The message is the observer-visible signed payload. It
                 // contains every instruction byte (where the old commitments
@@ -698,6 +774,7 @@ maybeDescribe(
                 outputs: fills.map((f) =>
                   Uint8Array.from(Buffer.from(f.tradeNoteCommitment, "hex")),
                 ),
+                fees: fees!,
                 signature: row.signature,
               };
               break;
@@ -721,8 +798,55 @@ maybeDescribe(
               "an output commitment expected in Tx D was absent",
             ).toBe(true);
           }
+
+          // PA-01: under the retired formula, an observer could enumerate the
+          // bounded fee range from each public input commitment. The actual
+          // v2 fee inners also require the governed epoch key and consumed
+          // use tag, so neither real fee commitment may appear in that legacy
+          // dictionary.
+          expect(
+            FEE_RATE_BPS,
+            "observer-negative check requires nonzero fees",
+          ).toBeGreaterThan(0);
+          const protocolOwner = be32ToBigInt(
+            Uint8Array.from(
+              Buffer.from(cfg.protocol.ownerCommitmentHex, "hex"),
+            ),
+          );
+          const [legacyBaseHit, legacyQuoteHit] = await Promise.all([
+            searchLegacyFeeDictionary({
+              inputCommitment: sellerNote.commitment,
+              targetFeeCommitment: matched!.fees.base,
+              tokenMint: baseMint.toBytes(),
+              protocolOwnerCommitment: protocolOwner,
+              role: MATCH_ROLE_FEE_BASE,
+              maxFee: feeDictionaryCeiling(
+                sellerNote.amount,
+                BigInt(FEE_RATE_BPS),
+              ),
+            }),
+            searchLegacyFeeDictionary({
+              inputCommitment: buyerNote.commitment,
+              targetFeeCommitment: matched!.fees.quote,
+              tokenMint: quoteMint.toBytes(),
+              protocolOwnerCommitment: protocolOwner,
+              role: MATCH_ROLE_FEE_QUOTE,
+              maxFee: feeDictionaryCeiling(
+                buyerNote.amount,
+                BigInt(FEE_RATE_BPS),
+              ),
+            }),
+          ]);
+          expect(
+            legacyBaseHit,
+            "legacy public-data dictionary relinked the base fee",
+          ).toBeNull();
+          expect(
+            legacyQuoteHit,
+            "legacy public-data dictionary relinked the quote fee",
+          ).toBeNull();
           console.log(
-            `  · unlinkability OK — inputs absent, outputs present in Tx D ${matched!.signature}`,
+            `  · PA-01 observer-negative OK — legacy fee dictionaries missed Tx D ${matched!.signature}`,
           );
         });
 

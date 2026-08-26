@@ -15,11 +15,12 @@
     "test:client-core": "npm -w @darknyx/client-core test",
     "test:browser-client": "npm -w @darknyx/browser-client test",
     "test:trader-host": "npm -w @darknyx/trader-host test",
+    "test:fee-collector": "npm -w @darknyx/fee-collector test",
     "bench:client-prover:node": "npm -w @darknyx/client-prover-bench run bench:node --",
     "bench:client-prover:browser": "npm -w @darknyx/client-prover-bench run bench:browser --",
     "bench:client-prover:native": "npm -w @darknyx/client-prover-bench run bench:native --",
     "check:brand": "bash scripts/check-brand-namespace.sh",
-    "typecheck": "tsc -b packages/sdk packages/daemon packages/indexer packages/client-core packages/browser-client packages/trader-host",
+    "typecheck": "tsc -b packages/sdk packages/daemon packages/indexer packages/client-core packages/browser-client packages/trader-host packages/fee-collector",
     "format": "prettier --write \"packages/**/*.{ts,tsx,json}\""
   },
   "devDependencies": {

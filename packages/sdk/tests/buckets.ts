@@ -28,7 +28,8 @@ export const DEVNET_GLOBS = ["tests/devnet-*.test.ts"];
 
 /** Devnet + a running CVM — filename prefix `cvm-`. Gate: RUN_CVM_E2E=1 +
  *  DARKNYX_TEE_GATEWAY. (cvm-settle-e2e, cvm-multimatch-settle,
- *  cvm-multi-market-settle, cvm-merge-then-order, cvm-api-surface.) */
+ *  cvm-multi-market-settle, cvm-merge-then-order, cvm-fee-epoch-recovery,
+ *  cvm-api-surface.) */
 export const CVM_GLOBS = ["tests/cvm-*.test.ts"];
 
 /** Local unit/parity/prover/wire tests — everything that is neither devnet

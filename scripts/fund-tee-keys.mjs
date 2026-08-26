@@ -14,7 +14,7 @@
 //
 // Env:
 //   FUNDER_KEYPAIR    SOL source keypair JSON (default ~/.config/solana/id.json)
-//   SOLANA_RPC_URL    RPC endpoint (default https://api.devnet.solana.com)
+//   SOLANA_RPC_URL    required private RPC endpoint
 //   FUND_TARGET_SOL   per-key target balance in SOL (default 2)
 
 import { readFileSync } from "node:fs";
@@ -29,6 +29,7 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { requirePrivateRpcUrl } from "./private-rpc.mjs";
 
 const raw = [
   ...process.argv.slice(2),
@@ -50,7 +51,7 @@ try {
   process.exit(1);
 }
 
-const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+const RPC = requirePrivateRpcUrl(process.env.SOLANA_RPC_URL);
 const FUNDER_KP =
   process.env.FUNDER_KEYPAIR ?? join(homedir(), ".config/solana/id.json");
 const TARGET_SOL = Number(process.env.FUND_TARGET_SOL ?? "2");
@@ -60,7 +61,10 @@ if (!Number.isFinite(TARGET_SOL) || TARGET_SOL <= 0) {
   );
   process.exit(1);
 }
-const TARGET_LAMPORTS = Math.round(TARGET_SOL * LAMPORTS_PER_SOL);
+const LAMPORTS_PER_SOL_BIGINT = BigInt(LAMPORTS_PER_SOL);
+const TARGET_LAMPORTS = BigInt(
+  Math.round(TARGET_SOL * Number(LAMPORTS_PER_SOL_BIGINT)),
+);
 
 const funder = await Keypair.fromSecretKey(
   new Uint8Array(JSON.parse(readFileSync(FUNDER_KP, "utf8"))),
@@ -71,7 +75,7 @@ for (const [j, target] of targets.entries()) {
   const have = await conn.getBalance(target, "confirmed");
   if (have >= TARGET_LAMPORTS) {
     console.log(
-      `shard ${j} ${target.toBase58()} already has ${(have / LAMPORTS_PER_SOL).toFixed(3)} SOL — skip`,
+      `shard ${j} ${target.toBase58()} already has ${(Number(have) / Number(LAMPORTS_PER_SOL_BIGINT)).toFixed(3)} SOL — skip`,
     );
     continue;
   }
@@ -85,7 +89,7 @@ for (const [j, target] of targets.entries()) {
     funder,
   ]);
   console.log(
-    `shard ${j} ${target.toBase58()} += ${(topUp / LAMPORTS_PER_SOL).toFixed(3)} SOL  (${sig})`,
+    `shard ${j} ${target.toBase58()} += ${(Number(topUp) / Number(LAMPORTS_PER_SOL_BIGINT)).toFixed(3)} SOL  (${sig})`,
   );
 }
 console.log(`  funder = ${funder.publicKey.toBase58()}`);

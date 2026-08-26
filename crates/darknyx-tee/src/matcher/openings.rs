@@ -32,7 +32,8 @@ use crate::settle::lock_note::Groth16ProofBytes;
 
 /// The full opening of one input note — everything the
 /// VALID_MATCH_BATCH circuit needs to re-derive its commitment.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// Deliberately no `Debug`: amounts and inner hashes are private witnesses.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NoteOpening {
     /// SPL mint of the collateral note (quote mint for a bid, base
     /// mint for an ask). Split into an Fr pair at hash time.
@@ -46,6 +47,15 @@ pub struct NoteOpening {
     /// The note's single `inner_hash`. It anchors the commitment and the
     /// public note-use tag while remaining private.
     pub inner_hash: [u8; 32],
+}
+
+impl std::fmt::Debug for NoteOpening {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NoteOpening")
+            .field("contents", &"[REDACTED: contains private opening]")
+            .finish()
+    }
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -102,7 +112,8 @@ impl NoteOpening {
 /// it; the on-chain `lock_note` verifies it against the vault's
 /// 64-root ring buffer, so it stays valid as long as settle lands
 /// within 64 tree updates of submission.
-#[derive(Clone, Debug)]
+// Deliberately no `Debug`: this embeds the full private note opening.
+#[derive(Clone)]
 pub struct OrderOpening {
     /// The crypto opening (verified against the signed commitment).
     pub opening: NoteOpening,
@@ -137,6 +148,15 @@ pub struct OrderOpening {
     pub viewing_pubkey: Option<[u8; 32]>,
 }
 
+impl std::fmt::Debug for OrderOpening {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OrderOpening")
+            .field("contents", &"[REDACTED: contains private opening]")
+            .finish()
+    }
+}
+
 /// Per-order settle-input table. One entry per live order, keyed by
 /// its collateral `note_commitment` — the matcher's `MatchPair`
 /// carries `note_buyer` / `note_seller` (commitments, not order ids),
@@ -144,9 +164,20 @@ pub struct OrderOpening {
 /// sides of a match directly. Inserted at intake (after the opening
 /// verifies), read by the settle assembler, removed on cancel /
 /// expiry / settle so the table tracks the live book.
-#[derive(Default, Debug)]
+// Deliberately no `Debug`: formatting the store would disclose every live
+// order's amount and note opening.
+#[derive(Default)]
 pub struct OpeningStore {
     map: HashMap<[u8; 32], OrderOpening>,
+}
+
+impl std::fmt::Debug for OpeningStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpeningStore")
+            .field("entry_count", &self.map.len())
+            .finish()
+    }
 }
 
 impl OpeningStore {
@@ -294,5 +325,23 @@ mod tests {
         assert!(store.get(&[9u8; 32]).is_none());
         assert!(store.remove(&key).is_some());
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn debug_output_redacts_openings_and_store_contents() {
+        let record = sample_record(0x9191);
+        let opening_debug = format!("{:?}", record.opening);
+        let record_debug = format!("{record:?}");
+        assert!(opening_debug.contains("REDACTED"));
+        assert!(record_debug.contains("REDACTED"));
+        assert!(!opening_debug.contains(&hex::encode(record.opening.inner_hash)));
+        assert!(!record_debug.contains("37265"));
+
+        let mut store = OpeningStore::new();
+        let key = record.opening.commitment().unwrap();
+        store.insert(key, record);
+        let store_debug = format!("{store:?}");
+        assert!(store_debug.contains("entry_count: 1"));
+        assert!(!store_debug.contains(&hex::encode(key)));
     }
 }

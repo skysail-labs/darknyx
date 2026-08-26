@@ -32,6 +32,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  TransactionExpiredBlockheightExceededError,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
@@ -107,6 +108,26 @@ export const PASSPHRASE = cvmCredential(
 export const FEE_RATE_BPS = BigInt(
   process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30",
 );
+
+export async function landedSignatureAfterBlockheightExpiry(
+  connection: Pick<Connection, "getSignatureStatuses">,
+  error: unknown,
+): Promise<string | undefined> {
+  if (!(error instanceof TransactionExpiredBlockheightExceededError)) {
+    return undefined;
+  }
+  const response = await connection.getSignatureStatuses([error.signature], {
+    searchTransactionHistory: true,
+  });
+  const status = response.value[0];
+  if (!status) return undefined;
+  if (status.err) {
+    throw new Error(
+      `expired transaction ${error.signature} landed with an error`,
+    );
+  }
+  return error.signature;
+}
 
 /** Per-run salt so persona seed-derived commitments are fresh each run — a
  * fixed seed can reproduce a deposited/consumed-note PDA on a second run,
@@ -438,6 +459,17 @@ export interface DepositedNote {
   leafIndex: number;
 }
 
+export interface MerkleLeafPage {
+  leaves: Array<{ leafIndex: number; value: Uint8Array }>;
+  merkleRoot: Uint8Array;
+}
+
+export type MerkleLeafPageLoader = (
+  treeId: number,
+  from: number,
+  to: number,
+) => Promise<MerkleLeafPage>;
+
 /**
  * Shard-aware deposit + witness harness. One `MerkleShadow` per shard; each
  * deposit recovers its real `(tree_id, leaf_index)` from the NoteCreated event
@@ -462,6 +494,99 @@ export class CvmHarness {
       Array.from({ length: k }, () => MerkleShadow.create()),
     );
     return new CvmHarness(conn, vaultProgramId, k, shadows);
+  }
+
+  /**
+   * Rebuild every test shadow from an already-running CVM mirror.
+   *
+   * Normal leaf-count suites intentionally start from an empty reset. The fee
+   * epoch drill is different: epoch-B settlement must preserve epoch-A leaves
+   * so the old fee notes remain spendable. After the required cold boot this
+   * loader pages the authenticated `/tree/leaves` surface, checks that every
+   * shard is contiguous, and verifies the locally replayed root before any new
+   * deposit or VALID_INPUT proof is attempted.
+   */
+  static async createHydrated(
+    conn: Connection,
+    vaultProgramId: PublicKey,
+    numTrees: number,
+    loadPage: MerkleLeafPageLoader,
+  ): Promise<CvmHarness> {
+    const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
+    const pageSize = 10_000;
+    let onchainCount = 0;
+
+    for (let treeId = 0; treeId < harness.numTrees; treeId++) {
+      let from = 0;
+      let advertisedRoot: Uint8Array | undefined;
+      for (;;) {
+        const page = await loadPage(treeId, from, from + pageSize);
+        if (page.merkleRoot.length !== 32) {
+          throw new Error(`tree ${treeId} returned a malformed Merkle root`);
+        }
+        if (
+          advertisedRoot &&
+          !Buffer.from(advertisedRoot).equals(Buffer.from(page.merkleRoot))
+        ) {
+          throw new Error(`tree ${treeId} changed while its leaves were paged`);
+        }
+        advertisedRoot = page.merkleRoot;
+
+        for (const leaf of page.leaves) {
+          if (leaf.leafIndex !== from || leaf.value.length !== 32) {
+            throw new Error(
+              `tree ${treeId} returned a non-contiguous or malformed leaf at ${from}`,
+            );
+          }
+          await harness.shadows[treeId].append(leaf.value);
+          from += 1;
+        }
+        if (page.leaves.length < pageSize) break;
+      }
+
+      if (!advertisedRoot) {
+        throw new Error(`tree ${treeId} returned no Merkle-root snapshot`);
+      }
+      const replayedRoot = await harness.shadows[treeId].computeRoot();
+      if (!Buffer.from(replayedRoot).equals(Buffer.from(advertisedRoot))) {
+        throw new Error(`tree ${treeId} replay root disagrees with the CVM`);
+      }
+
+      const [treePda] = await merkleTreePda(vaultProgramId, treeId);
+      const info = await conn.getAccountInfo(treePda);
+      if (!info) {
+        throw new Error(
+          `MerkleTree shard ${treeId} missing — run devnet-setup`,
+        );
+      }
+      if (info.data.length < 48) {
+        throw new Error(`MerkleTree shard ${treeId} account is truncated`);
+      }
+      const currentRoot = info.data.subarray(16, 48);
+      if (!Buffer.from(replayedRoot).equals(Buffer.from(currentRoot))) {
+        throw new Error(
+          `tree ${treeId} replay root disagrees with on-chain current_root`,
+        );
+      }
+      onchainCount += Number(
+        new DataView(
+          info.data.buffer,
+          info.data.byteOffset + 8,
+          8,
+        ).getBigUint64(0, true),
+      );
+    }
+
+    const mirroredCount = harness.shadows.reduce(
+      (sum, shadow) => sum + shadow.leafCount,
+      0,
+    );
+    if (mirroredCount !== onchainCount) {
+      throw new Error(
+        `hydrated ${mirroredCount} leaves but on-chain shards report ${onchainCount}`,
+      );
+    }
+    return harness;
   }
 
   /** Total on-chain leaf count summed across the K `MerkleTree` shards
@@ -536,14 +661,43 @@ export class CvmHarness {
       recoveryNonce: bn254ToBE32(recoveryNonce),
       proof,
     });
-    const sig = await sendAndConfirmTransaction(
-      this.conn,
-      new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
-        ix,
-      ),
-      [p.payer],
-    );
+    let sig: string | undefined;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        // Rebuild the Transaction on every attempt. web3.js mutates it with a
+        // recent blockhash and signatures, so reusing the same instance would
+        // merely resend the stale blockhash that triggered the retry.
+        sig = await sendAndConfirmTransaction(
+          this.conn,
+          new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+            ix,
+          ),
+          [p.payer],
+        );
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const landed = await landedSignatureAfterBlockheightExpiry(
+          this.conn,
+          error,
+        );
+        if (landed) {
+          sig = landed;
+          break;
+        }
+        const retryable =
+          error instanceof TransactionExpiredBlockheightExceededError ||
+          message.includes("Blockhash not found");
+        if (!retryable || attempt === 3) {
+          throw error;
+        }
+        console.warn(
+          `  · deposit blockhash expired before landing; retrying with a fresh transaction (${attempt}/3)`,
+        );
+      }
+    }
+    if (!sig) throw new Error("deposit exhausted blockhash retries");
     const recovered = await readNoteCreated(
       this.conn,
       sig,

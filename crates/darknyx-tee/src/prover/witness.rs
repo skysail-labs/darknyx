@@ -19,7 +19,10 @@
 /// commitments + 2 mints + 8 amount-like fields + 1 slot + 17
 /// private witnesses. The TS `proveMatchBatch` builds a record of
 /// 30 named arrays from these.
-#[derive(Clone, Debug, Default)]
+// Deliberately no `Debug`: a witness contains user note openings and the
+// protocol fee epoch key. Formatting it into a log or panic report is a secret
+// disclosure, even though the proof and public inputs are safe to format.
+#[derive(Clone, Default)]
 pub struct MatchSlotWitness {
     // ── VALID_CREATE-equivalent public fields ──
     pub note_a_commitment: [u8; 32],
@@ -94,6 +97,15 @@ pub struct MatchSlotWitness {
     /// derives them itself from note_a/note_b commitments.
     pub fee_base_inner: [u8; 32],
     pub fee_quote_inner: [u8; 32],
+}
+
+impl std::fmt::Debug for MatchSlotWitness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MatchSlotWitness")
+            .field("contents", &"[REDACTED: contains private witnesses]")
+            .finish()
+    }
 }
 
 /// Build a canonical inactive all-zero slot. Used to pad a batch
@@ -233,6 +245,17 @@ mod tests {
         let d = dummy_slot();
         assert!(!d.is_active);
         assert_eq!(d.note_a_commitment, [0u8; 32]);
+    }
+
+    #[test]
+    fn debug_output_redacts_private_witnesses_and_fee_key() {
+        let mut witness = dummy_slot();
+        witness.a_inner = [0x91; 32];
+        witness.fee_epoch_key = [0x92; 32];
+        let rendered = format!("{witness:?}");
+        assert!(rendered.contains("REDACTED"));
+        assert!(!rendered.contains(&hex::encode(witness.a_inner)));
+        assert!(!rendered.contains(&hex::encode(witness.fee_epoch_key)));
     }
 
     #[test]

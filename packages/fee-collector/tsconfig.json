@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": ".",
+    "composite": true,
+    "types": ["node"]
+  },
+  "references": [{ "path": "../sdk" }],
+  "include": ["src/**/*", "bin/**/*"]
+}

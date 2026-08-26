@@ -658,6 +658,68 @@ mod leaf_arity_tests {
         }
     }
 
+    fn filled<const N: usize>(byte: u8) -> [u8; N] {
+        let mut value = [byte; N];
+        if N == 32 {
+            value[0] = 0;
+        }
+        value
+    }
+
+    fn decode_hex_32(value: &str) -> [u8; 32] {
+        assert_eq!(value.len(), 64);
+        let mut decoded = [0u8; 32];
+        for (index, byte) in decoded.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+                .expect("fixed vector is valid hex");
+        }
+        decoded
+    }
+
+    /// Cross-language fixed vector shared with
+    /// `packages/sdk/tests/batch-binding.test.ts`. This pins not merely the
+    /// Poseidon domains, but the exact Rust/TS payload field order and N=16
+    /// left/right path convention used by archival fee recovery.
+    #[test]
+    fn batch_binding_matches_the_sdk_fixed_vector() {
+        let payload = MatchResultPayload {
+            match_id: filled::<16>(1),
+            note_a_use_tag: filled::<32>(2),
+            note_b_use_tag: filled::<32>(3),
+            note_c_commitment: filled::<32>(4),
+            note_d_commitment: filled::<32>(5),
+            note_e_commitment: [0u8; 32],
+            note_f_commitment: [0u8; 32],
+            order_id_a: filled::<16>(6),
+            order_id_b: filled::<16>(7),
+            note_fee_base_commitment: filled::<32>(8),
+            note_fee_quote_commitment: filled::<32>(9),
+            buyer_relock_order_id: [0u8; 16],
+            buyer_relock_expiry: 0,
+            seller_relock_order_id: [0u8; 16],
+            seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
+            batch_slot: 3,
+            fill_recovery: [0u8; 128],
+        };
+        let siblings = [
+            filled::<32>(10),
+            filled::<32>(11),
+            filled::<32>(12),
+            filled::<32>(13),
+        ];
+        let leaf = compute_match_leaf(&payload).expect("leaf computes");
+        assert_eq!(
+            leaf,
+            decode_hex_32("227bfaf15070d46854c20e13ab209066649c349b6c9ea08b9342b6699623f51a")
+        );
+        assert_eq!(
+            walk_merkle_path_n16(&leaf, 3, &siblings).expect("path computes"),
+            decode_hex_32("19ce7fa75f6c9217e42bc2a7659e03583eb481248f2b6fd628bd0495cbcb19c2")
+        );
+    }
+
     /// The leaf sits at EXACTLY the `light-poseidon` width cap.
     ///
     /// `MAX_X5_LEN = 13` means at most 12 inputs. The leaf uses all 12, which is

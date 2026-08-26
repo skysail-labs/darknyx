@@ -63,6 +63,7 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `cvm-multimatch-settle.test.ts`   | N crossing pairs settle across K shards (shard-aware)                                                                                                     |
 | `cvm-multi-market-settle.test.ts` | two governed markets share one endpoint/settle plane while books, routing, and cross-market modify remain isolated; one disabled market pauses the venue  |
 | `cvm-merge-then-order.test.ts`    | deposit 2 → merge → `buildOrder` off merged note → CVM accepts/settles                                                                                    |
+| `cvm-fee-epoch-recovery.test.ts`  | Also requires `RUN_CVM_FEE_RECOVERY=1`, `DARKNYX_PROTOCOL_OWNER_SPENDING_KEY`, `DARKNYX_FEE_INVENTORY_PASSPHRASE`, the sealed inventory, and VALID_SPEND artifacts; finalized-chain recovery spends one note from each preserved epoch. The suite skips if any file/gate is absent. |
 | `cvm-api-surface.test.ts`         | error envelope + X-Request-Id, /system/status, /time, rate-limit 429, /account(+settings), `/v1/stream` in-band login + sequencing, legacy-route deletion |
 
 See `docs/cvm-run-runbook.md` for the full CVM bring-up (build→deploy→rotate→fund→reset→test→stop).

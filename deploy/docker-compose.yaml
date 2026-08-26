@@ -26,13 +26,12 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-90 (commit aca59fcd,
-    # D2/D3 supervised daemon boot recovery plus the boot-selected
-    # `/info.transport_mode`; pot19 N=16 proving key fetched via Git LFS during
-    # the image build).
+    # Source tag for audit cross-reference: tee-v3-hardening-91 (commit 99c6c5f9,
+    # protocol-fee recovery v2 plus the two-epoch release-assurance rehearsal;
+    # pot19 N=16 proving key fetched via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:7dd1b18cfd72faf6a50290b2c1f3defe40aa5761a1d9cc7056fcfd68e566f051
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:af1a31600f6a5cc9bc0de14df4609cdb73e87906ef7805b482d09360ce123422
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -195,6 +194,12 @@ services:
       # Real-market boot adopts the finalized on-chain value exactly; this env
       # value is only a simulator/loadgen default. See crate::config.
       DARKNYX_TEE_FEE_RATE_BPS: ${DARKNYX_TEE_FEE_RATE_BPS}
+      # Protocol-custodied observer secret for the finalized governed epoch.
+      # Supplied only through Phala's encrypted deploy env. The TEE derives its
+      # Poseidon binding and refuses real-market startup unless it matches the
+      # finalized VaultConfig binding. The epoch itself comes from VaultConfig,
+      # not deploy env; never hardcode or log this value.
+      DARKNYX_TEE_FEE_EPOCH_KEY: ${DARKNYX_TEE_FEE_EPOCH_KEY}
       # Simulator/loadgen owner commitment default (32-byte hex). Governed
       # real-market boot adopts the finalized VaultConfig value instead.
       # Empty/unset in simulator/loadgen mode → [0;32] (fee notes still mint +

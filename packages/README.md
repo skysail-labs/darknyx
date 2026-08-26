@@ -15,6 +15,7 @@ repeatable performance evidence that production changes still depend on.
 | `@darknyx/trader-host`         | Serves reviewed browser releases and provides the same-origin session, CVM, and read-only RPC boundary.                           | Production service; keep.                                                                                     |
 | `@darknyx/daemon`              | Headless non-custodial client for market makers and automated traders.                                                            | Production reference client; keep.                                                                            |
 | `@darknyx/indexer`             | Optional by-order-ID settlement locator and independent settlement-payload decoder. It is not currently deployed or load-bearing. | Dormant accelerator/reference; keep until measured chain-recovery costs justify either deployment or removal. |
+| `@darknyx/fee-collector`       | Operator-only finalized-chain recovery for protocol fee notes, including encrypted epoch-key custody and inventory.               | Production operations tool; keep offline except for governed rotation, recovery, and backup drills.           |
 | `@darknyx/client-prover-bench` | Reproducible Node, browser, and native proving measurements over the real six client circuits.                                    | Qualification tooling; keep through the gates below.                                                          |
 
 ## Browser custody spike retirement

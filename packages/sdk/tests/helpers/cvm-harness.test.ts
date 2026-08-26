@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
+import {
+  Connection,
+  PublicKey,
+  TransactionExpiredBlockheightExceededError,
+} from "@solana/web3.js";
 
-import { floorPriceToTick } from "./cvm-harness.js";
+import {
+  CvmHarness,
+  floorPriceToTick,
+  landedSignatureAfterBlockheightExpiry,
+} from "./cvm-harness.js";
+import { MerkleShadow } from "./merkle-shadow.js";
+
+function leaf(value: number): Uint8Array {
+  return new Uint8Array(32).fill(value);
+}
+
+function fakeConnection(
+  counts: number[],
+  roots: Uint8Array[] = counts.map(() => new Uint8Array(32)),
+): Connection {
+  let call = 0;
+  return {
+    getAccountInfo: async () => {
+      const index = call++ % counts.length;
+      const data = new Uint8Array(48);
+      new DataView(data.buffer).setBigUint64(8, BigInt(counts[index]), true);
+      data.set(roots[index], 16);
+      return { data };
+    },
+  } as unknown as Connection;
+}
 
 describe("floorPriceToTick", () => {
   it("preserves an aligned positive price", () => {
@@ -19,5 +49,130 @@ describe("floorPriceToTick", () => {
     expect(() => floorPriceToTick(4n, 5n)).toThrow(
       "tickSize exceeds the positive price",
     );
+  });
+});
+
+describe("deposit blockheight expiry reconciliation", () => {
+  it("preserves a submitted signature that already landed", async () => {
+    const error = new TransactionExpiredBlockheightExceededError("signature");
+    const connection = {
+      getSignatureStatuses: async () => ({
+        context: { slot: 1 },
+        value: [
+          {
+            slot: 1,
+            confirmations: null,
+            err: null,
+            confirmationStatus: "finalized" as const,
+          },
+        ],
+      }),
+    } as unknown as Pick<Connection, "getSignatureStatuses">;
+    await expect(
+      landedSignatureAfterBlockheightExpiry(connection, error),
+    ).resolves.toBe("signature");
+  });
+
+  it("allows a fresh retry only when the expired signature is absent", async () => {
+    const error = new TransactionExpiredBlockheightExceededError("signature");
+    const connection = {
+      getSignatureStatuses: async () => ({
+        context: { slot: 1 },
+        value: [null],
+      }),
+    } as unknown as Pick<Connection, "getSignatureStatuses">;
+    await expect(
+      landedSignatureAfterBlockheightExpiry(connection, error),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("CvmHarness.createHydrated", () => {
+  it("replays contiguous pages and checks the aggregate on-chain count", async () => {
+    const shardLeaves = [[leaf(1), leaf(2)], [leaf(3)]];
+    const roots = await Promise.all(
+      shardLeaves.map(async (leaves) => {
+        const shadow = await MerkleShadow.create();
+        for (const value of leaves) await shadow.append(value);
+        return shadow.computeRoot();
+      }),
+    );
+    const harness = await CvmHarness.createHydrated(
+      fakeConnection([2, 1], roots),
+      new PublicKey(new Uint8Array(32).fill(7)),
+      2,
+      async (treeId, from) => ({
+        leaves: shardLeaves[treeId].slice(from).map((value, offset) => ({
+          leafIndex: from + offset,
+          value,
+        })),
+        merkleRoot: roots[treeId],
+      }),
+    );
+
+    expect(harness.shadows.map((shadow) => shadow.leafCount)).toEqual([2, 1]);
+    expect(await harness.leafCount()).toBe(3);
+  });
+
+  it("rejects a gap before accepting a hydrated witness tree", async () => {
+    const shadow = await MerkleShadow.create();
+    await shadow.append(leaf(9));
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([1]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 1, value: leaf(9) }],
+          merkleRoot: await shadow.computeRoot(),
+        }),
+      ),
+    ).rejects.toThrow("non-contiguous");
+  });
+
+  it("rejects a contiguous replay whose advertised root is wrong", async () => {
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([1]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: leaf(10),
+        }),
+      ),
+    ).rejects.toThrow("replay root disagrees with the CVM");
+  });
+
+  it("rejects a mirrored count that disagrees with the shards", async () => {
+    const shadow = await MerkleShadow.create();
+    await shadow.append(leaf(9));
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([7], [await shadow.computeRoot()]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: await shadow.computeRoot(),
+        }),
+      ),
+    ).rejects.toThrow("on-chain shards report");
+  });
+
+  it("rejects matching counts with a stale on-chain current root", async () => {
+    const shadow = await MerkleShadow.create();
+    await shadow.append(leaf(9));
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([1], [leaf(10)]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: await shadow.computeRoot(),
+        }),
+      ),
+    ).rejects.toThrow("on-chain current_root");
   });
 });

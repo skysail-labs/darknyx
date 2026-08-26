@@ -77,6 +77,10 @@ the order/cancel canonical signing — single source of truth, used by the
 in-TEE matcher)
 and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
+`packages/fee-collector/` is the operator-only finalized-chain protocol-fee
+recovery tool. It owns encrypted fee-key epochs and recovered fee-note
+inventory; it is not a client product or an always-on service. Follow
+`docs/protocol-fee-recovery-runbook.md` for every rotation or recovery.
 
 > **Public docs live in `docs/mintlify/` — edit them directly.** This directory
 > is the single source of truth for the hosted documentation. Keep navigation
@@ -293,6 +297,7 @@ RUN_DEVNET_E2E=1 \
 set -e
 cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd line
 bash scripts/check-compose-image-digests.sh          # CPU/GPU compose must use @sha256
+bash scripts/check-compose-secret-forwarding.sh      # fee key must cross compose + CI deploy boundaries
 bash scripts/check-icicle-cuda-arch-env.sh           # every CUDA build.rs reads the var the Dockerfile forwards
 bash scripts/check-brand-namespace.sh                # no stale pre-Darknyx namespaces
 node scripts/check-domain-registry.mjs               # authoritative Poseidon assignments + consumers
@@ -331,7 +336,7 @@ node scripts/check-script-awaits.mjs                # .mjs get no typecheck; a f
 # Typecheck with the TESTS-INCLUSIVE config. The build tsconfig includes only
 # `src/`, so `-p packages/<pkg>/tsconfig.json` never sees tests/ — which is how
 # 23 type errors sat on main unnoticed.
-# ALL SIX packages that HAVE a tsconfig.test.json are listed. This block used to
+# ALL SEVEN packages that HAVE a tsconfig.test.json are listed. This block used to
 # name three; browser-client and client-core were checked by nothing, locally or
 # in CI, and browser-client is the SIGNED RELEASE surface.
 # The SDK and client-core must be BUILT first — daemon/indexer/browser-client
@@ -348,6 +353,7 @@ node scripts/clean-ts-dist.mjs
 ./node_modules/.bin/tsc -p packages/trader-host/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/client-core/tsconfig.test.json --noEmit
 ./node_modules/.bin/tsc -p packages/browser-client/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/fee-collector/tsconfig.test.json --noEmit
 # The parity helpers gate the TS↔Rust byte-equality contracts (§7). Without
 # them every one of those assertions SKIPS and vitest still reports green —
 # which is exactly what happened during the v3 Buffer→Uint8Array port. The
@@ -360,6 +366,7 @@ cargo build --examples -p darkpool-crypto           # §2.1 lists this; the next
 ( cd packages/client-core && ../../node_modules/.bin/vitest run )
 ( cd packages/trader-host && ../../node_modules/.bin/vitest run )
 ( cd packages/browser-client && ../../node_modules/.bin/vitest run )
+( cd packages/fee-collector && ../../node_modules/.bin/vitest run )
 # The browser PRODUCTION build. CI gates this; this block did not, so a change
 # that bundles cleanly in tests could still break the signed release — e.g. a
 # value import from the SDK root barrel drags node:crypto into the browser
@@ -511,6 +518,7 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 >   vice-versa. Switching is an env-only `phala deploy -e` (no rebuild).
 
 ```sh
+set -euo pipefail
 umask 077
 HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
@@ -521,6 +529,26 @@ QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
+# Materialize this mode-0600 fragment from the sealed keyring exactly as
+# documented in docs/protocol-fee-recovery-runbook.md. Both plaintext fragments
+# are removed after success, failure, or interruption.
+cleanup_deploy_secrets() {
+  for file in .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env; do
+    [ -e "$file" ] || continue
+    if command -v shred >/dev/null 2>&1; then
+      shred -u -- "$file"
+    elif rm -P -- "$file" 2>/dev/null; then
+      : # BSD/macOS secure overwrite completed.
+    else
+      echo "warning: secure deletion unavailable; unlinking $file" >&2
+      rm -f -- "$file"
+    fi
+  done
+}
+trap cleanup_deploy_secrets EXIT HUP INT TERM
+source .devnet/fee-key-deploy.env
+test -n "${DARKNYX_TEE_FEE_EPOCH_KEY:-}" \
+  || { echo "fee-key deployment fragment is empty" >&2; exit 1; }
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
 cat > .devnet/darknyx-deploy.env <<EOF
@@ -536,10 +564,14 @@ DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
 DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_TEE_FEE_EPOCH_KEY
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=$K
 DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1
 EOF
+# Run `phala deploy ... -e .devnet/darknyx-deploy.env`, then:
+cleanup_deploy_secrets
+trap - EXIT HUP INT TERM
 ```
 
 A production boot rejects the public `darknyx-test-*` credentials. Keep the fresh

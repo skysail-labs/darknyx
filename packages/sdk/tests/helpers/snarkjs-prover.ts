@@ -65,36 +65,37 @@ export function snarkjsFullProve(
       tmpdir(),
       `darknyx-snarkjs-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
-  mkdirSync(tmp, { recursive: true });
+  mkdirSync(tmp, { recursive: true, mode: 0o700 });
   const inputPath = join(tmp, "input.json");
   const proofPath = join(tmp, "proof.json");
   const publicPath = join(tmp, "public.json");
 
-  writeFileSync(inputPath, JSON.stringify(inputs));
-
-  const snarkjsBin = resolve(opts.repoRoot, "node_modules/.bin/snarkjs");
-  execFileSync(
-    snarkjsBin,
-    [
-      "groth16",
-      "fullprove",
-      inputPath,
-      opts.circuitWasmPath,
-      opts.circuitZkeyPath,
-      proofPath,
-      publicPath,
-    ],
-    { stdio: "pipe" },
-  );
-
-  const proofJson = JSON.parse(readFileSync(proofPath, "utf8"));
-  const publicJson = JSON.parse(readFileSync(publicPath, "utf8"));
-
   try {
-    rmSync(tmp, { recursive: true, force: true });
-  } catch {
-    // best-effort cleanup
-  }
+    writeFileSync(inputPath, JSON.stringify(inputs), { mode: 0o600 });
 
-  return formatGroth16ForOnChain(proofJson, publicJson);
+    const snarkjsBin = resolve(opts.repoRoot, "node_modules/.bin/snarkjs");
+    execFileSync(
+      snarkjsBin,
+      [
+        "groth16",
+        "fullprove",
+        inputPath,
+        opts.circuitWasmPath,
+        opts.circuitZkeyPath,
+        proofPath,
+        publicPath,
+      ],
+      { stdio: "pipe" },
+    );
+
+    const proofJson = JSON.parse(readFileSync(proofPath, "utf8"));
+    const publicJson = JSON.parse(readFileSync(publicPath, "utf8"));
+    return formatGroth16ForOnChain(proofJson, publicJson);
+  } finally {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup cannot hide the original proving failure.
+    }
+  }
 }
