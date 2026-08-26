@@ -11,9 +11,7 @@ can expose several independently routed books through this single list.
 
 ## List instruments
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/instruments" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 The response is a JSON **array**, not an object envelope:
 
@@ -36,9 +34,7 @@ The response is a JSON **array**, not an object envelope:
 
 ## Get one instrument
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/instruments/{symbol}" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Returns the same object shape or `404` when the symbol is not configured on this
 venue. Use the returned `symbol` unchanged in signed order requests.

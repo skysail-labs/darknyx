@@ -42,10 +42,16 @@ if ! diff -q "$tmp/committed.yaml" "$ART" >/dev/null; then
   exit 1
 fi
 
-python3 - "$ART" <<'PY'
-import sys, yaml
+python3 - "$ART" "$ROOT/docs/mintlify/docs.json" <<'PY'
+import json, sys, yaml
 spec = yaml.safe_load(open(sys.argv[1]))
+docs_config = json.load(open(sys.argv[2]))
 errs = []
+
+if (((docs_config.get("api") or {}).get("playground") or {}).get("display")
+        != "none"):
+    errs.append("Mintlify API playground must remain disabled: "
+                "docs.json api.playground.display != none")
 
 admin = [f"{m.upper()} {p}"
          for p, item in (spec.get("paths") or {}).items()
@@ -92,7 +98,7 @@ for path, item in (spec.get("paths") or {}).items():
         if key not in expected_bearer and security not in (None, []):
             errs.append(f"unexpected authentication requirement on {method.upper()} {path}")
         if op.get("x-hideTryItPanel") is not True:
-            errs.append(f"GitBook Test it panel is enabled on {method.upper()} {path}")
+            errs.append(f"per-operation Try it opt-out missing on {method.upper()} {path}")
 
 missing_bearer = sorted(expected_bearer - seen_bearer)
 unexpected_bearer = sorted(seen_bearer - expected_bearer)

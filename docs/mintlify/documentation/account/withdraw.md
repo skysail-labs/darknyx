@@ -5,7 +5,7 @@ description: "Move value out of the pool back to an SPL token account, proven in
 
 # Withdraw
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Withdrawing spends a note out of the vault and releases the tokens to an SPL token
@@ -13,7 +13,7 @@ account. It is an on-chain action gated by a zero-knowledge proof: you prove the
 note is in the tree and yours, the proof derives its unlinkable **note-use tag**
 so it cannot be spent again, and the program transfers the tokens out. The withdrawal does not
 reveal which deposit the value came from.
-{% endhint %}
+</Info>
 
 ## What a withdrawal does
 
@@ -27,7 +27,7 @@ does not involve the matching engine.
 You need the note's plaintext (which you hold locally) and its Merkle leaf index.
 The SDK assembles the proof and the transaction.
 
-{% hint style="warning" %}
+<Warning>
 **The proof is bound to the destination account**
 
 The destination token account is a public input to the withdrawal proof, so a
@@ -44,7 +44,7 @@ redirected the payment to themselves.
 Practically: build the proof for the exact account you intend to receive the
 tokens. Reusing a proof against a different destination will not work, and does
 not need to.
-{% endhint %}
+</Warning>
 
 ## Using the SDK
 
@@ -78,7 +78,7 @@ land. What stays hidden is the link to the rest of your activity: the published
 note-use tag is unlinkable to the note commitment, so an observer cannot tie the
 withdrawal back to the deposit or trade that produced the note.
 
-{% hint style="warning" %}
+<Warning>
 **Proofs are generated against a recent root**
 
 The inclusion proof is tied to a specific Merkle root. The vault keeps a bounded
@@ -86,7 +86,7 @@ window of recent roots, so a withdrawal must land while its root is still in tha
 window. The SDK reads a current root when it builds the proof; if a withdrawal
 fails as stale, rebuild it against the latest root and resubmit. See
 [Merkle Proofs](/api-reference/tree).
-{% endhint %}
+</Warning>
 
 ## A note involved in an order
 

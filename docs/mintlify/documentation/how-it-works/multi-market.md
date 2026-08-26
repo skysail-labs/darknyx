@@ -5,14 +5,14 @@ description: "How one attested Darknyx venue serves several independently govern
 
 # Multi-Market Venue
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 One Darknyx confidential VM can serve several spot pairs. Each pair has its own
 order book, oracle, limits, and on-chain market configuration, while traders use
 one verified enclave origin, one attestation check, and one authenticated stream. Matches from
 different markets never share a proof batch.
-{% endhint %}
+</Info>
 
 ## Why markets share one venue
 

@@ -5,14 +5,14 @@ description: "The order types Darknyx supports (limit, IOC, and FOK) plus the ma
 
 # Order Types
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx has three native order types: **limit**, **IOC**, and **FOK**. A **market**
 order is a convention (an IOC with a price cap) and an **all-or-none** order is
 a limit with its minimum fill size set to the full amount. Every order clears at
 the batch's single oracle-anchored price.
-{% endhint %}
+</Info>
 
 ## How matching works here
 

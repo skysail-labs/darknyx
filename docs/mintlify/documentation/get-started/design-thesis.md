@@ -21,19 +21,14 @@ Darknyx separates those powers:
   boot-random TLS certificate to a separate nonce-challenged quote, so the
   gateway passes ciphertext rather than terminating the protected session.
   Replacement sockets are refused inside the connector before request bytes
-  can leave. Launch qualification still requires supervised recovery after a
-  genuine boot rotation.
+  can leave, and a new engine boot must establish and verify a fresh transport
+  identity.
 - **The client keeps custody secrets.** Spending and viewing keys remain with the
   trader; the venue receives only the material needed to validate and match an
   order.
 
 The product is a fully collateralized spot venue with private order flow,
 uniform batch clearing, on-chain custody, and recoverable shielded balances.
-
-The current product direction is programmatic access through the SDK and
-non-custodial daemon. Browser trading is deferred and is not part of the launch
-claim; its ordinary hosting boundary must be removed or cryptographically
-crossed before that path can serve external users or real value.
 
 ## The trust decomposition
 
@@ -46,7 +41,7 @@ has a narrower, inspectable job.
 | Asset identity, arithmetic, conservation, fees, and output derivation | Groth16 settlement proof verified on-chain | A confirmed settlement cannot create value, switch mints, redirect outputs, or change the configured fee. |
 | Order ownership and collateral validity | Client signatures + VALID_INPUT | A request is tied to a trading key and a real committed note. |
 | Private matching, limit-price compliance, oracle policy, FIFO, and execution attributes | Attested matcher code | These properties depend on verifying the expected confidential-VM image. |
-| Counterparty-selection fairness | Attested matcher + published per-market-maker execution-quality statistics | A compromised matcher could repeatedly prefer a colluding maker; launch requires selection share, price improvement, failure rate, and settlement latency to make persistent bias externally detectable. |
+| Counterparty-selection fairness | Attested matcher code | Selection among otherwise compatible counterparties is matcher behavior, not a property re-proven by the settlement circuit. |
 | Note ownership and recovery | Client seed + finalized chain | The venue never receives the spending key needed to claim a note. |
 
 This division is deliberate. Zero knowledge makes settlement correctness
@@ -93,9 +88,7 @@ Darknyx is intentionally narrow today:
 - a confidential matching service can be halted or censored, so liveness is not
   decentralized even though custody enforcement is on-chain;
 - fair matching and oracle/limit enforcement remain part of the attested code
-  trust boundary rather than the settlement circuit;
-- production launch remains gated on an external circuit audit, a public
-  proving-key ceremony, governance rehearsal, and recovery drill.
+  trust boundary rather than the settlement circuit.
 
 Those boundaries make the claim legible: Darknyx is not trying to hide trust. It is
 trying to minimize it, isolate it, and make the remaining assumptions

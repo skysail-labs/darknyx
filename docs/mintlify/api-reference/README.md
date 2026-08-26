@@ -9,13 +9,17 @@ inside an Intel TDX confidential VM, so the transport and attestation sections
 are not boilerplate — they are how you verify you are talking to the real
 enclave before you send it an order.
 
-{% hint style="warning" %}
+The machine-readable contract is available as the
+[public OpenAPI specification](./openapi/darknyx-public.yaml). It is generated
+from the engine's wire contract and excludes operator-only endpoints.
+
+<Warning>
 **Verify the enclave before authenticating.** The engine terminates TLS itself
 with a boot-random, quote-bound certificate. Clients check that certificate
 against [`GET /transport-attestation`](getting-started/transport-and-attestation.md)
 rather than against a public CA. Sending a bearer token over an unverified
 connection defeats the guarantee this venue exists to provide.
-{% endhint %}
+</Warning>
 
 ## Start here
 
@@ -50,7 +54,7 @@ connection defeats the guarantee this venue exists to provide.
 - **Every error shares one envelope.** Match on the machine-readable `code`,
   not on the human-readable message, which may change.
 
-{% hint style="info" %}
+<Info>
 Operator and administrative endpoints are intentionally absent from this
 reference and from its OpenAPI document.
-{% endhint %}
+</Info>

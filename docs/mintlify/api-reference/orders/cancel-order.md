@@ -1,21 +1,19 @@
 ---
 description: "Cancel a resting order with a signed cancel request from the owning trading key."
+title: "Cancel Order"
+openapi: "/api-reference/openapi/darknyx-public.yaml DELETE /orders/{order_id}"
 ---
 
-# Cancel Order
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `DELETE /orders/{order_id}` removes a resting order. The body carries a fresh
 **trading-key signature** over the order id, cancel nonce, and current boot
 session, proving the caller owns the order. Only the trading key that placed the
 order can cancel it.
-{% endhint %}
+</Info>
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/orders/{order_id}" method="delete" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Auth: `Authorization: Bearer <token>` **and** a trading-key cancel signature in
 the body.
@@ -101,11 +99,11 @@ order leave without polling.
 | No such (resting) order, already filled, expired, or cancelled           | `404`  |
 | The cancel nonce did not advance, or the session belongs to another boot | `409`  |
 
-{% hint style="info" %}
+<Info>
 **Cancelling races the match**
 
 An order can match in a batch between when you decide to cancel and when the
 cancel lands. If the order has already left the book, the cancel returns `404`.
 Treat a `404` on cancel as "the order is no longer resting" and reconcile via
 [`GET /orders/{order_id}`](./get-order.md) or the orders stream.
-{% endhint %}
+</Info>

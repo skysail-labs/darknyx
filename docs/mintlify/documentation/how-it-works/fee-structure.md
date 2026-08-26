@@ -5,14 +5,14 @@ description: "How trading fees work on Darknyx, a basis-point protocol fee both 
 
 # Fee Structure
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx charges a flat **protocol fee** in basis points (for example, 30 bps). **Both
 sides of a trade pay their own fee.** Each order pre-funds its fee as part of its
 collateral, and the fee is collected at settlement as a **fee note** minted to the
 protocol, so fees, like everything else, settle privately on-chain.
-{% endhint %}
+</Info>
 
 ## The fee model
 
@@ -42,7 +42,7 @@ The engine derives the applicable floor-rounded fee at intake. If an order's
 collateral note does not cover both, the order is rejected rather than allowed
 to under-pay.
 
-{% hint style="info" %}
+<Info>
 **Collateral must include the fee**
 
 Read the finalized market and vault configuration when selecting a collateral
@@ -50,7 +50,7 @@ note. The order request carries the note's actual amount; intake recomputes its
 commitment and rejects a note that cannot cover the worst-case nominal amount
 plus fee. Higher-level wallet software can automate that coin selection, but the
 wire-level SDK does not add value to an existing note.
-{% endhint %}
+</Info>
 
 ## How fees are collected
 
@@ -73,6 +73,21 @@ Because the fee is charged on the actual cleared amount, an order that locked
 fee-inclusive collateral on its worst-case limit and then fills at a better
 clearing price gets unused collateral back as part of its change note.
 
+## Fee-note privacy and recovery
+
+Fee notes must be recoverable by the protocol without becoming a public clue to
+which deposited note traded. Their private inner value therefore incorporates
+a rotating **fee epoch key** together with the consumed note's unlinkable use
+tag and the fee side. The settlement proof binds the key's governed on-chain
+commitment and epoch without revealing the key itself.
+
+This prevents an observer from trying every plausible small fee amount and
+matching the resulting public fee commitment back to a historical input leaf.
+For durability, each verified batch also records a fixed-size encrypted fee
+recovery bundle. Historical epoch keys let the protocol reconstruct only the
+fee notes that actually settled on finalized chain; users do not manage these
+keys or bundles.
+
 ## Worked example
 
 Suppose the fee rate is 30 bps (0.30%) and you place a bid to buy `10` base at a
@@ -92,7 +107,9 @@ configured `price_scale`, with every division rounded down as shown above.
 ## Why fees settle as notes
 
 Collecting fees as on-chain notes keeps the whole system consistent: there is one
-value-movement mechanism (notes, gated by proofs), one place fees are visible (the
-public [transparency](/api-reference/settlement/transparency) reserves, which account for every
-mint including the protocol's), and no privileged off-chain ledger. Fees are as
-private and as verifiable as trades.
+value-movement mechanism (notes, gated by proofs), one place aggregate
+liabilities are visible (the public
+[transparency](/api-reference/settlement/transparency) reserves, which account
+for every mint including the protocol's), and no privileged off-chain ledger.
+Individual fee amounts and their input lineage remain shielded while the proof
+still enforces the exact configured fee.

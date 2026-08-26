@@ -1,24 +1,22 @@
 ---
 description: "How Darknyx signals readiness and degraded mode, so you can check it before trading and back off when subsystems are down."
+title: "System Status"
+openapi: "/api-reference/openapi/darknyx-public.yaml GET /system/status"
 ---
 
 
-# System Status
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `GET /system/status` is a public readiness snapshot: is matching running, is
 settlement wired, is an oracle attached, and what slot the engine is on. A
 `degraded` flag tells you, in one boolean, whether to back off before you hit a
 write failure.
-{% endhint %}
+</Info>
 
 ## GET /system/status
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/system/status" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Public, with no authentication.
 

@@ -5,7 +5,7 @@ description: "How private matches become final on Solana, what the proof guarant
 
 # Settlement
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 One proof covers up to 16 matches, but each match reaches finality independently.
@@ -13,7 +13,7 @@ Inputs are locked, the batch proof is verified on-chain, and each match is sent
 as its own atomic settlement. The book changes and fills publish only after a
 match confirms. A definitive failure is terminal; an ambiguous result stays
 reserved while the engine reconciles it with finalized chain state.
-{% endhint %}
+</Info>
 
 ## From private match to public finality
 

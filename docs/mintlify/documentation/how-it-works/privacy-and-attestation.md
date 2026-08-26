@@ -5,7 +5,7 @@ description: "What Darknyx hides, what remains public, and how clients verify th
 
 # Privacy & Attestation
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 On the programmatic path, Darknyx keeps order intent inside the measured matcher
@@ -14,7 +14,7 @@ boot-random key inside its confidential VM; the deployment gateway passes that
 encrypted stream through. The SDK and daemon verify that live certificate,
 hardware quote, image measurement, boot session, and complete on-chain
 settlement-signer set before sending credentials or orders.
-{% endhint %}
+</Info>
 
 ## Who can see your orders?
 
@@ -42,6 +42,27 @@ Deposits reveal the signer, mint, and gross amount. Withdrawals reveal the
 destination, mint, and amount. Network timing and aggregate activity are also
 observable. The privacy claim covers the book, note ownership, and settled
 trade plaintext; it is not a claim that all protocol activity is invisible.
+
+## How note lineage stays private
+
+A note commitment is public only when the note is created as a Merkle leaf.
+Later locking and consumption publish a different handle—the note-use tag—whose
+derivation also needs the note's private inner hash. That prevents an observer
+from following a note through deposit, trade, merge, and withdrawal by matching
+one repeated identifier.
+
+The same rule extends to newly created notes. Trade and change outputs inherit
+private entropy from the consumed note, merge outputs combine private input
+inners, and protocol fee outputs incorporate a protocol-held epoch secret whose
+binding and epoch are governed on-chain. As a result, descendant relationships
+are not reconstructible from public commitments and other chain data. The
+user's seed plus finalized chain data still recovers user-owned notes; the
+protocol separately retains the
+historical epoch keys needed to recover protocol-owned fee notes.
+
+This is an unlinkability guarantee about cryptographic identifiers. Public
+deposit and withdrawal amounts, recipients, and transaction timing can still
+provide statistical clues, especially when values are distinctive.
 
 ## Privacy is a guarantee, not a promise
 
@@ -92,12 +113,12 @@ The SDK verifies the transport evidence and returns the quote-bound identity;
 the client still supplies the independently approved compose hash and compares
 the full returned signer set with finalized on-chain configuration. The
 reference daemon performs these checks automatically and pauses new trading
-when its evidence becomes stale or mismatched. The current single-connection,
-single-flight adapter narrows replacement churn, but connector-level refusal and
-supervised boot-rotation recovery remain pre-release gates; the internal
-cryptography record tracks their closure evidence.
+when its evidence becomes stale or mismatched. A reconnect may reuse only the
+same verified boot identity; a genuine engine restart produces a new
+certificate and boot session that must be attested again before private traffic
+resumes.
 
-{% hint style="warning" %}
+<Warning>
 **TLS alone is not verification**
 
 Connecting over ordinary TLS gives you a private channel to *some* machine.
@@ -105,14 +126,7 @@ Darknyx clients instead bind the certificate on the connection they use to a
 fresh enclave quote and an independently approved measurement. Disabling
 certificate checks or verifying a separate probe connection defeats that
 guarantee.
-{% endhint %}
-
-{% hint style="warning" %}
-**Browser access is deferred.** The implemented browser prototype currently
-relays sensitive traffic through an ordinary trader host that can read it. It is
-not the supported external-access path and is not launch-qualified. Use the SDK
-or daemon for the programmatic trust model described on this page.
-{% endhint %}
+</Warning>
 
 ## What attestation does not cover
 

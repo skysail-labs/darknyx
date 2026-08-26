@@ -5,14 +5,14 @@ description: "A per-account stream of settlement reservations, confirmed fills, 
 
 # Orders Channel
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 The `orders` channel on `/v1/stream` streams **order-lifecycle events** for your account: each time one
 of your orders is reserved, confirms a fill, fails settlement, cancels, or expires, the
 engine pushes an event. The stream is per-account: you only ever see your own
 orders. Use it instead of polling `GET /orders/{id}`.
-{% endhint %}
+</Info>
 
 ## Connect
 

@@ -5,14 +5,14 @@ description: "Read the on-chain note tree, getting the current root, an inclusio
 
 # Merkle Proofs
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 The note commitments live in an on-chain incremental Merkle tree. These endpoints
 expose the engine's mirror of it: the current **root**, an **inclusion proof** for
 a note you own, and a paginated **leaf** read. You use the inclusion proof to
 generate the zero-knowledge input proof that backs an order or a withdrawal.
-{% endhint %}
+</Info>
 
 ## Why you need these
 
@@ -31,9 +31,7 @@ Reads take an optional `tree_id` (default `0`).
 
 The current Merkle root of a shard. Public.
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/tree/root" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 ### Response
 
@@ -53,13 +51,13 @@ https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-ref
 | `leaf_count` | integer | Number of leaves in this shard. |
 | `on_chain_slot` | integer | Solana slot at which the engine last synced this shard from chain. |
 
-{% hint style="info" %}
+<Info>
 **Cross-check on-chain**
 
 The root is also readable directly from the Solana program. The endpoint is a
 convenience mirror; a client that wants zero trust in the engine for this value
 can read the on-chain account itself.
-{% endhint %}
+</Info>
 
 If the engine detects that a shard mirror disagrees with Solana, **all three
 tree reads for that shard fail closed with HTTP `503`, code `5002`**. Do not
@@ -72,9 +70,7 @@ An inclusion proof for a note commitment. Authenticated (bearer). Complete
 [Transport & Attestation](../getting-started/transport-and-attestation.md)
 before sending the bearer token.
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/tree/inclusion" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 ### Response
 
@@ -99,7 +95,7 @@ the input-proof circuit. You do not assemble the proof by hand. The SDK takes
 the inclusion proof and produces the Groth16 proof you attach to an order or
 withdrawal.
 
-{% hint style="warning" %}
+<Warning>
 **Roots age out**
 
 A proof is generated against a specific root. Each shard accepts its current
@@ -113,7 +109,7 @@ remains authoritative: the mirror is deliberately permissive, and enough new
 appends between acceptance and lock can still age a root out. If that race makes
 settlement terminal, rebuild the proof against a current root and submit a fresh
 signed order after any live lock expires.
-{% endhint %}
+</Warning>
 
 ## GET /tree/leaves
 
@@ -123,9 +119,7 @@ before sending the token. Use it to rebuild a local mirror of the tree from
 scratch (the "scan once, then follow updates" pattern the SDK uses to maintain
 your note store).
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/tree/leaves" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 ### Response
 

@@ -5,7 +5,7 @@ description: "How Darknyx signals failure, covering the HTTP status codes, the c
 
 # Error Codes
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Every error response is a small JSON **envelope**, `{ code, message }`, with a
@@ -13,7 +13,7 @@ mapped HTTP status. `code` is a **stable numeric error code** you can branch on;
 `message` is the human-readable reason. Every response (success and error)
 carries an **`x-request-id`** header for correlating with server logs. Success
 responses are not enveloped; their typed body is returned directly.
-{% endhint %}
+</Info>
 
 ## Error shape
 
@@ -46,7 +46,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 |---|---|---|
 | `1000` | 400 | Generic bad request. |
 | `1001` | 400 | Malformed input: bad hex, wrong width, zero/illegal id, or invalid field combination. |
-| `1002` | — | **Retired.** Rejected a `user_commitment` whose top byte was non-zero — a field that no longer exists, behind a rule that was not Fr-safety (audit 2026-07-25, T-07). Never reused, so a stale reference reads as "gone". Canonicality of the values that ARE hashed is enforced by the opening re-derivation and surfaces as `1006`. |
+| `1002` | — | Reserved; not emitted by the current API. |
 | `1003` | 400 | Collateral below the order's nominal cost + fee. |
 | `1004` | 400 | Order amount below the market minimum. |
 | `1005` | 400 | A bid with a zero price limit. |
@@ -131,18 +131,14 @@ caches its token for the `expires_in` window will not meet these limits.
   `MerkleTree` account and leaves from chain; do not keep retrying the unsafe
   mirror.
 
-{% hint style="success" %}
+<Check>
 **A rejected order is better than an accepted one that cannot settle**
 
 Collateral proofs are verified when the order is submitted, not when it
 settles. An order whose proof is stale or invalid is refused immediately with
 `1010` / `1011` and costs you nothing.
-
-Previously such an order was booked, matched, and only rejected on-chain — at
-which point the whole batch failed, taking an honest counterparty's collateral
-down with it into a locked state neither of you chose. Seeing these codes means
-that no longer happens: rebuild the proof against a current root and resubmit.
-{% endhint %}
+Rebuild the proof against a current root and resubmit.
+</Check>
 
 ## Handling errors
 
@@ -156,10 +152,10 @@ that no longer happens: rebuild the proof against a current root and resubmit.
 | `429` | Back off with jitter; prefer one shared `/v1/stream` session for high-frequency management. |
 | `503` | For `1402`, retry authentication after a short jittered delay. For `5001`, poll `/system/status` and the target instrument. For `5002`, bypass the mirror and read the tree from Solana until the operator resyncs it. |
 
-{% hint style="success" %}
+<Check>
 **Make cancels idempotent in your logic**
 
 A cancel that races a fill returns `404` once the order has matched. Treat
 `404`-on-cancel as success-equivalent ("the order is gone") and reconcile state,
 rather than as a hard error.
-{% endhint %}
+</Check>

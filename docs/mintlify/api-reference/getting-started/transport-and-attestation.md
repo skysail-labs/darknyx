@@ -5,7 +5,7 @@ description: "How HTTPS reaches the confidential VM and how a client verifies th
 
 # Transport & Attestation
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 This page describes the current programmatic path: the Node SDK and reference
@@ -14,7 +14,7 @@ The deployment gateway passes the encrypted TLS stream through without seeing
 the request. Before sending credentials or order intent, the client checks that
 the certificate on its actual connection is bound by a fresh TDX quote to the
 approved engine image, boot session, and settlement-signer set.
-{% endhint %}
+</Info>
 
 ## The trust boundary
 
@@ -39,33 +39,6 @@ What this gives you:
 - **One boundary for REST and streams.** HTTPS and `wss://` use the same
   boot-scoped enclave identity.
 
-{% hint style="warning" %}
-**Pre-release status.** The programmatic RA-TLS path is implemented and has
-completed live devnet settlement tests, but it remains under launch
-qualification. Replacement-connection handling, restart recovery, safe-default
-policy, and GPU deployment parity must all pass their release gates before
-mainnet or external real-value use.
-{% endhint %}
-
-## Browser status
-
-{% hint style="warning" %}
-The browser trader is deferred and is not a supported external-access path.
-Its current prototype talks through an ordinary **trader host**, which can read
-orders, cancellations, and fill streams in plaintext:
-
-```text
-browser ──TLS──► trader host ──verified RA-TLS──► Darknyx CVM
-                (ordinary server)
-                plaintext here
-```
-
-On-device signatures and custody still prevent that host from forging orders or
-extracting the user's seed, but they do not hide order flow from it. Browser
-launch requires a separate design and security review that removes this
-plaintext boundary. Use the SDK or daemon for the trust model documented here.
-{% endhint %}
-
 ## Verifying the engine
 
 The programmatic client establishes trust before authentication. It first
@@ -79,9 +52,7 @@ root of trust.
 Returns a nonce-bound TDX quote whose manifest commits to the TLS SPKI, boot
 session, application identity, and complete settlement-signer set.
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/transport-attestation" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 The certificate is self-signed **by design**. Never work around that with
 `curl -k`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, or a custom client that simply
@@ -92,9 +63,7 @@ SPKI belongs to the approved enclave boot.
 
 Returns the identity of the running image.
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/info" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 ```json
 {
@@ -122,9 +91,7 @@ https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-ref
 
 Returns an Intel TDX attestation quote plus the data needed to verify it.
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/attestation" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 The quote is a hardware-signed measurement of the running VM. A client passing a
 fresh `reportData` nonce gets a quote bound to that nonce (freshness) and to the
@@ -160,14 +127,14 @@ the finalized on-chain comparison and pauses new trading when it becomes stale
 or mismatched. Only after all four checks hold should a client authenticate or
 send order intent.
 
-{% hint style="warning" %}
+<Warning>
 **Pin the measurement, not the host**
 
 The security guarantee comes from the **measurement**, not from the hostname.
 A client that connects over TLS but skips attestation has confidentiality to
 *some* machine; it has not verified that the machine runs the expected engine.
 Pin a release measurement independently, then verify the quote and event log.
-{% endhint %}
+</Warning>
 
 ### Gateway evidence is not the programmatic trust root
 
@@ -194,19 +161,3 @@ client actually uses.
 
 Served by the deployment's ingress rather than by the engine, these expose the
 underlying artifacts so a third party can reproduce the verification independently.
-
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/evidences/quote.json" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
-
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/evidences/cert.pem" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
-
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/evidences/acme-account.json" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
-
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/evidences/sha256sum.txt" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}

@@ -5,13 +5,13 @@ description: "Which combinations of order type, time in force, execution attribu
 
 # Order Compatibility
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Not every combination of type, time-in-force, and execution attribute makes
 sense. This page is the validity matrix; read it before assembling an order
 programmatically.
-{% endhint %}
+</Info>
 
 ## Type × Time in Force
 

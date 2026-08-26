@@ -5,14 +5,14 @@ description: "A per-account stream of consumed-input-bound memos for verifying a
 
 # Fills Channel
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 The `fills` channel on `/v1/stream` streams a **fill memo** for every non-zero
 change output. The memo names the exact consumed input and circuit role, so your
 client derives and verifies the output before storing it. The stream is
 per-account.
-{% endhint %}
+</Info>
 
 ## Why a separate fills stream
 
@@ -108,13 +108,13 @@ and the live stream is simply de-duplicated, so a dropped connection never loses
 fill. If a slow consumer lags past the per-account buffer, the server closes with
 code **1011**; on 1011, re-run the backfill from the chain and reopen.
 
-{% hint style="info" %}
+<Info>
 **Cold recovery**
 
 Recovery v3 permanently stores each side's encrypted `(trade, change)` tuple.
 `recoverNotesFromChain` bootstraps seed-owned deposits, follows settlement
 continuations, and reconstructs merge outputs without live stream history.
-{% endhint %}
+</Info>
 
 ## Example
 

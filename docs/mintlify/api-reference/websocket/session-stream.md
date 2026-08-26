@@ -4,17 +4,17 @@ description: "The sole authenticated WebSocket, with in-band login, order operat
 
 # Session Stream
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `/v1/stream` is the sole multiplexed socket: place, cancel, and modify orders, and receive
 order, fill, and tree-append pushes. You authenticate **in-band** with an
 `op: login` frame (not a `?token=` query param), then subscribe to the channels
 you want.
-{% endhint %}
+</Info>
 
-The legacy `/ws/trading`, `/ws/orders`, and `/ws/fills` routes are removed. The
-[order operations](./ws-trading.md), [orders channel](./orders-channel.md), and
+The [order operations](./ws-trading.md),
+[orders channel](./orders-channel.md), and
 [fills channel](./fills-channel.md) pages document facets of this one session.
 
 ## Connect and log in

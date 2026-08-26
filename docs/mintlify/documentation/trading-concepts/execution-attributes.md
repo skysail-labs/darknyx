@@ -5,14 +5,14 @@ description: "Constrain how an order fills (all-or-none and minimum fill size) i
 
 # Execution Attributes
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Execution attributes constrain *how* an order fills, on top of its type. Darknyx
 supports a **minimum fill size** (reject any execution smaller than a threshold)
 and **all-or-none**, which is the special case where the threshold equals the full
 order amount.
-{% endhint %}
+</Info>
 
 ## Minimum fill size
 

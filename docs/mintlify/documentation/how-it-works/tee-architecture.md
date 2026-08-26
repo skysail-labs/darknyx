@@ -5,7 +5,7 @@ description: "Why Darknyx matches inside an attested Intel TDX confidential VM, 
 
 # Confidential VM Architecture
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx matches hidden orders inside an **Intel TDX confidential VM**. Hardware
@@ -14,7 +14,7 @@ order, while Solana accepts settlement only from the registered signer set and
 only with a valid zero-knowledge proof. This reduces trust in the infrastructure
 operator, but does not erase it: clients still trust the approved measurement,
 Intel TDX, governance, and the matching policy implemented by that measured code.
-{% endhint %}
+</Info>
 
 ## Why matching needs a confidential computer
 
@@ -88,7 +88,7 @@ asset transition. It can still:
 A flaw in the measured application, the hardware, the attestation verifier, or
 the governance process can weaken these properties. Darknyx therefore treats quote
 verification, finalized key refresh, independent circuit review, and split
-multisig control as launch requirements rather than optional operational polish.
+multisig control as core parts of the operating trust model.
 
 ## Why one CVM, not a committee
 

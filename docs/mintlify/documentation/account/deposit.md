@@ -5,7 +5,7 @@ description: "Move SPL tokens into the vault through a proof-gated deposit that 
 
 # Deposit
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 A deposit moves SPL tokens into the Solana vault and appends a new note
@@ -13,7 +13,7 @@ commitment. Before custody changes, the vault verifies a VALID_DEPOSIT proof tha
 the commitment contains the public mint and amount and a valid hidden owner. The
 transaction reveals the funding signer, mint, and gross amount, but not the
 wallet-wide note owner or the note's inner hash.
-{% endhint %}
+</Info>
 
 ## What a deposit does
 
@@ -53,7 +53,7 @@ The configured prover suite generates VALID_DEPOSIT locally. The SDK submits the
 transaction and reads the emitted tree shard and leaf index so the resulting
 note can immediately back an order, merge, or withdrawal.
 
-{% hint style="warning" %}
+<Warning>
 **Fresh deposits and exact retries are separate APIs**
 
 The ordinary SDK deposit call rejection-samples a fresh canonical BN254
@@ -76,7 +76,7 @@ would fire.
 The vault still rejects duplicate commitments. Client-side randomness is a UX
 and recovery safeguard, not a replacement for consensus-enforced deposit-once
 semantics against retries or malformed clients.
-{% endhint %}
+</Warning>
 
 ## Recovery
 

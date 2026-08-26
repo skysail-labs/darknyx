@@ -1,22 +1,20 @@
 ---
 description: "Read the current live status and filled quantity of an order owned by the authenticated account."
+title: "Get Order"
+openapi: "/api-reference/openapi/darknyx-public.yaml GET /orders/{order_id}"
 ---
 
 
-# Get Order
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `GET /orders/{order_id}` returns the current state of one order owned by the
 authenticated API account: its status, filled quantity, and remaining size. For
 live updates without polling, subscribe to the
 [Orders Channel](../websocket/orders-channel.md) instead.
-{% endhint %}
+</Info>
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/orders/{order_id}" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Auth: `Authorization: Bearer <token>`.
 
@@ -85,10 +83,10 @@ An order owned by another account returns the same `404` code and body as an
 unknown id. This prevents callers from probing whether another account has a
 particular order.
 
-{% hint style="info" %}
+<Info>
 **Terminal orders age out**
 
 The book tracks resting and recently-terminal orders. A long-since-filled,
 expired, or cancelled order may no longer be queryable here; recover fill details
 from your seed plus finalized chain (see [Fills Channel](../websocket/fills-channel.md)).
-{% endhint %}
+</Info>

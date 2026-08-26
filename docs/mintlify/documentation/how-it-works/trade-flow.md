@@ -5,7 +5,7 @@ description: "The end-to-end lifecycle of a Darknyx order, from deposit through 
 
 # Trade Flow
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 You deposit funds into the on-chain vault as a private **note**. You submit a
@@ -13,7 +13,7 @@ hidden order, backed by that note, to the enclave. The enclave matches it in a
 batch auction and proves the matches, then settles them on Solana itself, moving
 value between notes against a zero-knowledge proof. Your order never becomes a
 Solana transaction. Only the *result* settles.
-{% endhint %}
+</Info>
 
 ## Order-to-settlement lifecycle
 

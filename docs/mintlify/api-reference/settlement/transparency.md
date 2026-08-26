@@ -1,11 +1,11 @@
 ---
 description: "A public, unauthenticated proof-of-reserves covering per-mint outstanding liabilities versus vault balances, plus the engine's attested identity."
+title: "Transparency"
+openapi: "/api-reference/openapi/darknyx-public.yaml GET /transparency"
 ---
 
 
-# Transparency
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `GET /transparency` is a **public solvency snapshot**: for every mint it reports
@@ -13,7 +13,7 @@ the outstanding note value (the venue's liability) against the actual SPL balanc
 held in the vault (the assets). Treat the endpoint as a convenience view and
 verify the same `OutstandingMint` and vault token accounts directly on Solana
 when making a trust decision.
-{% endhint %}
+</Info>
 
 A dark pool hides individual orders and balances, but solvency should still be
 publicly checkable. Transparency squares that circle: it never reveals who owns
@@ -23,9 +23,7 @@ through a separate fresh attestation.
 
 ## GET /transparency
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/transparency" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Public, with no authentication.
 

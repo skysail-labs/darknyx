@@ -5,7 +5,7 @@ description: "How balances work on Darknyx, as UTXO-style notes you own on-chain
 
 # Account Model
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx has no server-held balance ledger. Your assets are **UTXO-style notes**
@@ -13,7 +13,7 @@ committed on-chain as hashes. Only you, with your spending key, can determine
 which notes are yours and what they are worth. You reconstruct your account state
 **client-side** from the public Merkle tree plus your keys; the engine never sees
 the spending key that would let it do it for you.
-{% endhint %}
+</Info>
 
 ## Why there is no balance in `GET /account`
 
@@ -118,12 +118,30 @@ securely generated **master seed** and its encrypted backup.
   recoverable from the **encrypted ciphertext stored on-chain at settlement**.
   The SDK decrypts the two-amount tuple with your viewing key, derives outputs
   from the consumed opening, and can rebuild deposit/fill/merge chains with
-  `recoverNotesFromChain`. A live recovery drill remains a mainnet gate. See
+  `recoverNotesFromChain`. See
   [Fills Channel](/api-reference/websocket/fills-channel).
 
 The upshot: protect the encrypted seed backup. The engine never becomes your
 custodian; the seed backup + finalized chain are the durable recovery material
 for funds and note openings.
+
+### One seed, separate roles
+
+The 64-byte CSPRNG master seed is the recovery root for the Darknyx keys and
+note openings held by your client:
+
+```text
+64-byte master seed
+  ├── spending key ──► shielded owner commitment
+  ├── indexed trading keys ──► place / cancel / modify signatures
+  ├── X25519 recovery key ──► decrypt settled trade and change amounts
+  └── per-deposit note secret ──► recover the deposit opening
+```
+
+The Solana wallet that signs deposits and withdrawals is separate and is not
+derived from this seed. Shielded ownership is derived directly from the
+spending key, so the encrypted seed backup covers that identity without any
+additional owner secret.
 
 If you run the reference market-maker daemon, also back up its adjacent
 `*.order-sequence` file. Orders that never settle do not appear on-chain, so

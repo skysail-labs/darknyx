@@ -5,12 +5,12 @@ description: "Terms and acronyms used across the Darknyx documentation."
 
 # Glossary
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 A quick reference for the terms that recur across these docs. Most link back to
 the page that explains them in depth.
-{% endhint %}
+</Info>
 
 ### Attestation
 
@@ -64,8 +64,10 @@ Its memory is encrypted and its keys are bound to its measured image. See
 ### Inner hash
 
 A note's amount-independent value that anchors both its commitment and its
-note-use tag. Match outputs derive their inner hash from the consumed input inner,
-so clients can verify and recover continuations without pre-supplied pools. See
+note-use tag. Trade and change outputs inherit private input entropy; merge
+outputs combine private input inners; protocol fee outputs incorporate a
+governed epoch secret. Clients can recover their own descendants without
+making those relationships reconstructible from public chain data. See
 [Shielded Pool](../how-it-works/shielded-pool.md).
 
 ### Merkle tree
@@ -98,6 +100,19 @@ can recognize and value it.
 The deterministic, circuit-derived public handle used when a note is locked or
 consumed: `Hash(note commitment, private inner hash)`. It addresses the shared
 lock/consume PDAs without revealing which Merkle leaf is being used.
+
+### Owner commitment
+
+The hidden, wallet-wide note owner derived from the client's spending key. It
+is part of each note commitment and lets the proof enforce ownership, but it is
+not published by deposit, lock, settlement, merge, or withdrawal.
+
+### Recovery nonce
+
+A fresh public BN254 field element generated for each deposit. Together with
+the master seed it deterministically recovers that deposit's private note
+secret and inner hash. An exact retry reuses the original nonce; a new deposit
+generates a new one.
 
 ### Order id
 

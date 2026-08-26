@@ -5,14 +5,14 @@ description: "Darknyx is a privacy-preserving spot darkpool on Solana, with hidd
 
 # Overview
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx is a **privacy-preserving spot darkpool on Solana**. Hidden orders match
 inside an attested Intel TDX Confidential VM (a "CVM"); custody and proven value
 movement remain on-chain. Solana sees deposits, withdrawals, commitments, and
 proofs, but never the order book or a settled trade's plaintext price and size.
-{% endhint %}
+</Info>
 
 ## What Darknyx is
 
@@ -22,10 +22,9 @@ account. On the supported programmatic path they travel over an
 attestation-bound TLS connection that terminates inside the hardware-isolated
 matching engine, whose exact compiled code and boot-scoped certificate are
 remotely verifiable. The dstack gateway passes that TLS stream through without
-learning the plaintext. Browser access is deferred and does not carry this
-guarantee. See
+learning the plaintext. See
 [Transport & Attestation](/api-reference/getting-started/transport-and-attestation)
-for the verification boundary and current pre-release qualification.
+for the complete verification boundary.
 
 Unlike an off-chain matching desk, Darknyx does not give one ordinary operator both
 custody and readable order flow:

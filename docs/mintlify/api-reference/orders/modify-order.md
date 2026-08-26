@@ -1,10 +1,10 @@
 ---
 description: "Replace a resting order atomically with an in-place cancel-and-replace, leaving no window where you hold neither order."
+title: "Modify Order"
+openapi: "/api-reference/openapi/darknyx-public.yaml PUT /orders/{order_id}"
 ---
 
-# Modify Order
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `PUT /orders/{order_id}` modifies a resting order as an **atomic cancel +
@@ -12,11 +12,9 @@ replace**. The body carries a signed cancel of the old order plus a full,
 independently-signed replacement order. The swap happens under one lock with both
 preconditions checked first, so there is never a moment where you hold neither
 order.
-{% endhint %}
+</Info>
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/orders/{order_id}" method="put" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Auth: `Authorization: Bearer <token>` **and** two signatures (a cancel of the old
 order and a full new order), both from the **same** trading key.

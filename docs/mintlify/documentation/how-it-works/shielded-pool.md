@@ -5,7 +5,7 @@ description: "How balances are held as shielded notes, accumulated in Merkle-tre
 
 # Shielded Pool
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Your balance on Darknyx is a set of **notes**, UTXO-style values committed on-chain
@@ -13,7 +13,7 @@ as Poseidon hashes. Commitments live in Merkle-tree shards. Every use publishes
 an unlinkable, circuit-derived note-use tag and all consumption paths share the
 same tag-keyed replay guard. Zero-knowledge proofs enforce valid state
 transitions without exposing shielded note openings.
-{% endhint %}
+</Info>
 
 ## Notes, not balances
 
@@ -67,10 +67,10 @@ use note ──► publish note-use tag
    try to use it again ──► same consumed-note PDA already exists ──► rejected
 ```
 
-Settlement payload v12 publishes neither input commitments nor any second
-spend identifier.
-Instead, the zero-knowledge circuits derive unlinkable note-use tags from each
-commitment and its private inner hash; lock, settlement, withdrawal, and merge
+Public settlement data contains neither input commitments nor a second spend
+identifier. Instead, the zero-knowledge circuits derive unlinkable note-use
+tags from each commitment and its private inner hash; lock, settlement,
+withdrawal, and merge
 derive their PDAs from those tags. A second attempt collides with the existing
 lock or shared `ConsumedNoteEntry`, while an observer cannot string-match the
 handle to its Merkle leaf. Deposit
@@ -82,11 +82,28 @@ than left to the matcher.
 ## The amount-independent inner hash
 
 Each note's commitment and note-use tag are both anchored on a single
-amount-independent value, the note's **inner hash**. For a match output, the
-settlement circuit derives the new inner as
-`Poseidon3(24, consumed_input_inner, role)`. The matcher can therefore re-lock a
-partial-fill remainder without caller-selected output randomness or a per-fill
-round-trip, while the client can independently reproduce the same opening.
+amount-independent value, the note's **inner hash**. It serves two jobs: it is
+the private entropy that separates a commitment from its later use tag, and it
+lets a client deterministically recover descendant notes.
+
+Different note transitions derive it from the private material available to
+that transition:
+
+| Note kind | What the new inner depends on | Why it matters |
+|---|---|---|
+| Deposit | A fresh public recovery nonce plus a seed-derived per-note secret | The nonce makes recovery possible; the secret prevents public reconstruction. |
+| Trade or change | The consumed input's private inner plus an output role | Exact fills and partial-fill continuations are deterministic and recoverable. |
+| Merge | The active inputs' private inners plus their active-slot pattern | Public input commitments alone cannot identify the merged descendant. |
+| Protocol fee | A protocol-held epoch secret with an on-chain governed binding, the consumed use tag, and a fee role | Plausible fee ranges and public commitments cannot be used as a bounded dictionary to recover the input leaf. |
+
+All four constructions are enforced by their corresponding proof. The matcher
+cannot choose arbitrary output randomness, and an observer cannot derive a
+descendant use tag from public commitments alone.
+
+For user trade and change outputs, the settlement circuit uses the equivalent
+of `Hash(consumed_input_inner, output_role)`. The matcher can therefore re-lock
+a partial-fill remainder without a client round-trip, while the client can
+independently reproduce the same opening.
 
 ## Spending in zero knowledge
 

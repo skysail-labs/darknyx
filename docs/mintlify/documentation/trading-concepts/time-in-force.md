@@ -5,14 +5,14 @@ description: "How long an order stays working (GTC, GTT, IOC, and FOK), expresse
 
 # Time in Force
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Time-in-force on Darknyx is expressed two ways: the **order type** decides whether an
 order may rest (limit rests; IOC and FOK do not), and **`expiry_slot`** decides
 how long a resting order lives. Order expiry is measured in **Solana slots**, not
 wall-clock time.
-{% endhint %}
+</Info>
 
 ## The two controls
 
@@ -72,7 +72,7 @@ rests and never partially fills, but still carries a settlement-safe expiry.
 | IOC | `ioc` | No |
 | FOK | `fok` | No |
 
-{% hint style="info" %}
+<Info>
 **Slots, not timestamps**
 
 Because settlement is on Solana, expiry is anchored to the chain's clock, the
@@ -80,4 +80,4 @@ slot, so it stays consistent with on-chain state. `/time` gives you both the slo
 and the wall-clock instant so you can convert between them. See
 [Order Types](./order-types.md) for how the type controls resting, and
 [Execution Attributes](./execution-attributes.md) for fill-size constraints.
-{% endhint %}
+</Info>

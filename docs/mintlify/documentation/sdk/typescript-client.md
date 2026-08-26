@@ -5,7 +5,7 @@ description: "A worked TypeScript client that authenticates, reads markets, buil
 
 # TypeScript Client
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 A reference client that ties the pieces together: get a bearer token, read
@@ -15,7 +15,7 @@ streams. The Node client first creates one quote-verified RA-TLS transport and
 injects its HTTP and WebSocket adapters everywhere. The SDK owns the
 cryptography (note commitments, the input proof, viewing-key derivation, and
 canonical signing) so your code works in economic terms.
-{% endhint %}
+</Info>
 
 ## What the SDK does for you
 
@@ -184,7 +184,7 @@ const aon = aonPolicy({ amount: 10_000_000n, priceLimit: 150_000_000n });
 // from /tree/inclusion, generate the VALID_INPUT proof, then assemble + sign the
 // wire body (note commitment, proof, viewing key, session, trading signature). The
 // prover is pluggable: `nodeValidInputProver` runs the compiled circuit via
-// snarkjs in Node. The separate browser product/prover remains deferred.
+// snarkjs in Node.
 const order = await proveAndBuildOrder({
   baseUrl: GATEWAY,
   token: client["token"]!,
@@ -213,13 +213,13 @@ const res = await placeOrder(
 console.log("placed", res.order_id, res.status);
 ```
 
-{% hint style="success" %}
+<Check>
 **Already hold a proof?**
 
 If you already have a VALID_INPUT proof (e.g. relayed from elsewhere), skip the
 prover and call `buildOrder({ …, validInput: { proofBytes, merkleRoot } })`
 directly. `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
-{% endhint %}
+</Check>
 
 ## Streaming order and fill events
 
@@ -301,7 +301,7 @@ console.log(markets.map((m) => m.symbol));
 // build + place an order (see above), then watch its lifecycle on the streams.
 ```
 
-{% hint style="success" %}
+<Check>
 **One verified transport, everywhere**
 
 Every helper that can reach the venue requires an injected `fetchImpl`, and
@@ -310,4 +310,4 @@ the pair from the same `createVerifiedTransport` result. Falling back to global
 `fetch`, a stock WebSocket, or an accept-any-certificate switch bypasses the
 property even if another call successfully verified an attestation quote. The
 reference daemon is the complete pin-loading and DCAP-verifier integration.
-{% endhint %}
+</Check>

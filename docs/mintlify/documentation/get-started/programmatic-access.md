@@ -5,7 +5,7 @@ description: "The Darknyx API surface at a glance: the two-layer auth model, the
 
 # Programmatic Access
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Darknyx exposes a **REST + WebSocket API** from the confidential-VM deployment.
@@ -15,7 +15,7 @@ cryptographically owns the order). Market and health reads are public; private
 state and order management are authenticated. The Node SDK and daemon first
 verify the enclave's boot-scoped RA-TLS certificate on the connection they will
 use; only then do they disclose credentials or order intent.
-{% endhint %}
+</Info>
 
 ## The authentication model
 
@@ -139,7 +139,7 @@ endpoint. Do not use `curl -k` or disable Node TLS verification for credentials
 or orders: accepting an arbitrary self-signed certificate removes the RA-TLS
 guarantee.
 
-{% hint style="success" %}
+<Check>
 **Use the SDK**
 
 A raw place-order body is large: it includes a note commitment, a 256-byte
@@ -148,13 +148,7 @@ contributory viewing key, and the current boot session, all of which the **TypeS
 for you from your keys and a deposited note. Hand-building the body is possible
 (the wire contract is documented), but the SDK is the intended path. See
 [SDK → TypeScript Client](../sdk/typescript-client.md).
-{% endhint %}
-
-{% hint style="warning" %}
-The browser trader is currently deferred and is not the supported access path.
-Its prototype relays sensitive traffic through an ordinary trader host, so the
-programmatic trust model above must not be assumed for browser sessions.
-{% endhint %}
+</Check>
 
 ## Rate limits
 

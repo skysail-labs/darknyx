@@ -5,7 +5,7 @@ description: "Submit framed place, cancel, and modify requests on the multiplexe
 
 # Order Operations
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `/v1/stream` is the sole bidirectional WebSocket. Authenticate in-band, stream framed
@@ -13,7 +13,7 @@ description: "Submit framed place, cancel, and modify requests on the multiplexe
 per frame, dispatched to the **same** intake and verification the REST endpoints
 use. The same session carries `orders`, `fills`, and `tree` subscriptions,
 short-lived-token refresh, and **cancel-on-disconnect** for market makers.
-{% endhint %}
+</Info>
 
 ## Connect
 
@@ -37,14 +37,14 @@ engine's self-signed, boot-scoped certificate.
 }
 ```
 
-{% hint style="warning" %}
+<Warning>
 **The order signature is still required**
 
 Authenticating the socket establishes *who is connected*, not *who owns an
 order*. Every `order.place` / `order.cancel` / `order.modify` frame still carries
 the per-order **trading-key signature** (the same one the REST endpoints require).
 An authenticated socket cannot move another key's orders.
-{% endhint %}
+</Warning>
 
 ## Message format
 

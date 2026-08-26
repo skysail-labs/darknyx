@@ -1,11 +1,11 @@
 ---
 description: "Submit a hidden, fully-collateralized order, covering the request body, the cryptographic fields the SDK builds for you, and the response lifecycle."
+title: "Place Order"
+openapi: "/api-reference/openapi/darknyx-public.yaml POST /orders"
 ---
 
 
-# Place Order
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `POST /orders` submits a new order. The body carries the usual economic fields
@@ -15,11 +15,9 @@ input proof, a note opening, a signed contributory viewing key, the current boot
 session, and a trading-key signature over the canonical order intent. The
 opening is pinned indirectly through the signed note commitment. The **SDK builds and signs
 all of this** from your keys and a deposited note.
-{% endhint %}
+</Info>
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/orders" method="post" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Auth: `Authorization: Bearer <token>` **and** a trading-key signature in the body.
 
@@ -135,14 +133,14 @@ Returned with `202 Accepted`.
 | `status` | string | `"accepted"` means the order passed verification and entered the book. |
 | `arrival_slot` | integer | The slot the engine stamped on arrival; frozen for the order's life. |
 
-{% hint style="info" %}
+<Info>
 **Accepted is not filled**
 
 A `202` means the order passed signature and collateral verification and entered
 the book, **not** that it has filled. Track fills via
 [`GET /orders/{order_id}`](./get-order.md) or the
 [Orders Channel](../websocket/orders-channel.md).
-{% endhint %}
+</Info>
 
 ## Order status lifecycle
 
@@ -195,11 +193,11 @@ Because the opening is checked against the *signed* commitment, the secret
 opening fields are cryptographically pinned to your signature without being part
 of the signed canonical body.
 
-{% hint style="info" %}
+<Info>
 **Rate limits are weighted**
 
 Order management is rate-limited per account with a token bucket; cancels are
 cheap, place and modify cost more. A `429` includes a `Retry-After` header. For
 high-frequency management prefer the shared
 [`/v1/stream` session](../websocket/session-stream.md).
-{% endhint %}
+</Info>

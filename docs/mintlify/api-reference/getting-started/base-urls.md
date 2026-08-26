@@ -5,7 +5,7 @@ description: "Where the Darknyx API lives, the common request and response conve
 
 # Base URLs
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Engine REST and WebSocket endpoints are served from the same RA-TLS origin. The
@@ -15,7 +15,7 @@ it. Use the HTTPS origin for engine REST and swap the scheme to `wss://` for the
 shared stream. Static `/evidences/*` files are served separately by dstack
 infrastructure and are supporting artifacts, not proof of the live engine
 socket.
-{% endhint %}
+</Info>
 
 ## The RA-TLS origin
 
@@ -38,12 +38,6 @@ release. The `s` suffix selects TLS passthrough; omitting it reaches a different
 gateway-terminated transport and is not equivalent. Verify the connection
 before authentication as described in
 [Transport & Attestation](./transport-and-attestation.md).
-
-{% hint style="warning" %}
-The browser trader is deferred and not a supported external access path. Its
-ordinary trader host has a different trust boundary and must not be assumed to
-inherit the direct SDK/daemon guarantee described here.
-{% endhint %}
 
 ## Common headers
 
@@ -80,9 +74,7 @@ per status.
 
 ## Health
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/health" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 A liveness probe. Returns `200` with the process uptime when the engine is up.
 Use it for load-balancer health checks; use [`/system/status`](../system/system-status.md)
@@ -91,9 +83,7 @@ settlement wired).
 
 ## Server time
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/time" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 Returns the venue's current Solana slot and wall-clock time. Use it to convert a
 wall-clock "good-till-time" into an `expiry_slot` without running your own RPC,
@@ -111,7 +101,7 @@ and for clock-skew diagnostics.
 | `slot` | integer | The TEE's current view of the Solana slot. |
 | `unix_ms` | integer | Server wall-clock time, milliseconds since the Unix epoch. |
 
-{% hint style="success" %}
+<Check>
 **Order expiry is slot-based**
 
 Darknyx orders expire at a **Solana slot**, not a wall-clock timestamp. To place a
@@ -119,4 +109,4 @@ Darknyx orders expire at a **Solana slot**, not a wall-clock timestamp. To place
 target onto a slot using the current slot as the anchor (Solana targets roughly
 400 ms per slot), and pass that as `expiry_slot`. The SDK does this conversion
 for you. See [Time in Force](/documentation/trading-concepts/time-in-force).
-{% endhint %}
+</Check>

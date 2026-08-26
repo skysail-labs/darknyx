@@ -1,24 +1,22 @@
 ---
 description: "Inspect the per-match jobs and Solana signatures associated with a TEE-local settlement batch handle."
+title: "Settlement Status"
+openapi: "/api-reference/openapi/darknyx-public.yaml GET /settlement/status/{batch_id}"
 ---
 
 
-# Settlement Status
-
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 `GET /settlement/status/{batch_id}` returns every per-match job in a settlement
 batch. A match can be pending, confirmed, rejected, or ambiguous independently
 of its siblings. This is an authenticated operational/debug surface; trader
 clients should treat the orders and fills streams as their primary lifecycle.
-{% endhint %}
+</Info>
 
 ## GET /settlement/status/&#123;batch_id&#125;
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/settlement/status/{batch_id}" method="get" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 `batch_id` is an unsigned integer local to the running engine. It is not an
 on-chain identifier and the order-read response does not promise a batch-id

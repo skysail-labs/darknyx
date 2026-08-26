@@ -21,11 +21,11 @@ on-chain transaction.
 | [Modify Order](modify-order.md) | `PUT /orders/{order_id}` | Atomic cancel + replace. |
 | [Cancel Order](cancel-order.md) | `DELETE /orders/{order_id}` | Signed cancel intent. |
 
-{% hint style="info" %}
+<Info>
 You do not assemble the cryptographic fields by hand. The
 [TypeScript SDK](/documentation/sdk/typescript-client) takes your keys and a
 spendable note and produces a ready-to-sign request.
-{% endhint %}
+</Info>
 
 `GET /orders/{order_id}` is a live reconciliation aid, not permanent history.
 Terminal orders age out and then return `404`. Consume the orders stream for

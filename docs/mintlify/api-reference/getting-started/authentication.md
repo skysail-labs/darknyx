@@ -5,14 +5,14 @@ description: "The two-layer Darknyx auth model, account bearer tokens plus per-o
 
 # Authentication
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Authentication has **two layers**. An **account bearer token** (`POST
 /auth/token`) gates access to the venue. A per-order **Ed25519 trading-key
 signature** proves cryptographic ownership of each order. You need the token to
 talk to the venue and the signature to place, cancel, or modify an order.
-{% endhint %}
+</Info>
 
 ## The credential model
 
@@ -38,17 +38,15 @@ bearer token alone never lets a caller move or cancel another key's orders.
 
 Exchange API credentials for a short-lived bearer token.
 
-{% hint style="warning" %}
+<Warning>
 Send credentials only through the quote-verified transport described in
 [Transport & Attestation](./transport-and-attestation.md). The raw HTTP snippets
 below illustrate the wire shape; they do not replace the SDK's RA-TLS check.
 Never make them work against the engine's self-signed certificate with `curl -k`
 or an accept-any-certificate setting.
-{% endhint %}
+</Warning>
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/auth/token" method="post" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 ### Request
 
@@ -131,9 +129,7 @@ both REST and the WebSocket.
 
 To invalidate a token before it expires:
 
-{% openapi src="https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml" path="/auth/token/revoke" method="post" %}
-https://raw.githubusercontent.com/skysail-labs/darknyx/main/docs/gitbook/api-reference/openapi/darknyx-public.yaml
-{% endopenapi %}
+
 
 with the token in the `Authorization` header. The token is denylisted
 immediately; subsequent requests with it return `401`. A revoked token stays

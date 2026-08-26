@@ -5,14 +5,14 @@ description: "How Darknyx prevents accidental self-matches using note-bound owne
 
 # Self-Trade Prevention
 
-{% hint style="info" %}
+<Info>
 **TL;DR**
 
 Orders backed by notes with the same **owner commitment** never match each other,
 even when they use different trading keys. Trading-key equality is checked as a
 second guard. If your bid and ask cross, the engine skips that self-pair and
 keeps both eligible against other traders.
-{% endhint %}
+</Info>
 
 ## The rule
 
