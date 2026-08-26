@@ -222,11 +222,11 @@ export async function writeFeeDeploymentEnv(
   const validated = await validateFeeKeyring(keyring);
   const active = validated.epochs[validated.epochs.length - 1];
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(
-    path,
-    `DARKNYX_TEE_FEE_EPOCH_KEY=${active.key}\nDARKNYX_TEE_FEE_KEY_EPOCH=${active.epoch}\n`,
-    { encoding: "utf8", mode: 0o600, flag: "wx" },
-  );
+  await writeFile(path, `DARKNYX_TEE_FEE_EPOCH_KEY=${active.key}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
   return { epoch: BigInt(active.epoch), binding: active.binding };
 }
 

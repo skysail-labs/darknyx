@@ -14,6 +14,7 @@ import {
   saveFeeKeyring,
   validateFeeInventory,
   verifyFeeKeyringBackup,
+  writeFeeDeploymentEnv,
   writeFeeInventory,
 } from "../src/index.js";
 import type { RecoveredFeeNote } from "../src/types.js";
@@ -82,6 +83,21 @@ describe("fee epoch key custody", () => {
     await writeFile(path, JSON.stringify(envelope), { mode: 0o600 });
     await expect(loadFeeKeyring(path, PASSPHRASE)).rejects.toThrow(
       /authentication failed/,
+    );
+  });
+
+  it("writes only the secret while finalized governance supplies the epoch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "darknyx-fee-deploy-"));
+    const path = join(directory, "fee.env");
+    const key = bytes(0);
+    key[31] = 7;
+    const keyring = await createFeeKeyring(4n, key);
+
+    await expect(writeFeeDeploymentEnv(path, keyring)).resolves.toMatchObject({
+      epoch: 4n,
+    });
+    expect(await readFile(path, "utf8")).toBe(
+      `DARKNYX_TEE_FEE_EPOCH_KEY=${Buffer.from(key).toString("hex")}\n`,
     );
   });
 });

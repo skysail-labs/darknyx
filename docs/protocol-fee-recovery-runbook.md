@@ -4,6 +4,15 @@ This is the operator procedure for the protocol-owned fee notes created by
 `VALID_MATCH_BATCH`. It is internal operational documentation, not a user
 product flow.
 
+## Threat boundary
+
+A compromised enclave can repeatedly select a colluding market maker even
+though it cannot forge the resulting Solana settlement. Publish and monitor
+per-market-maker execution-quality and selection statistics so persistent
+selection bias is observable, and define the operator compensation policy for
+users harmed by that venue-controlled selection risk. Fee-key recovery does
+not mitigate this matcher-policy failure mode.
+
 The protocol fee opening has two independent secret inputs:
 
 - the governed fee epoch key derives the note inner from the finalized

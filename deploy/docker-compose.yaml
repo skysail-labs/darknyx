@@ -195,6 +195,9 @@ services:
       # Real-market boot adopts the finalized on-chain value exactly; this env
       # value is only a simulator/loadgen default. See crate::config.
       DARKNYX_TEE_FEE_RATE_BPS: ${DARKNYX_TEE_FEE_RATE_BPS}
+      # Protocol-custodied observer secret for the finalized governed epoch.
+      # The epoch itself is read from VaultConfig and is not a deploy-env input.
+      DARKNYX_TEE_FEE_EPOCH_KEY: ${DARKNYX_TEE_FEE_EPOCH_KEY}
       # Simulator/loadgen owner commitment default (32-byte hex). Governed
       # real-market boot adopts the finalized VaultConfig value instead.
       # Empty/unset in simulator/loadgen mode → [0;32] (fee notes still mint +
