@@ -2,7 +2,7 @@
 
 **Created:** 2026-08-25
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-26
 
 **Canonical design:**
 [`remediation-plan.md`](remediation-plan.md)
@@ -10,22 +10,22 @@
 **Phase 0 evidence:**
 [`phase0-report.md`](phase0-report.md)
 
-**Phase 5 checkpoint:**
+**Phase 5/6 assurance report:**
 [`phase5-report.md`](phase5-report.md)
 
 **Frozen formula vectors:**
 [`phase0-vectors.json`](phase0-vectors.json)
 
 **Current phase:** Phase 3 is merged. Phase 4 recovery operations are code
-complete on `privacy/fee-recovery-v2` (PR #207). Phase 5 local, devnet,
-multimatch, merge-then-order, two-epoch rotation/recovery/spend, and RA-TLS
-evidence is recorded. The explicit PA-01/PA-02 observer-negative assertions,
-settlement crash-recovery drill, and final bookkeeping are paused and remain
-mandatory before Phase 5/6 completion. The checkpoint CPU CVM was safely
-drained and stopped.
+complete on `privacy/fee-recovery-v2` (PR #207). Phase 5 local assurance and
+Phase 6 digest-pinned CPU CVM assurance are complete on the stacked release-
+assurance branches: multimatch, merge-then-order, two-epoch rotation/recovery/
+spend, RA-TLS, explicit PA-01/PA-02 observer-negative checks, and all 11
+settlement crash-recovery criteria passed. The completion CVM was safely
+drained and is confirmed stopped.
 
-**Mainnet status:** blocked on mandatory implementation, devnet/CVM evidence,
-independent circuit/privacy review, and Phase-2 ceremony
+**Mainnet status:** blocked on independent circuit/privacy review, Phase-2
+ceremony, and the remaining Phase 7 release gates
 
 This file tracks implementation state. It does not rewrite the threat analysis
 or formulas in the canonical plan. Finding IDs and severity do not change here.
@@ -35,15 +35,15 @@ Move a row only as far as its evidence supports.
 
 ## 1. Status meanings
 
-| Status | Meaning |
-|---|---|
-| `Open` | Current code still has the finding and no completed validation/design decision exists. |
-| `Validated` | The finding was reproduced or its stale-data/reader claim was confirmed; production code is not fixed. |
-| `Design frozen` | The replacement and migration semantics are decided; production code is not fixed. |
-| `Code complete` | Implementation and required local tests are complete, but hosted/external gates remain. |
-| `Hosted validated` | Required devnet/CVM evidence exists, but audit/ceremony or final release gates remain. |
-| `Closed` | Every required code, local, hosted, documentation, audit, and ceremony gate for the row is complete. |
-| `Deferred` | Explicitly outside the current release, with a trigger and review date. |
+| Status             | Meaning                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `Open`             | Current code still has the finding and no completed validation/design decision exists.                 |
+| `Validated`        | The finding was reproduced or its stale-data/reader claim was confirmed; production code is not fixed. |
+| `Design frozen`    | The replacement and migration semantics are decided; production code is not fixed.                     |
+| `Code complete`    | Implementation and required local tests are complete, but hosted/external gates remain.                |
+| `Hosted validated` | Required devnet/CVM evidence exists, but audit/ceremony or final release gates remain.                 |
+| `Closed`           | Every required code, local, hosted, documentation, audit, and ceremony gate for the row is complete.   |
+| `Deferred`         | Explicitly outside the current release, with a trigger and review date.                                |
 
 `Code complete` is never synonymous with `Closed`. Circuit findings stay open
 through generated-artifact parity, SBF verification, CVM evidence, independent
@@ -53,33 +53,33 @@ review, and ceremony.
 
 ## 2. Bird's-eye tracker
 
-| ID | Severity | Status | Phase | Invariant restored | Circuit/wire impact | Next action |
-|---|---|---|---:|---|---|---|
-| PA-01 | High privacy | **Code complete** | 3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Two-epoch finalized recovery/spend passed; add and run the live legacy-dictionary observer-negative assertion, then record crash recovery and final bookkeeping. |
-| PA-02 | High privacy | **Code complete** | 3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable. | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged | Devnet merge and CVM merge-then-order passed; add and run the live retired-inner/tag observer-negative assertion, then record crash recovery and final bookkeeping. |
-| PA-03 | Medium privacy/architecture | **Code complete** | 1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface. | Deletes VALID_WALLET_CREATE and wallet-create wire/API | Retain as code complete pending final external/release assurance. |
-| PA-04 | Low security / High volume cost | **Hosted validated** | 2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety. | Account data layout changes; PDA seeds unchanged | Retain for final release assurance; hosted replay and exact 8-byte layouts passed. |
-| PA-05 | Low security / Medium transient cost | **Code complete** | 2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer. | `NoteLock` layout and SDK/raw offsets change; seeds unchanged | Exercise settlement-created continuation locks in the Phase 5 CVM run. |
-| PA-06 | Medium recoverability | **Hosted validated** | 1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery. | SDK/API change; VALID_DEPOSIT public-input count unchanged | Retain for final release assurance; exact devnet retry is recorded. |
-| PA-07 | Low privacy/complexity | **Code complete** | 3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier. | VALID_SPEND public inputs/instruction/event shrink | Retain pending hosted proof verification and external release assurance. |
-| PA-08 | Design simplification | **Code complete** | 3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent. | All note circuits/formulas change under domain 32 | Retain pending hosted proof verification and external release assurance. |
-| PA-09 | Design/documentation | **Code complete** | 3/4 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner. | VALID_DEPOSIT/formula change under domain 33 | Repeat canonical seed-plus-chain recovery against finalized devnet history in Phase 5. |
-| PA-10 | Low product coherence | **Code complete** | 1 | Active key documentation/code contains the live X25519 recovery key only; unwired BN254 compliance hierarchy is deferred as a fresh future design. | Keystore/SDK/Rust deletion; no live fill wire change | Retain as code complete pending final external/release assurance. |
-| PA-11 | Medium correctness | **Code complete** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment. | Internal newtypes/brands; no wire change; CI registry is authoritative | Retain registry CI and semantic-boundary checks through release assurance. |
-| PA-12 | Medium review/documentation | **Code complete** | 3 | Every descendant note identifies its observer-secret inner input, recovery owner, and constraining circuit accurately. | Documentation/comments changed with formulas | Revalidate public/internal prose after Phase 4 recovery operations. |
+| ID    | Severity                             | Status               | Phase | Invariant restored                                                                                                                                      | Circuit/wire impact                                                             | Next action                                                                                                                                                 |
+| ----- | ------------------------------------ | -------------------- | ----: | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PA-01 | High privacy                         | **Hosted validated** |   3/4 | A fee output cannot reveal its input leaf without the governed epoch key, and the protocol can recover inner plus amount from key plus finalized chain. | MATCH_BATCH/config v2; Tx B +280 B; authorized verifier payer; fee epoch config | Two-epoch finalized recovery/spend, live legacy-dictionary observer-negative settlement, and crash recovery passed; independent review and ceremony remain. |
+| PA-02 | High privacy                         | **Hosted validated** |   3/4 | A merge descendant retains at least one observer-secret input and remains seed-plus-chain recoverable.                                                  | VALID_MERGE K2/K4 formula/domain change; public inputs unchanged                | Live merge-then-order proved the retired public-data tag is not consumed; independent review and ceremony remain.                                           |
+| PA-03 | Medium privacy/architecture          | **Code complete**    |     1 | No unused public wallet-identity edge, account, circuit, VK, or key hierarchy remains in the launch surface.                                            | Deletes VALID_WALLET_CREATE and wallet-create wire/API                          | Retain as code complete pending final external/release assurance.                                                                                           |
+| PA-04 | Low security / High volume cost      | **Hosted validated** |     2 | Exact eternal deposit/consume guards retain only the typed existence bit needed for replay safety.                                                      | Account data layout changes; PDA seeds unchanged                                | Retain for final release assurance; hosted replay and exact 8-byte layouts passed.                                                                          |
+| PA-05 | Low security / Medium transient cost | **Hosted validated** |     2 | Locks retain mint/order/expiry enforcement without duplicated tag or unused signer.                                                                     | `NoteLock` layout and SDK/raw offsets change; seeds unchanged                   | Digest-pinned settlement and crash recovery exercised continuation locks; final external assurance remains.                                                 |
+| PA-06 | Medium recoverability                | **Hosted validated** |     1 | Normal deposits use a canonical random public nonce; explicit nonce exists only for exact retry/test/recovery.                                          | SDK/API change; VALID_DEPOSIT public-input count unchanged                      | Retain for final release assurance; exact devnet retry is recorded.                                                                                         |
+| PA-07 | Low privacy/complexity               | **Hosted validated** |     3 | VALID_SPEND exposes only the shared canonical use tag and no dead nullifier.                                                                            | VALID_SPEND public inputs/instruction/event shrink                              | Fee notes from both epochs were spent with ordinary VALID_SPEND; final external assurance remains.                                                          |
+| PA-08 | Design simplification                | **Hosted validated** |     3 | Owner privacy relies on one high-entropy spend secret, not two same-keystore derivatives presented as independent.                                      | All note circuits/formulas change under domain 32                               | Deposit, spend, merge, match, and recovery paths passed hosted validation; final external assurance remains.                                                |
+| PA-09 | Design/documentation                 | **Hosted validated** |   3/4 | Deposit inner contains the public recovery nonce and private note secret without redundantly repeating owner.                                           | VALID_DEPOSIT/formula change under domain 33                                    | Canonical seed-plus-finalized-chain recovery passed across deposit, trade, change, continuation, and merge; final external assurance remains.               |
+| PA-10 | Low product coherence                | **Code complete**    |     1 | Active key documentation/code contains the live X25519 recovery key only; unwired BN254 compliance hierarchy is deferred as a fresh future design.      | Keystore/SDK/Rust deletion; no live fill wire change                            | Retain as code complete pending final external/release assurance.                                                                                           |
+| PA-11 | Medium correctness                   | **Hosted validated** | 1/2/3 | Commitment and use-tag types cannot be confused internally, and one checked registry owns every domain assignment.                                      | Internal newtypes/brands; no wire change; CI registry is authoritative          | Registry/parity gates and the complete hosted consume lifecycle passed; final external assurance remains.                                                   |
+| PA-12 | Medium review/documentation          | **Code complete**    |     3 | Every descendant note identifies its observer-secret inner input, recovery owner, and constraining circuit accurately.                                  | Documentation/comments changed with formulas                                    | Public/internal prose was revalidated after recovery operations; independent external review remains.                                                       |
 
 ---
 
 ## 3. Phase ledger
 
-| Phase | Branch | Scope | Status | PR/commit | Required evidence before advancing |
-|---:|---|---|---|---|---|
-| 0 | `privacy/coherence-measurements` | PoCs, benchmark, reader inventory, design/domain freeze | **Merged** | PR #202 / `ef111b1b` | Complete; no production behavior changed |
-| 1 | `privacy/remove-wallet-identity` | PA-03/06/10 + clean-build part of PA-11 | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0` | complete; final external/release assurance remains |
-| 2 | `privacy/compact-note-state` | PA-04/05 + commitment/tag internal types | **Merged; CI and non-settlement devnet evidence passed** | PR #204 / `96222ffe` | settlement-created relock evidence remains in the Phase 5 CVM run |
-| 3 | `privacy/note-lineage-v2` | atomic circuit/config/wire flag day | **Merged; local gates passed** | PR #206 / `3e720377` | hosted/external gates remain |
-| 4 | `privacy/fee-recovery-v2` | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending** | PR #207 | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; Phase 5 hosted rotation/recovery/spend evidence exists |
-| 5 | `privacy/release-assurance` | devnet/CVM evidence and operational release assurance | **In progress; checkpoint recorded** | stacked branch `privacy/release-assurance` | principal local/devnet/CVM suites passed and the checkpoint CVM was safely stopped; PA-01/PA-02 observer-negative assertions, crash-recovery drill, and final bookkeeping remain |
+| Phase | Branch                                                               | Scope                                                                                          | Status                                        | PR/commit                              | Required evidence before advancing                                                                                                                                 |
+| ----: | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+|     0 | `privacy/coherence-measurements`                                     | PoCs, benchmark, reader inventory, design/domain freeze                                        | **Merged**                                    | PR #202 / `ef111b1b`                   | Complete; no production behavior changed                                                                                                                           |
+|     1 | `privacy/remove-wallet-identity`                                     | PA-03/06/10 + clean-build part of PA-11                                                        | **Merged; hosted CI and devnet retry passed** | PR #203 / `b11e1fc0`                   | complete; final external/release assurance remains                                                                                                                 |
+|     2 | `privacy/compact-note-state`                                         | PA-04/05 + commitment/tag internal types                                                       | **Merged; hosted validated**                  | PR #204 / `96222ffe`                   | settlement-created relock and crash-recovery evidence passed in Phase 6; final external assurance remains                                                          |
+|     3 | `privacy/note-lineage-v2`                                            | atomic circuit/config/wire flag day                                                            | **Merged; hosted validated**                  | PR #206 / `3e720377`                   | digest-pinned CVM evidence passed; external gates remain                                                                                                           |
+|     4 | `privacy/fee-recovery-v2`                                            | finalized-chain fee collector, epoch-key custody, recovery operations, secret-safe diagnostics | **Code complete; PR #207 pending**            | PR #207                                | focused Rust/TS recovery, tamper, two-epoch, failed-slot, backup, inventory, RPC, and redaction tests pass; Phase 5 hosted rotation/recovery/spend evidence exists |
+|   5/6 | `privacy/release-assurance` + `privacy/release-assurance-completion` | local/devnet assurance, digest-pinned CVM evidence, and operational release assurance          | **Complete; external gates remain**           | PR #208 plus stacked completion branch | PA-01/PA-02 observer-negative assertions, two-epoch recovery/spend, all 11 crash-recovery criteria, final drain, and stopped-state readback passed                 |
 
 Phase 3 must not be split into independently deployable old/new semantics. It
 may contain reviewable commits, but all consume paths, circuits, artifacts,
@@ -101,14 +101,16 @@ config, wire encoders/decoders, and recovery logic land as one flag day.
 - Projected Tx B size: 931 bytes with priority fee, 301 bytes headroom.
 - Phase 3 cryptography, proof binding, Tx B wire, and negative tests are code
   complete. The Phase 4 finalized-chain collector and rotation tooling are code
-  complete; the Phase 5 hosted rotation/recovery drill remains.
+  complete; Phase 5/6 hosted rotation, recovery, observer-negative, and crash
+  evidence passed.
 
 ### PA-02
 
 - Legacy K=2 candidate commitments reconstruct later output use tag exactly.
 - Frozen domain 34 uses private input inners at unchanged Poseidon6 arity.
 - Production K2/K4 circuit, parity, and cold-recovery implementation is code
-  complete; hosted merge evidence remains.
+  complete; digest-pinned merge-then-order and its observer-negative assertion
+  passed.
 
 ### PA-03/04/05/07/11/12
 
@@ -186,8 +188,13 @@ instructions as implementation proceeds.
   and TypeScript fee-recovery ciphertexts match byte-for-byte. Keyring backup,
   monotonic rotation, mode-0600 sealed storage, inventory authentication,
   finalized gTFA request shape, credential redaction, and private-debug
-  redaction tests pass. Hosted recovery/spend evidence is still required before
-  advancing beyond `Code complete`.
+  redaction tests pass. Hosted two-epoch recovery/spend, observer-negative, and
+  settlement crash-recovery evidence subsequently passed in Phase 6.
+- **Phase 6 hosted evidence:** a real settlement at slot `488187637` parsed both
+  fee commitments from Tx D and proved neither belonged to the retired bounded
+  public-input dictionaries. Two governed epochs were reconstructed from
+  finalized history and spent, and the interrupted-settlement drill retired its
+  journal entry without operator intervention.
 
 ### PA-02 — merge lineage
 
@@ -207,6 +214,9 @@ instructions as implementation proceeds.
   public-input counts remain 6/8. Regenerated artifacts, Rust/TS parity,
   malformed/all-dummy rejection, K2/K4 LiteSVM verification, and cold-recovery
   tests pass.
+- **Phase 6 hosted evidence:** the digest-pinned merge-then-order test passed at
+  slot `488190943`; the live assertion reconstructed the retired public-data
+  tag and proved Tx D consumed the distinct private-inner-derived tag.
 
 ### PA-03 / PA-06 / PA-10 — Phase 1 client/identity cleanup
 
@@ -332,9 +342,10 @@ instructions as implementation proceeds.
   `2LiWdGxH9f6TmUxxKJj55sBUdQVYYWhKvqKVpwrowHuGaAne9MmjixkdK29ygjs9SV4QV6ADeV3SG3y4mzxrFCWJ`;
   balance reclaim
   `oqmEV65D4YsKBTosRitNJQm2jY3qfUm4xc7fKq2CwJPFpjixU3D8WLQ6jorjdwoaaL6wqmRvSzRAkjjstihqQFy`.
-- **Remaining hosted evidence:** no CVM was started. A digest-pinned full settle
-  must still prove settlement-created continuation locks use the 72-byte
-  layout; that belongs to the Phase 5 CVM suite and is not implied here.
+- **Hosted evidence:** digest-pinned full settlements and the crash-recovery
+  drill exercised settlement-created continuation locks with the 72-byte
+  layout; one interrupted lock was replayed to the sweeper and retired without
+  operator intervention.
 - **Rollback:** development state is reset; no dual-layout mainnet path is
   required because no mainnet notes exist.
 
@@ -381,23 +392,23 @@ All remain open:
 
 - [x] Phase 1 merged with keystore/deposit recovery evidence.
 - [x] Phase 2 merged with exact replay/lock semantics and measured layouts.
-- [ ] Phase 3 atomic cutover merged with every source/artifact/vector in sync.
+- [x] Phase 3 atomic cutover merged with every source/artifact/vector in sync.
 - [x] Clean reset of every Merkle shard recorded; the CVM post-reset sync floor
-      remains part of the Phase 5 cold boot.
-- [ ] User seed-plus-chain full-lineage recovery drill passed.
-- [ ] Protocol fee key-plus-chain recovery and epoch-rotation drill passed.
-- [ ] Devnet SBF/CU/transaction-size evidence recorded.
-- [ ] CPU CVM settle, multimatch, merge-then-order, recovery, and observer
-  negative checks passed on digest-pinned images.
+      was recorded and used for the Phase 6 cold boots.
+- [x] User seed-plus-chain full-lineage recovery drill passed.
+- [x] Protocol fee key-plus-chain recovery and epoch-rotation drill passed.
+- [x] Devnet SBF/CU/transaction-size evidence recorded.
+- [x] CPU CVM settle, multimatch, merge-then-order, recovery, and observer
+      negative checks passed on digest-pinned images.
 - [ ] Independent circuit/privacy review has no unresolved Critical/High.
 - [ ] Circuit sources frozen after remediation.
 - [ ] Public Phase-2 ceremony and reproducible artifact verification complete.
 - [ ] Mainnet build excludes `devnet-admin`; program hash and all authorities
-  independently verified.
+      independently verified.
 - [ ] Mainnet uses a distinct operations admin; independent attestation checks
-  are rehearsed by both the 3-of-5 operations and 4-of-7 cold quorums.
+      are rehearsed by both the 3-of-5 operations and 4-of-7 cold quorums.
 - [ ] Per-MM execution-quality statistics are public and monitored for repeated
-  selection patterns consistent with a colluding matcher/market maker.
+      selection patterns consistent with a colluding matcher/market maker.
 
 No real-value deposit is permitted while any mandatory gate remains open.
 

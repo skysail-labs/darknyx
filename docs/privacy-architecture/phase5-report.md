@@ -1,11 +1,11 @@
-# Phase 5 release-assurance checkpoint
+# Phase 5/6 release-assurance report
 
-**Recorded:** 2026-08-25
+**Recorded:** 2026-08-25; completed 2026-08-26
 
-**Status:** Paused after the principal local, devnet, and CVM validation. The
-remaining focused checks are intentionally retained as open work in this
-report and the remediation tracker; this checkpoint does not claim release
-closure.
+**Status:** Phase 5 local assurance and Phase 6 hosted CVM assurance are
+complete. This report does not claim mainnet release closure: independent
+privacy/circuit review, the Phase-2 ceremony, and the remaining mainnet gates
+in the remediation tracker are still mandatory.
 
 ## 1. Validated in this phase
 
@@ -39,8 +39,9 @@ closure.
 - App ID: `app_9ca3cded105f16923afb0e3f62537882c14db637`.
 - Compose hash:
   `dda6a19ceecee3b8b262c9c43bf2bf4421bdf00ef07da412468eda34459905cf`.
-- A post-run `phala cvms get app_9ca3cded105f16923afb0e3f62537882c14db637
-  --json` control-plane readback reported that exact app ID and compose hash;
+- A post-run
+  `phala cvms get app_9ca3cded105f16923afb0e3f62537882c14db637 --json`
+  control-plane readback reported that exact app ID and compose hash;
   its deployed compose file named source tag `tee-v3-hardening-91` and pinned
   the exact
   `sha256:af1a31600f6a5cc9bc0de14df4609cdb73e87906ef7805b482d09360ce123422`
@@ -87,6 +88,51 @@ closure.
   reported `in_flight_settlements=0` and `safe_to_stop=true`; the Phala control
   plane then confirmed `status=stopped`, `in_progress=false`, and `gpus=0`.
 
+The focused completion pass then restarted the same digest-pinned CPU image
+only for the remaining evidence and used a fresh reset plus cold boot for each
+leaf-count-sensitive test:
+
+- **PA-01 observer-negative settle:** a real RA-TLS settlement at slot
+  `488187637` passed. Tx D signature:
+  `gCoKARWXCLCMpj6GaRzeniZP2G71M27dMRCtS2BewLzk1mA7sDrEuTVrfdMLbBqUbyQQEQi896pasarxqH1QDZ7`.
+  The test parsed both fee commitments from the finalized settle payload and
+  enumerated the retired bounded public-input fee dictionaries. Neither
+  dictionary contained the actual epoch-keyed fee commitment. The existing
+  wire assertion also confirmed consumed commitments were absent while output
+  commitments were present. Timings were: witness `431 ms`, rapidsnark proof
+  step `3,399 ms`, full proof `3,880 ms`, verification `4,017 ms`, and total
+  settle pipeline `8,673 ms`; no rebroadcast was required.
+- **PA-02 observer-negative merge lineage:** merge-then-order passed at slot
+  `488190943`. Tx D signature:
+  `2UvzsfCRPxqbi4h3XDQ1wHwPniUhkdEtYDYBvsPyHo14pKuke7fJuRLxAejDbNZmj6V4eg92Wbp67KABVfGZbtxv`.
+  The test reconstructed the retired merge inner and use tag from only the
+  public input commitments and bitmap, then proved the later settle consumed
+  the private-inner-derived tag instead. Timings were: witness `468 ms`, proof
+  step `3,257 ms`, full proof `3,743 ms`, verification `981 ms`, and total
+  pipeline `8,519 ms`; one overdue transaction was rebroadcast.
+- **Settlement crash recovery:** all 11 criteria in
+  [`../settlement-recovery-drill.md`](../settlement-recovery-drill.md) passed.
+  The journal was observed live with `in_flight_settlements=1`,
+  `safe_to_stop=false`, and a first durable write of `5,882 us` before the CVM
+  was interrupted. The chain, queried independently through private Helius,
+  remained at shard leaf counts `2/0/0/0`: deposits landed and settlement did
+  not. On restart the non-empty journal classified one entry as
+  `release_expired=1`, with `already_settled=0`, `redrive=0`,
+  `indeterminate=0`, and `needs_operator=false`; the lock sweeper replayed one
+  persisted lock and the entry retired. POST/GET drain returned
+  `safe_to_stop=true`, DELETE reopened trading, and the post-recovery settle
+  succeeded at slot `488195348` with Tx D signature
+  `45QWShwdu1RV5DvqtAWxeuQ1W5MF88wnqCgoSigMxVt2u8ojn183prGiabGdTMyorNW9E2qo9WRjywFsWyjcs1wJ`.
+  That settle measured witness `281 ms`, proof step `3,148 ms`, full proof
+  `3,459 ms`, verification `1,453 ms`, and total pipeline `8,810 ms`.
+  The planned drain recorded two durable writes at `4,788 us` p50 and
+  `6,104 us` p95/max. A final cold restart logged
+  `settle journal: present and empty, nothing in flight` and hydrated all nine
+  leaves across four shards.
+- After the completion pass, drain again reported `safe_to_stop=true`, the
+  deployed record again reported `gpus=0`, and the Phala control plane
+  confirmed the billable CVM was `stopped`.
+
 The measured proof times remain in the expected prod9 CPU range. This run did
 not expose the earlier host-throttling regression.
 
@@ -100,38 +146,20 @@ The hosted rehearsal exposed four operational defects that the branch fixes:
 2. Signer rotation and tree reset consume the generated vault account-layout
    manifest instead of a stale hard-coded account size; all relevant devnet
    helpers require an explicit private RPC endpoint.
-3. CVM deposit setup retries the exact transient expired-blockhash condition
-   by rebuilding the transaction.
+3. CVM deposit and merge setup retry the exact transient expired-blockhash
+   condition by rebuilding the transaction; the merge retry was exercised
+   after the first PA-02 attempt hit `Blockhash not found`.
 4. Finalized-history scanning retries bounded transport/429/5xx failures
    without logging the private RPC URL. The two-epoch spend drill ignores
    historically valid fee notes that belong to deliberately reset trees, and
    the settlement harness supports a pre-populated no-reset tree.
 
-## 3. Intentionally deferred work
-
-Resume these items on this branch before claiming Phase 5/6 completion:
-
-1. **PA-01 observer-negative assertion.** Extend the live settle test to show
-   that enumerating the legacy public-data fee-inner dictionary cannot recover
-   the actual epoch-keyed fee commitment, then run the focused settlement test.
-2. **PA-02 observer-negative assertion.** Extend the live merge test to show
-   that public input commitments plus the active bitmap derive only the retired
-   merge inner/tag, not the actual private-inner-derived descendant, then run
-   the focused merge-then-order test from a fresh reset and cold boot.
-3. **Settlement crash-recovery drill.** Follow
-   [`../settlement-recovery-drill.md`](../settlement-recovery-drill.md)
-   exactly: interrupt from the journal-observed in-flight state, cold restart
-   from the same history floor, verify reconciliation/unlock, rerun settlement,
-   and capture final drain plus journal latency evidence.
-4. **Release bookkeeping.** Fold those results into this report, advance
-   tracker rows only as far as evidence supports, and run the focused tests for
-   the remaining harness changes. The checkpoint CVM is already safely stopped;
-   a later hosted continuation must start it again deliberately.
+## 3. Remaining external release gates
 
 Independent privacy/circuit review, Phase-2 ceremony, mainnet-without-
 `devnet-admin` verification, authority/hash checks, and the post-ceremony CVM
-settlement remain Phase 7 external release gates regardless of the deferred
-focused work above. Mainnet must initialize a distinct `operations_admin`
+settlement remain Phase 7 external release gates. Mainnet must initialize a
+distinct `operations_admin`
 instead of reusing the deployer or cold root/upgrade authority, and rehearse
 both the 3-of-5 operations quorum and 4-of-7 cold quorum with every signer
 independently verifying the TEE attestation. Per-MM execution-quality
