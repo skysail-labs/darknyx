@@ -409,7 +409,7 @@ components:
 
             `/transport-attestation` manifest. It is not part of the separate
 
-            legacy `/attestation` report_data layout.
+            signer-attestation `report_data` layout.
 
             '
         transport_mode:
@@ -707,13 +707,6 @@ components:
             the signed `note_commitment` at intake. Held in enclave memory
 
             only.
-
-
-            A separate, client-asserted `user_commitment` was also required
-
-            until audit 2026-07-25 (T-07 / PF-10); it was read by nothing and
-
-            has been removed from the request and the signed canonical body.
 
             '
         note_inner_hash:
@@ -1590,13 +1583,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-          description: 'RA-TLS transport is not enabled on this instance (legacy
+          description: 'RA-TLS transport is not enabled on this instance, or the dstack
 
-            gateway-terminated deployment), or the dstack socket is
+            quote socket is unreachable. The endpoint reports unavailability
 
-            unreachable. The endpoint reports unavailability rather than
-
-            returning a manifest bound to no served certificate.
+            rather than returning a manifest bound to no served certificate.
 
             '
         '200':
@@ -2842,7 +2833,7 @@ x-websocket:
 
         commitment before accepting it. The input commitment is disclosed only
 
-        to this authenticated per-account recovery stream; the public v11
+        to this authenticated per-account recovery stream; the public v12
 
         settlement consumes an unlinkable note-use tag and does not publish the
 

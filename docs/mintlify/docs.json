@@ -1,10 +1,15 @@
 {
-  "name": "Darknyx Docs",
+  "name": "Darknyx",
   "theme": "maple",
   "colors": {
     "primary": "#D4A017",
     "light": "#F0C040",
     "dark": "#B8860B"
+  },
+  "api": {
+    "playground": {
+      "display": "none"
+    }
   },
   "navigation": {
     "tabs": [

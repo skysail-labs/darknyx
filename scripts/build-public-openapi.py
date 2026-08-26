@@ -19,9 +19,11 @@ Two properties worth stating, because both have a failure mode:
   `$ref`. A purely `$ref`-based walk therefore deletes `BearerAuth` — which 19
   operations declare — and the published reference silently stops saying that
   the API needs a bearer token. They are collected separately below.
-* Public GitBook embeds are reference-only. Every surviving operation receives
-  `x-hideTryItPanel: true` so a browser control cannot send credentials or order
-  data outside the Node RA-TLS verification adapter.
+* The published reference is read-only. Mintlify disables its playground in
+  `docs/mintlify/docs.json`; every surviving operation also retains
+  `x-hideTryItPanel: true` for renderers that honor that extension. A browser
+  control must not send credentials or order data outside the Node RA-TLS
+  verification adapter.
 
 Run via `bash scripts/check-public-openapi.sh` in CI, which regenerates and
 diffs; a drifted checked-in artifact fails the build rather than going stale.
@@ -95,9 +97,10 @@ def main():
     spec["paths"] = kept_paths
 
     # The published reference explains how to call the API through a verified
-    # programmatic transport. A GitBook browser control cannot perform that
+    # programmatic transport. An embedded browser control cannot perform that
     # actual-socket RA-TLS verification, so it must never become an alternate
-    # credential/order path.
+    # credential/order path. Mintlify's effective control lives in docs.json;
+    # retain this extension as defense in depth for other renderers.
     for item in kept_paths.values():
         for key, operation in item.items():
             if key in METHODS:
