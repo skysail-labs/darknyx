@@ -21,12 +21,12 @@ export function requirePrivateRpcUrl(raw) {
   } catch {
     throw new Error("SOLANA_RPC_URL must be a valid absolute URL");
   }
-  const local =
-    parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const local = hostname === "localhost" || hostname === "127.0.0.1";
   if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
     throw new Error("SOLANA_RPC_URL must use HTTPS (except localhost)");
   }
-  if (PUBLIC_SOLANA_RPC_HOSTS.has(parsed.hostname.toLowerCase())) {
+  if (PUBLIC_SOLANA_RPC_HOSTS.has(hostname)) {
     throw new Error("SOLANA_RPC_URL must not use a public Solana RPC endpoint");
   }
 

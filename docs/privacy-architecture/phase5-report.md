@@ -21,6 +21,9 @@ closure.
   at slot `487696533`.
 - VALID_DEPOSIT deposit/withdraw, VALID_MERGE K=2, and event leaf-index devnet
   tests passed against the private Helius endpoint.
+- The no-CVM half ran `devnet-deposit-withdraw` with `RUN_DEVNET_DW=1` and
+  passed. A subsequent `cvm-settle-e2e` run passed against the digest-pinned
+  CVM and covered the settlement half.
 - A clean four-shard foundation was used. The final two-epoch rehearsal reset
   signatures were:
   - tree 0: `5yfQWWNu3kciNwSdQijPWY2wKEqapqxgy6zVJ5QmG1TX2fkgZDKtJe6eZKANQ9Ci4tejN4xY38Vwtw5V2JBpmBpq`
@@ -134,3 +137,4 @@ both the 3-of-5 operations quorum and 4-of-7 cold quorum with every signer
 independently verifying the TEE attestation. Per-MM execution-quality
 statistics must also be published and monitored so repeated selection of a
 colluding market maker is observable rather than hidden inside enclave policy.
+No real-value deposit is permitted while any mandatory gate remains open.

@@ -514,6 +514,7 @@ export class CvmHarness {
   ): Promise<CvmHarness> {
     const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
     const pageSize = 10_000;
+    let onchainCount = 0;
 
     for (let treeId = 0; treeId < harness.numTrees; treeId++) {
       let from = 0;
@@ -550,13 +551,36 @@ export class CvmHarness {
       if (!Buffer.from(replayedRoot).equals(Buffer.from(advertisedRoot))) {
         throw new Error(`tree ${treeId} replay root disagrees with the CVM`);
       }
+
+      const [treePda] = await merkleTreePda(vaultProgramId, treeId);
+      const info = await conn.getAccountInfo(treePda);
+      if (!info) {
+        throw new Error(
+          `MerkleTree shard ${treeId} missing — run devnet-setup`,
+        );
+      }
+      if (info.data.length < 48) {
+        throw new Error(`MerkleTree shard ${treeId} account is truncated`);
+      }
+      const currentRoot = info.data.subarray(16, 48);
+      if (!Buffer.from(replayedRoot).equals(Buffer.from(currentRoot))) {
+        throw new Error(
+          `tree ${treeId} replay root disagrees with on-chain current_root`,
+        );
+      }
+      onchainCount += Number(
+        new DataView(
+          info.data.buffer,
+          info.data.byteOffset + 8,
+          8,
+        ).getBigUint64(0, true),
+      );
     }
 
     const mirroredCount = harness.shadows.reduce(
       (sum, shadow) => sum + shadow.leafCount,
       0,
     );
-    const onchainCount = await harness.leafCount();
     if (mirroredCount !== onchainCount) {
       throw new Error(
         `hydrated ${mirroredCount} leaves but on-chain shards report ${onchainCount}`,

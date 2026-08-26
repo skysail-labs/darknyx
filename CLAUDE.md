@@ -518,6 +518,7 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 >   vice-versa. Switching is an env-only `phala deploy -e` (no rebuild).
 
 ```sh
+set -euo pipefail
 umask 077
 HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
@@ -532,11 +533,22 @@ K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 # documented in docs/protocol-fee-recovery-runbook.md. Both plaintext fragments
 # are removed after success, failure, or interruption.
 cleanup_deploy_secrets() {
-  rm -P .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env 2>/dev/null \
-    || rm -f .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env
+  for file in .devnet/fee-key-deploy.env .devnet/darknyx-deploy.env; do
+    [ -e "$file" ] || continue
+    if command -v shred >/dev/null 2>&1; then
+      shred -u -- "$file"
+    elif rm -P -- "$file" 2>/dev/null; then
+      : # BSD/macOS secure overwrite completed.
+    else
+      echo "warning: secure deletion unavailable; unlinking $file" >&2
+      rm -f -- "$file"
+    fi
+  done
 }
 trap cleanup_deploy_secrets EXIT HUP INT TERM
 source .devnet/fee-key-deploy.env
+test -n "${DARKNYX_TEE_FEE_EPOCH_KEY:-}" \
+  || { echo "fee-key deployment fragment is empty" >&2; exit 1; }
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
 cat > .devnet/darknyx-deploy.env <<EOF

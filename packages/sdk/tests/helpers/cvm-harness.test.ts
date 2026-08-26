@@ -16,16 +16,17 @@ function leaf(value: number): Uint8Array {
   return new Uint8Array(32).fill(value);
 }
 
-function fakeConnection(counts: number[]): Connection {
+function fakeConnection(
+  counts: number[],
+  roots: Uint8Array[] = counts.map(() => new Uint8Array(32)),
+): Connection {
   let call = 0;
   return {
     getAccountInfo: async () => {
-      const data = new Uint8Array(16);
-      new DataView(data.buffer).setBigUint64(
-        8,
-        BigInt(counts[call++ % counts.length]),
-        true,
-      );
+      const index = call++ % counts.length;
+      const data = new Uint8Array(48);
+      new DataView(data.buffer).setBigUint64(8, BigInt(counts[index]), true);
+      data.set(roots[index], 16);
       return { data };
     },
   } as unknown as Connection;
@@ -97,7 +98,7 @@ describe("CvmHarness.createHydrated", () => {
       }),
     );
     const harness = await CvmHarness.createHydrated(
-      fakeConnection([2, 1]),
+      fakeConnection([2, 1], roots),
       new PublicKey(new Uint8Array(32).fill(7)),
       2,
       async (treeId, from) => ({
@@ -148,7 +149,7 @@ describe("CvmHarness.createHydrated", () => {
     await shadow.append(leaf(9));
     await expect(
       CvmHarness.createHydrated(
-        fakeConnection([7]),
+        fakeConnection([7], [await shadow.computeRoot()]),
         new PublicKey(new Uint8Array(32).fill(8)),
         1,
         async () => ({
@@ -157,5 +158,21 @@ describe("CvmHarness.createHydrated", () => {
         }),
       ),
     ).rejects.toThrow("on-chain shards report");
+  });
+
+  it("rejects matching counts with a stale on-chain current root", async () => {
+    const shadow = await MerkleShadow.create();
+    await shadow.append(leaf(9));
+    await expect(
+      CvmHarness.createHydrated(
+        fakeConnection([1], [leaf(10)]),
+        new PublicKey(new Uint8Array(32).fill(8)),
+        1,
+        async () => ({
+          leaves: [{ leafIndex: 0, value: leaf(9) }],
+          merkleRoot: await shadow.computeRoot(),
+        }),
+      ),
+    ).rejects.toThrow("on-chain current_root");
   });
 });
