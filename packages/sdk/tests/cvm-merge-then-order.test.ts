@@ -36,6 +36,7 @@ import {
   Transaction,
   SystemProgram,
   LAMPORTS_PER_SOL,
+  TransactionExpiredBlockheightExceededError,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
@@ -82,6 +83,7 @@ import {
   SYMBOL,
   type Persona,
   type DepositedNote,
+  landedSignatureAfterBlockheightExpiry,
 } from "./helpers/cvm-harness.js";
 import { deriveLegacyMergeInner } from "./helpers/privacy-observer.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
@@ -264,26 +266,49 @@ maybeDescribe(
             ],
           }),
         );
-        const mergeSig = await t.step("merge ix submit", async () =>
-          sendAndConfirmTransaction(
-            conn,
-            new Transaction().add(
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-              await buildMergeInstruction({
-                programId: vaultProgramId,
-                treeId: 0,
-                payer: seller.payer.publicKey,
-                inputUseTags: mergeRes.inputUseTagsBE,
-                outputCommitment: mergeRes.outputCommitmentBE,
-                tokenMint: baseMint,
-                merkleRoot: root,
-                k: 2,
-                proof: mergeRes.proof,
-              }),
-            ),
-            [seller.payer],
-          ),
-        );
+        const mergeIx = await buildMergeInstruction({
+          programId: vaultProgramId,
+          treeId: 0,
+          payer: seller.payer.publicKey,
+          inputUseTags: mergeRes.inputUseTagsBE,
+          outputCommitment: mergeRes.outputCommitmentBE,
+          tokenMint: baseMint,
+          merkleRoot: root,
+          k: 2,
+          proof: mergeRes.proof,
+        });
+        const mergeSig = await t.step("merge ix submit", async () => {
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            try {
+              // Rebuild the transaction so every retry receives a fresh
+              // blockhash and signature rather than resending stale bytes.
+              return await sendAndConfirmTransaction(
+                conn,
+                new Transaction().add(
+                  ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+                  mergeIx,
+                ),
+                [seller.payer],
+              );
+            } catch (error) {
+              const landed = await landedSignatureAfterBlockheightExpiry(
+                conn,
+                error,
+              );
+              if (landed) return landed;
+              const message =
+                error instanceof Error ? error.message : String(error);
+              const retryable =
+                error instanceof TransactionExpiredBlockheightExceededError ||
+                message.includes("Blockhash not found");
+              if (!retryable || attempt === 3) throw error;
+              console.warn(
+                `  · merge blockhash expired before landing; retrying with a fresh transaction (${attempt}/3)`,
+              );
+            }
+          }
+          throw new Error("merge exhausted blockhash retries");
+        });
         const mergedLeaf = Number(
           await readNoteMergedLeafIndex(conn, mergeSig, vaultProgramId),
         );

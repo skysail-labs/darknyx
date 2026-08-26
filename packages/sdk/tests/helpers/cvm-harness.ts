@@ -123,7 +123,7 @@ export async function landedSignatureAfterBlockheightExpiry(
   if (!status) return undefined;
   if (status.err) {
     throw new Error(
-      `expired deposit transaction ${error.signature} landed with an error`,
+      `expired transaction ${error.signature} landed with an error`,
     );
   }
   return error.signature;
