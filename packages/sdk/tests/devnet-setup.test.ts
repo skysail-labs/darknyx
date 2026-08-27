@@ -34,7 +34,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { config as dotenvConfig } from "dotenv";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -81,7 +81,10 @@ const RUN = process.env.RUN_DEVNET_E2E === "1";
 const maybeDescribe = RUN ? describe : describe.skip;
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 
 const L1_RPC_URL =
   process.env.SOLANA_RPC_URL ??
@@ -238,7 +241,7 @@ export interface E2EConfig {
 }
 
 function saveConfig(cfg: E2EConfig) {
-  mkdirSync(resolve(REPO_ROOT, ".devnet"), { recursive: true });
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
 }
 

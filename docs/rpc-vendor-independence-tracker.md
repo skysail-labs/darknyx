@@ -4,8 +4,8 @@
 
 **Last updated:** 2026-08-27
 
-**Current phase:** Phase 0 — architecture and evidence gates frozen; no
-implementation slice has advanced beyond `Open`
+**Current phase:** Phase 1 — local arm64 qualification passed; clean hosted
+Linux amd64 execution remains before any row advances to `Surfpool validated`
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -128,10 +128,10 @@ validated` evidence.
 
 | ID | Priority | Status | Phase | Invariant/deliverable | Wire/circuit/account impact | Cost or fidelity impact | Next action |
 | --- | --- | --- | ---: | --- | --- | --- | --- |
-| SP-01 | P0 | **Design frozen** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | One-time source build; removes moving-main ambiguity | Build and checksum a pinned revision on arm64 and amd64. |
-| SP-02 | P0 | **Open** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Exercise nonempty pagination, same-slot ordering, v0/ALT-loaded addresses, failure filtering, and exact root reconstruction. |
-| SP-03 | P0 | **Open** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Prove `surfnet_writeProgram` or a pinned runbook path with the real `.so`. |
-| SP-04 | P0 | **Open** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Run one proof-backed instruction, ALT warmup, and worst-case settle shape. |
+| SP-01 | P0 | **Validated** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | One-time source build; removes moving-main ambiguity | Run the checksum-pinned Linux amd64 artifact through the hosted qualification workflow. |
+| SP-02 | P0 | **Validated** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Repeat the nonempty RPC and exact K-root checks on the hosted Linux run. |
+| SP-03 | P0 | **Validated** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Repeat canonical install and foundation from a clean hosted checkout. |
+| SP-04 | P0 | **Validated** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Pass the hosted syscall/runtime matrix; full TEE settlement remains Phase 3. |
 | LF-01 | P0 | **Open** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Add pinned start, health, logs, timeout, and teardown orchestration. |
 | LF-02 | P0 | **Open** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Build a fresh deterministic foundation and explicit cleanup. |
 | LF-03 | P0 | **Open** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Encode and inject fresh, stale, future, partial, and malformed `PriceUpdateV2` states against the Surfnet clock. |
@@ -489,4 +489,70 @@ redacted commands, exact results, hashes, signatures, and stable references.
   pending release.
 - Local architecture frozen as Surfpool plus host TEE plus dstack simulator;
   real Phala/devnet retained as a manual release/demo gate.
-- Implementation, CI, and hosted evidence: pending.
+- Phase 0 implementation and documentation checks landed in `8a4395fd`;
+  runtime and hosted evidence intentionally remained pending.
+
+### Phase 1 — Surfpool qualification
+
+Local Apple Silicon evidence, produced on an offline loopback Surfnet:
+
+- Pinned upstream repository `solana-foundation/surfpool` at
+  `d419af7a671fca4f2c9e94621a3f9540b639f6f8`, whose upstream build run is
+  `33089478745`. The upstream toolchain is Rust `1.95.0`; its exact build
+  command and both platform hashes are in `scripts/surfpool/pin.json`. The
+  otherwise mutable Studio UI build input is separately pinned to release
+  `v0.2.0-alpha.0` and SHA-256
+  `84970f226b5e8eabebf75acc266c6db72b9af6c79ffa68e8f5b69351cde85d11`.
+- Apple Silicon archive SHA-256
+  `2441366d0c0bbcccaee324c8f5baf8d3ead063332f4d457f329c5ba00a8fad18`;
+  binary SHA-256
+  `326a07455ba6d097c91b8d646c76f26354e6ddc7580175c58e472807831132ab`.
+  The binary reports `surfpool 1.5.0`; the immutable commit and hash, not that
+  stale version label, identify this pre-release build.
+- The corresponding Linux amd64 archive and binary hashes are pinned as
+  `63a4effa40681d5dca9ffecb95af2815683cc18878e082077670666cc73489c8`
+  and
+  `f2b867eda5d3c056a4650043072fdfcd0c680841174d8fde2fb8de6a301164c1`.
+  Artifact provenance and checksum were verified locally. The hosted job
+  rebuilds the exact source and locked UI input, prints its environment-specific
+  ELF hash, and executes that build; it does not falsely require byte equality
+  with an upstream binary built under a different absolute checkout path.
+- The fingerprinted devnet-admin `vault.so` was installed at canonical program
+  ID `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`, then read back as an
+  executable BPF-upgradeable-loader account. Local SBF SHA-256:
+  `6c555594b2541171e79f27b63f5b3254946c74fbc8708181c203b0278b4a2db0`.
+- `scripts/surfpool/qualify-rpc.mjs` created nine successful transactions and
+  one genuine failed transaction. It proved `status: succeeded`, ascending
+  `(slot, transactionIndex)` ordering, inclusive `slot.gte`, exclusive
+  `slot.gt`, four-page pagination without overlap/gaps, eight transactions in
+  one slot, a valid Ed25519 precompile, and v0 address discovery through an
+  ALT-loaded writable address. The failed transaction remained visible only
+  under `status: any`.
+- A fresh K=2 foundation created real SPL mints, governed vault/market/fee
+  configuration, two Merkle shards, and the static settlement ALT. The
+  proof-backed deposit/lock/release/expiry/withdraw lifecycle passed and
+  generated VALID_DEPOSIT, VALID_INPUT, and VALID_SPEND proofs during the run.
+- The production Rust `SolanaRpcClient` plus `MerkleSync::cold_boot` consumed
+  nonempty native gTFA history and exactly matched both on-chain shard counts
+  and roots: `applied=1`, `total_chain_leaves=1`, `shards=2`.
+- The committed N=16 proof passed the production on-chain verifier in Surfpool:
+  transaction `919` bytes, `96,371` compute units, and a real batch-validity
+  marker account. This is actual Surfpool verifier evidence, not a mocked
+  syscall result.
+- The existing worst-shape LiteSVM settlement sentinel passed at `58,251` CU
+  for six output leaves plus two relocks. The production Tx D compiler sentinel
+  passed at `1,172` bytes with `60` bytes of headroom under Solana's 1,232-byte
+  cap. These two deterministic sentinels complement the Surfpool verifier run;
+  they are not being misreported as a full TEE settlement on Surfpool.
+- No public or paid RPC, persistent keypair, dstack simulator, Phala CVM, or
+  real devnet was used. Generated keys and configuration lived under a
+  temporary/local Surfpool namespace.
+
+Evidence still owed before Phase 1 can advance to `Surfpool validated`:
+
+1. The checksum-pinned Linux amd64 workflow must pass from a clean checkout,
+   including canonical install, nonempty gTFA, Ed25519, ALT/v0, generated
+   proofs, N=16 Groth16 verification, exact K-root recovery, and teardown.
+2. PR review and the normal affected local/CI gates must pass.
+3. The hosted evidence must retain the same boundary: Phase 1 proves local SVM
+   compatibility, not the Phase 3 host-TEE flow or a real Phala CVM.
