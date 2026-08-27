@@ -2,10 +2,10 @@
 
 **Created:** 2026-08-27
 
-**Last updated:** 2026-08-27
+**Last updated:** 2026-08-28
 
-**Current phase:** Phase 1 — local arm64 qualification passed; clean hosted
-Linux amd64 execution remains before any row advances to `Surfpool validated`
+**Current phase:** Phase 1 is `Surfpool validated` on local Apple Silicon and a
+clean hosted Linux amd64 runner. PR review/merge remains before Phase 2 starts.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -128,10 +128,10 @@ validated` evidence.
 
 | ID | Priority | Status | Phase | Invariant/deliverable | Wire/circuit/account impact | Cost or fidelity impact | Next action |
 | --- | --- | --- | ---: | --- | --- | --- | --- |
-| SP-01 | P0 | **Validated** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | One-time source build; removes moving-main ambiguity | Run the checksum-pinned Linux amd64 artifact through the hosted qualification workflow. |
-| SP-02 | P0 | **Validated** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Repeat the nonempty RPC and exact K-root checks on the hosted Linux run. |
-| SP-03 | P0 | **Validated** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Repeat canonical install and foundation from a clean hosted checkout. |
-| SP-04 | P0 | **Validated** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Pass the hosted syscall/runtime matrix; full TEE settlement remains Phase 3. |
+| SP-01 | P0 | **Surfpool validated** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | Cached source build; removes moving-main ambiguity | Retain the exact pin until a released build containing gTFA passes the same matrix. |
+| SP-02 | P0 | **Surfpool validated** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Carry the proven nonempty history/root contract into the Phase 3 host-TEE restart test. |
+| SP-03 | P0 | **Surfpool validated** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Reuse the qualified installer in Phase 2's repeatable isolated foundation. |
+| SP-04 | P0 | **Surfpool validated** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Full host-TEE settlement remains Phase 3; do not report this row as CVM evidence. |
 | LF-01 | P0 | **Open** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Add pinned start, health, logs, timeout, and teardown orchestration. |
 | LF-02 | P0 | **Open** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Build a fresh deterministic foundation and explicit cleanup. |
 | LF-03 | P0 | **Open** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Encode and inject fresh, stale, future, partial, and malformed `PriceUpdateV2` states against the Surfnet clock. |
@@ -548,11 +548,26 @@ Local Apple Silicon evidence, produced on an offline loopback Surfnet:
   real devnet was used. Generated keys and configuration lived under a
   temporary/local Surfpool namespace.
 
-Evidence still owed before Phase 1 can advance to `Surfpool validated`:
+Hosted Linux amd64 evidence:
 
-1. The checksum-pinned Linux amd64 workflow must pass from a clean checkout,
-   including canonical install, nonempty gTFA, Ed25519, ALT/v0, generated
-   proofs, N=16 Groth16 verification, exact K-root recovery, and teardown.
-2. PR review and the normal affected local/CI gates must pass.
-3. The hosted evidence must retain the same boundary: Phase 1 proves local SVM
-   compatibility, not the Phase 3 host-TEE flow or a real Phala CVM.
+- Workflow run
+  [`33123121262`](https://github.com/skysail-labs/darknyx/actions/runs/33123121262)
+  passed from a clean Ubuntu 22.04 checkout. It built the exact pinned source,
+  installed the canonical vault, exercised nonempty gTFA, Ed25519, ALT/v0,
+  generated VALID_DEPOSIT/VALID_INPUT/VALID_SPEND proofs, verified the committed
+  N=16 proof on-chain, reconstructed exact K=2 roots, ran the CU/wire sentinels,
+  and proved the localhost RPC closed during teardown.
+- The ordinary affected CI matrix passed in run
+  [`33123121293`](https://github.com/skysail-labs/darknyx/actions/runs/33123121293):
+  circuits, Rust, SBF, SDK, TEE, TypeScript, Vault ZK/LiteSVM, dependencies,
+  consistency, and aggregate `pr-checks success` were green.
+- Source, SBF, circom, and generated circuit artefacts are cached against their
+  complete immutable/source input fingerprints. Proof artefacts are required
+  before the lifecycle step, so a clean runner cannot turn missing WASM into a
+  skipped green test.
+
+Evidence still owed before Phase 2 starts:
+
+1. Review and merge PR #213.
+2. Preserve the evidence boundary: Phase 1 proves local SVM compatibility, not
+   the Phase 3 host-TEE flow or a real Phala CVM.
