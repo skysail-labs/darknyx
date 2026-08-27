@@ -45,6 +45,12 @@ creates ephemeral `.surfpool/qualification/` keys and state, runs every check,
 and tears down the process with an `always()` step. No provider credential,
 persistent Solana keypair, external RPC, or artifact upload is used.
 
+CI caches the nested Surfpool release target by the complete `pin.json` hash,
+so changing the upstream commit, toolchain, feature command, or Studio input
+invalidates it. The vault SBF step deliberately reuses the same source-hashed
+cache contract as `pr-checks`; neither cache can turn a changed input into a
+stale qualification binary.
+
 For a local Apple Silicon run, download the `surfpool-darwin-arm64` artifact
 from the build run recorded in `pin.json`, verify both recorded checksums, and
 follow the same workflow commands. Keep generated material under `.surfpool/`;
