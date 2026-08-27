@@ -50,8 +50,11 @@ so changing the upstream commit, toolchain, feature command, or Studio input
 invalidates it. The workflow saves that cache immediately after a successful
 source compile, rather than discarding the build if a later qualification
 assertion fails. The vault SBF step deliberately reuses the same source-hashed
-cache contract as `pr-checks`; neither cache can turn a changed input into a
-stale qualification binary.
+cache contract as `pr-checks`. The generated proof lifecycle similarly restores
+the exact circuit-artifact cache keyed by every Circom source, committed zkey,
+compiler version, build script, and JavaScript lockfile; a miss rebuilds and is
+saved before protocol tests begin. Neither cache can turn a changed input into
+a stale qualification binary or proof artefact.
 
 For a local Apple Silicon run, download the `surfpool-darwin-arm64` artifact
 from the build run recorded in `pin.json`, verify both recorded checksums, and

@@ -26,11 +26,11 @@ env:
   CARGO_INCREMENTAL: 0
   SURFPOOL_RPC_URL: http://127.0.0.1:18899
   SOLANA_RPC_URL: http://127.0.0.1:18899
-  DARKNYX_E2E_CONFIG_PATH: .surfpool/qualification/e2e-config.json
-  ADMIN_KEYPAIR: .surfpool/qualification/keypairs/admin.json
-  TEE_AUTHORITY_KEYPAIR: .surfpool/qualification/keypairs/tee_authority.json
-  TEE_AUTHORITY_1_KEYPAIR: .surfpool/qualification/keypairs/tee_authority_1.json
-  ROOT_KEY_KEYPAIR: .surfpool/qualification/keypairs/root_key.json
+  DARKNYX_E2E_CONFIG_PATH: ${{ github.workspace }}/.surfpool/qualification/e2e-config.json
+  ADMIN_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/admin.json
+  TEE_AUTHORITY_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/tee_authority.json
+  TEE_AUTHORITY_1_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/tee_authority_1.json
+  ROOT_KEY_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/root_key.json
   DARKNYX_NUM_TREES: '2'
   DARKNYX_TEE_FEE_EPOCH_KEY: '0008080808080808080808080808080808080808080808080808080808080808'
   RUN_SURFPOOL_QUALIFICATION: '1'
@@ -55,6 +55,47 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
+
+      - name: Restore source-hashed circuit artefacts
+        id: cache-circuit-build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: circuits/build
+          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
+
+      - name: Restore circom 2.2.2
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        id: cache-circom
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/circom
+          key: circom-${{ runner.os }}-v2.2.2
+
+      - name: Install circom 2.2.2
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true' && steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v2.2.2 \
+            https://github.com/iden3/circom.git /tmp/circom
+          cargo install --path /tmp/circom/circom --locked
+
+      - name: Build circuit WASM on cache miss
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        run: bash scripts/ci-build-circuits.sh
+
+      - name: Save source-hashed circuit artefacts
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: circuits/build
+          key: ${{ steps.cache-circuit-build.outputs.cache-primary-key }}
+
+      - name: Require proof-generation artefacts
+        run: |
+          set -euo pipefail
+          for name in valid_deposit valid_input valid_spend; do
+            test -f "circuits/build/$name/circuit_js/circuit.wasm"
+            test -f "circuits/build/$name/circuit_final.zkey"
+          done
 
       - name: Install Surfpool Linux build dependencies
         run: |
