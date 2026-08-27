@@ -45,7 +45,9 @@ const d = ready ? describe : describe.skip;
 
 async function loadKeypair(path: string): Promise<Keypair> {
   return await Keypair.fromSecretKey(
-    Uint8Array.from(JSON.parse(readFileSync(path, "utf8")) as number[]),
+    Uint8Array.from(
+      JSON.parse(readFileSync(resolve(REPO_ROOT, path), "utf8")) as number[],
+    ),
   );
 }
 

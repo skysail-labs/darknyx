@@ -47,7 +47,9 @@ persistent Solana keypair, external RPC, or artifact upload is used.
 
 CI caches the nested Surfpool release target by the complete `pin.json` hash,
 so changing the upstream commit, toolchain, feature command, or Studio input
-invalidates it. The vault SBF step deliberately reuses the same source-hashed
+invalidates it. The workflow saves that cache immediately after a successful
+source compile, rather than discarding the build if a later qualification
+assertion fails. The vault SBF step deliberately reuses the same source-hashed
 cache contract as `pr-checks`; neither cache can turn a changed input into a
 stale qualification binary.
 

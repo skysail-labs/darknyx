@@ -76,8 +76,9 @@ jobs:
       - name: Put Solana CLI on PATH
         run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
-      - name: Cache pinned Surfpool release build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Restore pinned Surfpool release build
+        id: cache-surfpool
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .surfpool/source/target
           key: surfpool-source-${{ runner.os }}-rust-1.95.0-${{ hashFiles('scripts/surfpool/pin.json') }}
@@ -115,6 +116,13 @@ jobs:
           version=$(.surfpool/bin/surfpool --version)
           echo "$version"
           test "$version" = "$(jq -r .reportedVersion scripts/surfpool/pin.json)"
+
+      - name: Save pinned Surfpool release build
+        if: steps.cache-surfpool.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/source/target
+          key: ${{ steps.cache-surfpool.outputs.cache-primary-key }}
 
       - name: Reuse the fingerprinted vault SBF cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
