@@ -7,7 +7,7 @@
 > [`cvm-run-runbook.md`](cvm-run-runbook.md) and
 > [`gpu-tee-runbook.md`](gpu-tee-runbook.md).
 >
-> **Last reviewed:** 2026-07-26.
+> **Last reviewed:** 2026-08-28.
 
 ## 0. Locked decisions
 

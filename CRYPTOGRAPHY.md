@@ -19,7 +19,7 @@
 4. [The key model](#4-the-key-model)
 5. [The note system](#5-the-note-system)
 6. [The incremental Merkle tree](#6-the-incremental-merkle-tree)
-7. [The six ZK circuits](#7-the-zk-circuits)
+7. [The ZK circuits](#7-the-zk-circuits)
 8. [Lifecycle walkthrough — wallet to withdraw](#8-lifecycle-walkthrough)
 9. [Settlement mechanics — what fits in a Solana tx and why](#9-settlement-mechanics)
 10. [Solvency invariant](#10-solvency-invariant)
@@ -62,7 +62,8 @@ The on-chain trust surface is tightened so the TEE can deny liveness but
   `MarketConfig`; the commitments are hashed into one batch Merkle root. It
   writes ONE `BatchValidityMarker` (keyed by that root);
   each `tee_forced_settle_batched` walks a depth-4 inclusion path against it;
-  `close_batch_validity_marker` reclaims the marker's rent after the batch.
+  `close_batch_validity_marker` reclaims the marker's rent only at or after its
+  on-chain-derived expiry.
   Closes "TEE misroutes a leg / mis-mints / inflates value." It does **not**
   prove execution-price fairness — the clearing price is bound only to
   `quote = floor(base·price/price_scale)` (definitional), with no limit or
@@ -109,7 +110,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 | TEE writes garbage on-chain fill-recovery ciphertext (U-04) | **TEE-trusted** — `MatchResultPayload.fill_recovery` is opaque and signed but never validated on-chain; the AEAD protects confidentiality, not correctness. A compromised TEE could sign a conserved settle whose recovery blob is unusable, stranding a client that relies solely on chain recovery. Redundancy: the live `/v1/stream` fills channel + history backfill (chain recovery is last-resort). |
 | TEE re-locks a note against an order the user never placed (S-08) | **TEE-trusted — and the boundary is WIDER than "bounded by the order size".** A `VALID_INPUT` proof binds only `(merkle_root, note_use_tag, token_mint)`; `order_id` and `expiry_slot` are unconstrained `lock_note` arguments carried alongside it. So a proof authorises **the note, not the order**, for as long as its root stays in the shard's 64-root window. An authorised-but-compromised TEE key can retain a relayed proof and re-lock that note against an arbitrary `order_id` — including one the user believes they cancelled. U-02 closed the *consumed*-note case (a settled or withdrawn note can no longer be re-locked); this is the *unconsumed* case, which U-02 does not cover. Practical bound is therefore the **note** size, not the order size. Intake verification (S-02) does not change this: the adversary here is the enclave itself. Binding `order_id` in-circuit would fix it but forces the client to prove **per order** rather than per note, and client-side proving is already the placement-latency bottleneck — deliberately declined; see the 2026-07-25 tracker. |
 | TEE-binary substitution | **Client-enforced, governance-trusted on-chain** — clients verify the TDX quote, replay RTMR3, pin the compose hash/MRTD, and require the quoted K signer set to equal finalized `VaultConfig.tee_pubkeys`. The chain does not verify DCAP itself; multisig-gated rotation remains the accepted on-chain trust boundary. |
-| Trusted-setup ceremony soundness | **Open** — all six Groth16 circuit families use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
+| Trusted-setup ceremony soundness | **Open** — all five Groth16 circuit families (eight compiled instances) use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **Substantially hidden** — settlement publishes commitments and opaque recovery ciphertext, not plaintext trade amounts or clearing prices. Timing, participant activity at deposit/withdraw boundaries, and transaction/account metadata remain observable. |
 | Network-level traffic analysis | **Not mitigated.** TLS hides payload contents; bearer auth gates access and does nothing for this threat. Neither conceals request timing, size, frequency, or the peer relationship — all of which remain observable to anyone on the path. See the transport row below for where TLS actually terminates. |
 | Order intent in transit (T-03) | **Programmatic path: in-enclave RA-TLS, with lifecycle hardening still open.** `darknyx-tee` generates a boot-random, memory-only TLS key and serves TLS 1.3 on `:8443`; dstack's `-8443s` route passes that TLS stream through without terminating it. A separate nonce-bound transport quote commits to the served certificate SPKI, boot session, measured deployment and full ordered signer set. The CPU production compose does not publish plaintext `:8080`. The daemon/SDK verify the certificate on the connection they use and gate the WebSocket upgrade before sending frames. After bootstrap, the connector refuses a replacement socket whose SPKI differs from the quote-bound boot key before application bytes can leave (audit_9 TR-02, code complete pending merge). TR-05 still tracks supervised recovery after a genuine boot rotation. **Deferred surfaces:** the ordinary `trader-host` still sees browser order and stream plaintext, and GPU transport parity awaits confidential-GPU access. Neither is launch-qualified. See `docs/transport-integrity-remediation-plan.md` and `audits/residual-backlog.md`. Network timing and volume remain observable on every path. |
@@ -263,7 +264,7 @@ for this reason rather than because leaves changed (they did not).
 | **HKDF-SHA256** | Spending key, root Ed25519 seed, trading-key offset derivation | RFC 5869 standard. 512-bit output → mod-p for BN254 keys, 256-bit output → Ed25519 seed. |
 | **DarknyxShakeKdfV1** | Viewing key + per-note secret | Versioned Darknyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
 | **Ed25519** | TEE signature on match payload, trading-key signatures | Solana-native (built-in precompile for verification). |
-| **Groth16** (BN254, snarkjs / `groth16-solana`) | All six circuit families (nine compiled instances) | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
+| **Groth16** (BN254, snarkjs / `groth16-solana`) | Five circuit families (eight compiled instances) | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
 
 ### Field-element representations
 
@@ -353,6 +354,11 @@ wallet-wide shielded owner identity is no longer exposed or clustered there.
 The retired `r_owner` was derived from and stored with the same master seed, so
 it was not an independent compromise barrier. Domain 32 makes the simpler
 single-secret security boundary explicit.
+
+No wallet-registration PDA or wallet-create circuit remains. The owner
+commitment is validated privately inside the active note circuits; publishing
+it beside a Solana signer would create a permanent identity edge without
+granting any authority the protocol uses.
 
 ### Parity testing
 
@@ -461,7 +467,7 @@ code makes sense.
 | `note_fee_base` | base | this match's base-side fee | protocol's `owner_commitment` | per match, fee-on | **Protocol fee (base)** |
 
 Plus the two input notes **consumed** at settle (the leaf is permanent;
-their commitments are marked in `ConsumedNoteEntry` PDAs): `note_a` (buyer's
+their unlinkable use tags key `ConsumedNoteEntry` PDAs): `note_a` (buyer's
 input) + `note_b` (seller's input).
 
 **Per-side conservation law**:
@@ -498,7 +504,7 @@ note_f.inner = Poseidon3(24, note_b.inner, CHANGE_ROLE_SELLER)
 
 The matcher rotates the residual to that derived commitment in enclave memory.
 On-chain, `tee_forced_settle_batched` creates a fresh `NoteLock` PDA
-   (`create_relock_pda`) seeded by the change note's commitment, bound to the
+   (`create_relock_pda`) seeded by the change note's use tag, bound to the
    same order_id, atomically with the settle — so the residual is pinned and
    continues into the next batch.
 
@@ -687,8 +693,9 @@ The depth is enforced consistently in:
 
 ## 7. The ZK circuits
 
-Five custody/trade-path Groth16 circuits ship, plus the auxiliary
-`VALID_MERGE(K)` consolidation circuit (§7.5). The matching/settlement validity proof,
+Five Groth16 circuit families compile into eight instances: `VALID_DEPOSIT`,
+`VALID_SPEND`, `VALID_INPUT`, `VALID_MERGE` at K=2/K=4, and
+`VALID_MATCH_BATCH` at N=2/N=4/N=16. The matching/settlement validity proof,
 `VALID_MATCH_BATCH`, proves **output-note construction + per-leg conservation
 + no-inflation range checks + the exact governed fee** for an entire batch (≤ N=16
 matches) in one proof — it is what earlier designs split across separate
@@ -940,12 +947,13 @@ Public inputs (2) — declaration order is load-bearing (matches the on-chain
 - `merkle_root` — the depth-`log2(N)` Poseidon Merkle root over the
   per-slot leaves. The on-chain `verify_match_batch` uses this as the
   PDA seed for `BatchValidityMarker` at `[b"batch_validity", merkle_root]`.
-- `config_digest` — `Poseidon8(DOMAIN_MATCH_CONFIG=28, fee_rate_bps,
+- `config_digest` — `Poseidon10(DOMAIN_MATCH_CONFIG_V2=37, fee_rate_bps,
   protocol_owner_commitment, base_mint_lo, base_mint_hi, quote_mint_lo,
-  quote_mint_hi, price_scale)`. The preimage fields remain private circuit
-  inputs and drive every slot. The vault recomputes the digest from the
-  authoritative `VaultConfig` + `MarketConfig`; it is never accepted from the
-  prover or cached across those independently updated accounts.
+  quote_mint_hi, price_scale, fee_key_binding, fee_key_epoch)`. The preimage
+  fields remain private circuit inputs and drive every slot. The vault
+  recomputes the digest from the authoritative `VaultConfig` + `MarketConfig`;
+  it is never accepted from the prover or cached across those independently
+  updated accounts.
 
 Leaf-hash construction. **Amount privacy remains:** the leaf hashes no plaintext
 amount/mint/price. Input commitments are replaced by circuit-derived note-use
@@ -1349,15 +1357,19 @@ it writes one marker:
 
 ```rust
 vault::verify_match_batch(
-    merkle_root:  [u8; 32],     // Poseidon Merkle root over per-slot leaves
-    proof:        Groth16Proof, // VALID_MATCH_BATCH at N=16
+    merkle_root:             [u8; 32],     // Poseidon root over per-slot leaves
+    proof:                   Groth16Proof, // VALID_MATCH_BATCH at N=16
+    fee_key_epoch:           u64,          // must equal governed epoch
+    fee_recovery_ciphertext: [u8; 272],    // authenticated off-chain recovery
 )
 ```
 
 Accounts:
-- `payer` (signer — anyone can pay; auth is the proof)
+- `payer` (signer — must be an authorized TEE key; authenticates the encrypted
+  fee-recovery record)
 - `vault_config` (**ro** — source of the authoritative `fee_rate_bps` +
-  `protocol_owner_commitment` config-digest preimage)
+  `protocol_owner_commitment` + `fee_key_binding` + `fee_key_epoch`
+  config-digest preimage)
 - `market_config` (**ro** — enabled mint pair + nonzero `price_scale`
   config-digest preimage)
 - `marker` (PDA at `[b"batch_validity", merkle_root]`, **init**)
@@ -1367,9 +1379,11 @@ Handler:
 1. Derive `expiry_slot = clock.slot + 300`. It is not caller-controlled; this
    prevents a third party from front-running a valid proof with a one-slot
    marker that strands the already-landed locks.
-2. Read `fee_rate_bps` + `protocol_owner_commitment` from `vault_config`, require
-   the supplied market enabled with a nonzero scale, recompute
-   `Poseidon8(28, fee, owner, base_lo, base_hi, quote_lo, quote_hi, scale)`, and
+2. Read fee rate, protocol owner, fee-key binding, and fee-key epoch from
+   `vault_config`; require the caller's epoch to match; require the supplied
+   market enabled with a nonzero scale; recompute
+   `Poseidon10(37, fee, owner, base_lo, base_hi, quote_lo, quote_hi, scale,
+   fee_key_binding, fee_key_epoch)`; and
    verify the Groth16 over `[root, config_digest]` against
    `vk_match_batch_n16` via `verify_groth16_proof::<2>`. Note the asymmetry:
    this is the ONLY settle-path instruction that reads `MarketConfig`, so
@@ -1585,10 +1599,11 @@ payload would be ~1800 bytes total — way over the 1232 cap. By splitting:
 - Tx A (lock): one VALID_INPUT-backed `lock_note` per transaction, with buyer
   and seller transactions sent independently; each remains below 800 B.
 - Tx B (verify): 1 verify_match_batch with the embedded VALID_MATCH_BATCH
-  proof, ~640 B.
+  proof, epoch, and fixed encrypted recovery record; 931 B in the current
+  worst-case regression fixture.
 - Tx D (settle, V0 + stacked ALTs): Ed25519 precompile + tee_forced_settle_batched
-  + the depth-4 inclusion proof, 1173 B in the worst-case v11 regression fixture
-  (59 B of headroom under the 1232-byte cap).
+  + the depth-4 inclusion proof, 1172 B in the current worst-case regression
+  fixture (60 B of headroom under the 1232-byte cap).
 
 See §9 for why the v0/ALT stacking was specifically required.
 
@@ -1819,7 +1834,7 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 | **Tx A — lock** | compute_budget + one lock_note (buyer/seller sent independently) | size-guarded below 800 B | 2N per batch |
 | **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init, encrypted fee recovery) | measured below 982 B | 1 per batch |
 | **Tx C — per-batch ALT** | createLookupTable + chunked extendLookupTable(7 PDAs per match) | amortized | 1 per batch |
-| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1173 B worst case | N per batch |
+| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1172 B worst case | N per batch |
 | **Tx E — close** | compute_budget + close_batch_validity_marker | ~250 B | 1 per batch |
 
 All fit under 1232 B. Atomic dependency is enforced by account-existence
@@ -1958,8 +1973,8 @@ into the ALT (they were inline before) is what keeps the
 **continuation/change-note** settle — where `note_lock_e/f` are non-zero
 so the exact-fill dedup disappears and the tx grows — under the cap. The
 settle tx remains under 1232 for both exact-fill and change-note paths. Payload
-v11 adds the two relock tags and pins the worst-case regression fixture at 1173
-bytes (59 bytes headroom).
+Payload v11 added the two relock tags; the current v12 signed-domain regression
+fixture is 1172 bytes (60 bytes headroom).
 
 Because the per-batch ALT now carries 7 addresses per match (and a
 batch packs up to N=16 matches → well past the ~30-address ceiling a
@@ -2021,7 +2036,7 @@ e2e flows route their settle through it.
 | Test | Legacy tx size | v0 + ALT tx size |
 |---|---|---|
 | devnet-trade-flow (exact fill) | ~1180 | ~1100 |
-| change + relock | n/a | **1173 ✅** (59 B headroom) |
+| change + relock | n/a | **1172 ✅** (60 B headroom) |
 
 All five change-note tests now pass.
 
@@ -2113,19 +2128,17 @@ state transition.
   conservation check this once relied on was removed with the plaintext
   amounts (see §8 step 5).
 
-**What it catches that nothing else does**: a malicious TEE attempting to
-create output notes with a fake mint (one that the protocol doesn't hold
-any SPL for). Without VALID_CREATE, the TEE could (say) write `note_c =
-Poseidon6(USDC, 1e18, ...)` even when the trade was SOL/BASE. The vault
-would have no USDC for the withdraw, but the SPL transfer would fail
-*silently* and the user would never see their tokens.
+**What it catches independently of the settlement proof**: a liability/accounting
+drift for a mint (for example, an implementation bug in deposit or withdrawal).
+`VALID_MATCH_BATCH` now proof-binds the market mints and every output commitment,
+so the historical fake-output-mint attack is rejected at batch verification.
 
 With the outstanding counter, the withdraw rejects at
 `InsufficientOutstanding` *before* attempting the SPL transfer — clean
 error, clear logs.
 
-Even with VALID_CREATE in place (v3), this remains useful as defence-in-
-depth and as a clean error surface for off-by-one accounting bugs.
+The counter remains useful as defence-in-depth and as a clean error surface for
+off-by-one accounting bugs.
 
 ---
 
@@ -2154,12 +2167,13 @@ atomically.
 `ConsumedNoteEntry`. `withdraw` additionally rejects a **live** NoteLock but
 allows an expired one. This handles both directions:
 - Once a note is consumed by `tee_forced_settle` (layer 2 created), the
-  user can no longer withdraw it via `VALID_SPEND` (layer 3 path blocked).
+  user can no longer withdraw it via `VALID_SPEND` (the same layer-2 init
+  collides).
 - While a note is locked for an active order (layer 1 created and unexpired), the user
   can't withdraw it out from under the lock.
 
-The note can only "exit" once — either via settle or via withdraw — and both
-paths burn the same layer-2 commitment guard.
+The note can only "exit" once — via settle, withdraw, or merge — and all three
+paths burn the same layer-2 tag-keyed guard.
 
 ---
 
@@ -2415,9 +2429,12 @@ manual when hosted artifact capacity is unavailable.
 
 ---
 
-*Last updated: 2026-07-26 — current architecture: `vault` (the only on-chain
+*Last updated: 2026-08-28 — current architecture: `vault` (the only on-chain
 program) + the multi-market in-CVM matcher/settler (`crates/darknyx-tee`),
-validated end-to-end on devnet through Phala CPU and H200 CVMs. v2
-`inner_hash` note model, VALID_DEPOSIT privacy, recipient-bound withdrawals,
-proof-verified intake, consumed-input-derived outputs, and canonical order v5.
-The standalone `VALID_CREATE` / `VALID_PRICE` circuits have been removed.*
+validated end-to-end on devnet through Phala CPU and H200 CVMs. The as-built
+privacy model uses commitment-once note leaves, unlinkable tag-keyed use,
+single-secret ownership, private-inner-derived merge/continuation outputs,
+epoch-keyed recoverable fee notes, compact exact replay markers,
+recipient-bound withdrawals, proof-verified intake, and canonical order v5.
+The unused wallet-registration circuit and the standalone `VALID_CREATE` /
+`VALID_PRICE` circuits have been removed.*
