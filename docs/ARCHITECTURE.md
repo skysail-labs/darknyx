@@ -5,7 +5,7 @@
 > [`tee-architecture.md`](tee-architecture.md) for the CVM internals, and
 > [`tee-api-openapi.yaml`](tee-api-openapi.yaml) for the API contract.
 >
-> **Last reviewed:** 2026-07-26.
+> **Last reviewed:** 2026-08-28.
 
 Darknyx is a privacy-preserving, CLOB-style darkpool on Solana. Users keep
 custody through shielded notes and client-generated Groth16 proofs. Hidden
@@ -104,13 +104,20 @@ deposit signer and gross SPL amount remain public; VALID_DEPOSIT hides the
 owner and inner while binding the public mint, amount, commitment, and recovery
 nonce.
 
+There is no on-chain wallet-registration account or wallet-create circuit. The
+owner commitment is useful only as a private note field constrained by the
+active note circuits; publishing a permanent wallet-to-identity edge would add
+linkability without authorizing any current protocol action.
+
 The SDK supports only a securely generated 64-byte CSPRNG master seed. A
 versioned encrypted backup/import format preserves custody across devices;
 wallet-signature-derived seeds are not supported.
 
 Recovery is seed plus chain:
 
-- deposit openings derive from the public recovery nonce;
+- ordinary deposits sample a fresh canonical public recovery nonce; an explicit
+  nonce is accepted only by the separately named exact-retry path;
+- deposit openings derive from that nonce plus a seed-derived note secret;
 - trade and continuation outputs derive from consumed input inners;
 - merge outputs derive from the active private input inners/bitmap;
 - each settlement carries a 128-byte X25519/ChaCha20-Poly1305 recovery
@@ -131,7 +138,9 @@ See [`fills-history-architecture.md`](fills-history-architecture.md).
 - a distinct operations admin and protocol root key;
 - a fixed `[Pubkey; 16]` signer array plus `num_tee_keys`;
 - `num_trees` and the shared empty-subtree roots;
-- the protocol fee owner commitment and fee rate.
+- the protocol fee owner commitment and fee rate;
+- the public binding of the current fee-recovery epoch key and its monotonic
+  governance epoch.
 
 Initialization requires non-default root/signer keys and
 `num_tee_keys == num_trees`. Production governance is intended to split
@@ -144,8 +153,9 @@ Each mint pair has a `MarketConfig` PDA containing:
 - tick size, minimum order size, circuit-breaker band, and enabled flag.
 
 The proof-bound governed digest covers fee rate, protocol owner, both mints,
-and price scale. Tick/minimum/breaker compliance is enforced by the attested
-matcher, not by the circuit. A disabled market cannot verify new batches.
+price scale, fee-key binding, and fee-key epoch. Tick/minimum/breaker compliance
+is enforced by the attested matcher, not by the circuit. A disabled market
+cannot verify new batches.
 
 ### Sharded Merkle state
 
@@ -178,6 +188,9 @@ root.
 The strict deposit-once marker is commitment-keyed. The shared consume-once
 marker is note-use-tag-keyed, so withdrawal, merge, and settlement collide in
 one replay namespace without republishing the Merkle-leaf commitment.
+Both permanent replay markers are discriminator-only 8-byte accounts. A live
+`NoteLock` is 72 bytes and stores only mint, order ID, expiry, bump, and explicit
+alignment padding; its tag is already present in the PDA seed.
 
 ## Circuit boundaries
 
@@ -256,7 +269,8 @@ mixes markets even when one CVM serves several.
 
 ```text
 Tx A: two independent VALID_INPUT-backed lock_note transactions per match
-Tx B: one VALID_MATCH_BATCH verify transaction per batch
+Tx B: one authorized VALID_MATCH_BATCH verify transaction per batch, carrying
+      the governed fee-key epoch and encrypted fee-recovery record
 Tx C: per-batch ALT create/extend
 Tx D: one Ed25519-authenticated atomic settle transaction per active match
 Tx E: marker sweep at/after its on-chain-derived expiry
@@ -288,7 +302,7 @@ tokens atomically.
 
 VALID_MERGE consolidates two to four live notes without leaving the pool. It
 requires positive active inputs, proves lock accounts absent/non-live, and
-derives the output inner from the active commitments and bitmap. K=2/K=4
+derives the output inner from the active private input inners and bitmap. K=2/K=4
 merges can be chained.
 
 ## Multi-market CVMs
