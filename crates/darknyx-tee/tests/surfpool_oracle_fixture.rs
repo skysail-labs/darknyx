@@ -254,12 +254,18 @@ async fn exercise_case(
 ) {
     let feed_id = [case_index; 32];
     let feed_hex = hex::encode(feed_id);
+    let sentinel_feed_id = [case_index | 0x80; 32];
+    let sentinel_feed_hex = hex::encode(sentinel_feed_id);
     let account = encoded_account(mutation, feed_id, slot, unix_timestamp);
+    let sentinel_account = encoded_account(Mutation::Valid, sentinel_feed_id, slot, unix_timestamp);
     install_account(client, rpc_url, &account).await;
+    install_account(client, rpc_url, &sentinel_account).await;
 
     let cache = OracleCache::new();
     let gate = TradingGate::default();
+    let sentinel_gate = TradingGate::default();
     gate.pause_for(TradingPauseReason::Oracle);
+    sentinel_gate.pause_for(TradingPauseReason::Oracle);
     let policy = FreshnessPolicy {
         max_age_ms: 30_000,
         max_future_skew_ms: 1_000,
@@ -273,31 +279,49 @@ async fn exercise_case(
         cache.clone(),
         SolanaRpcClient::new(rpc_url).expect("Surfpool RPC client"),
         PushSyncConfig {
-            feed_ids: vec![feed_hex.clone()],
-            market_bindings: vec![MarketOracleBinding {
-                symbol: format!("FIXTURE-{}", mutation.name()),
-                feed_id: feed_hex.clone(),
-                units,
-                trading_gate: gate.clone(),
-            }],
+            feed_ids: vec![feed_hex.clone(), sentinel_feed_hex.clone()],
+            market_bindings: vec![
+                MarketOracleBinding {
+                    symbol: format!("FIXTURE-{}", mutation.name()),
+                    feed_id: feed_hex.clone(),
+                    units,
+                    trading_gate: gate.clone(),
+                },
+                MarketOracleBinding {
+                    symbol: format!("SENTINEL-{}", mutation.name()),
+                    feed_id: sentinel_feed_hex.clone(),
+                    units,
+                    trading_gate: sentinel_gate.clone(),
+                },
+            ],
             freshness: policy,
             interval: Duration::from_millis(20),
         },
     );
 
+    // Both targets are fetched in one production getMultipleAccounts poll and
+    // the target is processed first. Observing the valid sentinel therefore
+    // proves the mutated target was evaluated; a fixed sleep cannot do that on
+    // a loaded runner.
+    assert!(
+        wait_until(Duration::from_secs(2), || async {
+            cache.get(&sentinel_feed_hex).await.is_some() && sentinel_gate.is_open()
+        })
+        .await,
+        "sentinel fixture was not accepted"
+    );
+
     if matches!(mutation, Mutation::Valid) {
         assert!(
             wait_until(Duration::from_secs(2), || async {
-                cache.feed_count().await == 1 && gate.is_open()
+                cache.get(&feed_hex).await.is_some() && gate.is_open()
             })
             .await,
             "valid fixture was not accepted"
         );
     } else {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        assert_eq!(
-            cache.feed_count().await,
-            0,
+        assert!(
+            cache.get(&feed_hex).await.is_none(),
             "{} fixture reached the production cache",
             mutation.name()
         );
@@ -314,7 +338,7 @@ async fn exercise_case(
         install_account(client, rpc_url, &corrected).await;
         assert!(
             wait_until(Duration::from_secs(2), || async {
-                cache.feed_count().await == 1 && gate.is_open()
+                cache.get(&feed_hex).await.is_some() && gate.is_open()
             })
             .await,
             "{} case did not recover after a valid replacement",
@@ -335,7 +359,6 @@ async fn production_push_sync_accepts_only_exact_surfpool_fixtures() {
         return;
     };
     let rpc = SolanaRpcClient::new(&rpc_url).expect("Surfpool RPC client");
-    let (slot, unix_timestamp) = surfnet_clock(&rpc).await;
     let client = Client::new();
     let cases = [
         Mutation::WrongPda,
@@ -355,6 +378,7 @@ async fn production_push_sync_accepts_only_exact_surfpool_fixtures() {
         Mutation::Valid,
     ];
     for (index, mutation) in cases.into_iter().enumerate() {
+        let (slot, unix_timestamp) = surfnet_clock(&rpc).await;
         exercise_case(
             &client,
             &rpc_url,
@@ -365,6 +389,7 @@ async fn production_push_sync_accepts_only_exact_surfpool_fixtures() {
         )
         .await;
     }
+    let (slot, unix_timestamp) = surfnet_clock(&rpc).await;
     eprintln!(
         "SURFPOOL_ORACLE_FIXTURE cases={} valid=1 rejected={} recovered={} slot={slot} unix_timestamp={unix_timestamp}",
         cases.len(),

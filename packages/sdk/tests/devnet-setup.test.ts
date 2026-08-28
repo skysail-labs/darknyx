@@ -634,7 +634,7 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
       }
 
       // ────────────────────────────────────────────────────────────────────
-      step(5, "Persist config to .devnet/e2e-config.json");
+      step(5, `Persist config to ${CONFIG_PATH}`);
       // ────────────────────────────────────────────────────────────────────
       const cfg: E2EConfig = {
         l1RpcUrl: L1_RPC_URL,

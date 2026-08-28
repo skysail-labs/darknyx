@@ -10,7 +10,7 @@ async function isOpen(port) {
     const socket = net.createConnection({ host, port: Number(port) });
     const timer = setTimeout(() => {
       socket.destroy();
-      resolve(false);
+      reject(new Error(`timed out probing ${host}:${port}`));
     }, 500);
     socket.once("connect", () => {
       clearTimeout(timer);

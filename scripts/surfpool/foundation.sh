@@ -44,7 +44,7 @@ assert_local_contract() {
   local port
   for port in "$RPC_PORT" "$WS_PORT" "$STUDIO_PORT"; do
     [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1024 && port <= 65535)) \
-      || die "Surfpool ports must be distinct integers in 1024..65535"
+      || die "Surfpool ports must be integers in 1024..65535"
   done
   [[ "$RPC_PORT" != "$WS_PORT" && "$RPC_PORT" != "$STUDIO_PORT" \
     && "$WS_PORT" != "$STUDIO_PORT" ]] \

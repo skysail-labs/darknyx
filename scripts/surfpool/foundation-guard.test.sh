@@ -29,7 +29,7 @@ expect_failure "SURFPOOL_DATASOURCE_RPC_URL is forbidden" \
   env SURFPOOL_DATASOURCE_RPC_URL=http://example.com bash "$RUNNER" status
 expect_failure "ports must be distinct" \
   env SURFPOOL_WS_PORT=18899 bash "$RUNNER" status
-expect_failure "ports must be distinct" \
+expect_failure "ports must be integers in 1024..65535" \
   env SURFPOOL_RPC_PORT=80 SURFPOOL_RPC_URL=http://127.0.0.1:80 \
     bash "$RUNNER" status
 
