@@ -20,16 +20,10 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 
+import { requireLoopbackRpc } from "./loopback.mjs";
+
 const rpcUrl = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:18899";
-const url = new URL(rpcUrl);
-if (
-  process.env.SURFPOOL_ALLOW_REMOTE !== "1" &&
-  !["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname)
-) {
-  throw new Error(
-    `refusing non-loopback Surfpool RPC ${url.hostname}; set SURFPOOL_ALLOW_REMOTE=1 only for a reviewed remote fixture`,
-  );
-}
+requireLoopbackRpc(rpcUrl);
 
 let rpcId = 0;
 async function rpc(method, params = []) {

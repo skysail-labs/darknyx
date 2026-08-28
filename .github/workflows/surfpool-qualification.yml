@@ -10,6 +10,7 @@ on:
       - 'packages/sdk/tests/devnet-deposit-withdraw.test.ts'
       - 'packages/sdk/tests/surfpool-qualification.test.ts'
       - 'crates/darknyx-tee/tests/surfpool_merkle_sync.rs'
+      - 'crates/darknyx-tee/tests/surfpool_oracle_fixture.rs'
       - 'programs/vault/**'
       - 'Cargo.lock'
       - 'package-lock.json'
@@ -26,19 +27,20 @@ env:
   CARGO_INCREMENTAL: 0
   SURFPOOL_RPC_URL: http://127.0.0.1:18899
   SOLANA_RPC_URL: http://127.0.0.1:18899
-  DARKNYX_E2E_CONFIG_PATH: ${{ github.workspace }}/.surfpool/qualification/e2e-config.json
-  ADMIN_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/admin.json
-  TEE_AUTHORITY_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/tee_authority.json
-  TEE_AUTHORITY_1_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/tee_authority_1.json
-  ROOT_KEY_KEYPAIR: ${{ github.workspace }}/.surfpool/qualification/keypairs/root_key.json
+  DARKNYX_E2E_CONFIG_PATH: ${{ github.workspace }}/.surfpool/foundation/current/e2e-config.json
+  ADMIN_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/admin.json
+  TEE_AUTHORITY_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/tee_authority.json
+  TEE_AUTHORITY_1_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/tee_authority_1.json
+  ROOT_KEY_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/root_key.json
   DARKNYX_NUM_TREES: '2'
   DARKNYX_TEE_FEE_EPOCH_KEY: '0008080808080808080808080808080808080808080808080808080808080808'
   RUN_SURFPOOL_QUALIFICATION: '1'
+  RUN_SURFPOOL_ORACLE_FIXTURE: '1'
   SOLANA_CLI_VERSION: v3.1.12
 
 jobs:
   qualify:
-    name: Linux amd64 protocol qualification
+    name: Linux amd64 qualification and foundation
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
@@ -177,57 +179,16 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
           bash scripts/build-vault-sbf.sh devnet-admin
 
-      - name: Start fresh offline Surfpool
+      - name: Run first qualification and foundation cycle
         run: |
           set -euo pipefail
-          nohup .surfpool/bin/surfpool start \
-            --offline --no-deploy --no-tui --no-studio --db :memory: \
-            --port 18899 --ws-port 18900 --studio-port 19488 \
-            --airdrop-amount 0 \
-            > .surfpool/surfpool.log 2>&1 &
-          echo "$!" > .surfpool/surfpool.pid
-          for attempt in $(seq 1 100); do
-            if curl --fail --silent --show-error \
-              -H 'content-type: application/json' \
-              --data '{"jsonrpc":"2.0","id":1,"method":"getVersion"}' \
-              "$SURFPOOL_RPC_URL" > .surfpool/version.json; then
-              jq . .surfpool/version.json
-              exit 0
-            fi
-            sleep 0.2
-          done
-          echo 'Surfpool did not become healthy' >&2
-          tail -200 .surfpool/surfpool.log
-          exit 1
-
-      - name: Install canonical vault and exercise RPC contract
-        run: |
-          node scripts/surfpool/install-vault.mjs
+          cleanup() {
+            bash scripts/surfpool/foundation.sh down || true
+          }
+          trap cleanup EXIT HUP INT TERM
+          bash scripts/surfpool/foundation.sh up hosted-cycle-1
           node scripts/surfpool/qualify-rpc.mjs
-
-      - name: Create isolated K=2 protocol foundation
-        run: |
-          set -euo pipefail
-          mkdir -p .surfpool/qualification/keypairs
-          for name in admin tee_authority tee_authority_1 root_key; do
-            solana-keygen new --no-bip39-passphrase --silent --force \
-              --outfile ".surfpool/qualification/keypairs/${name}.json"
-          done
-          admin=$(solana-keygen pubkey "$ADMIN_KEYPAIR")
-          tee0=$(solana-keygen pubkey "$TEE_AUTHORITY_KEYPAIR")
-          tee1=$(solana-keygen pubkey "$TEE_AUTHORITY_1_KEYPAIR")
-          solana airdrop 5 "$admin" --url "$SOLANA_RPC_URL"
-          export DARKNYX_INITIAL_TEE_PUBKEYS="$tee0,$tee1"
-          echo "DARKNYX_INITIAL_TEE_PUBKEYS=$tee0,$tee1" >> "$GITHUB_ENV"
-          (
-            cd packages/sdk
-            RUN_DEVNET_E2E=1 ../../node_modules/.bin/vitest run \
-              tests/devnet-setup.test.ts
-          )
-
-      - name: Verify Groth16, generated proofs, and exact mirror recovery
-        run: |
-          set -euo pipefail
+          bash scripts/surfpool/foundation.sh verify
           (
             cd packages/sdk
             ../../node_modules/.bin/vitest run tests/surfpool-qualification.test.ts
@@ -235,34 +196,20 @@ jobs:
               tests/devnet-deposit-withdraw.test.ts
           )
           cargo test -p darknyx-tee --test surfpool_merkle_sync -- --nocapture
-
-      - name: Pin worst-case settle CU and wire-size sentinels
-        run: |
           cargo test -p vault --test tee_forced_settle_batched \
             cu_profile_worst_case_settle -- --nocapture
           cargo test -p darknyx-tee \
             settle::pipeline::tests::settle_v0_tx_compiles_and_fits_under_cap \
             -- --nocapture
+          bash scripts/surfpool/foundation.sh down
+          trap - EXIT HUP INT TERM
+
+      - name: Repeat foundation from an empty process and ledger
+        run: bash scripts/surfpool/foundation.sh cycle hosted-cycle-2
 
       - name: Stop Surfpool and prove teardown
         if: always()
         run: |
-          set +e
-          if [[ -f .surfpool/surfpool.pid ]]; then
-            pid=$(cat .surfpool/surfpool.pid)
-            kill "$pid" 2>/dev/null
-            for attempt in $(seq 1 50); do
-              kill -0 "$pid" 2>/dev/null || break
-              sleep 0.2
-            done
-            if kill -0 "$pid" 2>/dev/null; then
-              kill -9 "$pid" 2>/dev/null
-            fi
-            wait "$pid" 2>/dev/null
-          fi
-          tail -200 .surfpool/surfpool.log 2>/dev/null
-          if curl --silent --max-time 1 "$SURFPOOL_RPC_URL" >/dev/null 2>&1; then
-            echo 'Surfpool port is still reachable after teardown' >&2
-            exit 1
-          fi
-          echo 'Surfpool stopped; RPC port is closed'
+          bash scripts/surfpool/foundation.sh down
+          find .surfpool/foundation/evidence -maxdepth 3 -name '*.log' \
+            -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true

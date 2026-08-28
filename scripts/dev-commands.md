@@ -237,6 +237,36 @@ redeploy the vault — see CLAUDE.md §5. Only a TEE-proved circuit change
 
 ---
 
+## 3.5 Offline Surfpool foundation (no CVM, devnet, or provider RPC)
+
+The exact pre-release Surfpool source revision and binary checksums live in
+`scripts/surfpool/pin.json`; build or install only that revision. The lifecycle
+requires the fingerprinted devnet-admin SBF and keeps every generated key,
+mint, ALT, config, log, and signature below `.surfpool/`:
+
+```sh
+bash scripts/build-vault-sbf.sh devnet-admin
+
+# Explicit lifecycle, useful while inspecting the local ledger:
+bash scripts/surfpool/foundation.sh up manual-1
+bash scripts/surfpool/foundation.sh verify
+bash scripts/surfpool/foundation.sh status
+bash scripts/surfpool/foundation.sh down
+
+# Or the cleanup-safe complete cycle used by hosted validation:
+bash scripts/surfpool/foundation.sh cycle manual-1
+```
+
+The runner binds all Surfpool services to `127.0.0.1`, passes `--offline`,
+rejects datasource configuration and non-loopback RPC URLs, and proves the
+recorded PID plus RPC/WS/Studio ports are gone during `down`. `verify` drives
+the production Rust Pyth push poller through the exact fresh and adversarial
+`PriceUpdateV2` fixture matrix. Full setup, artifact installation, and binary
+provenance instructions are in `scripts/surfpool/README.md`.
+
+This is Surfpool evidence only. The real Phala/devnet commands below remain the
+manual release and demo gate and use the independent `.devnet/` namespace.
+
 ## 4. Devnet foundation — CLI, Helius RPC, deploy, fresh state, mints
 
 ### 4.1 Point the Solana CLI at devnet + fund your local wallet

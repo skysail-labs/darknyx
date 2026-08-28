@@ -6,11 +6,10 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { requireLoopbackRpc } from "./loopback.mjs";
+
 const rpcUrl = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:18899";
-const hostname = new URL(rpcUrl).hostname;
-if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)) {
-  throw new Error(`refusing to install a program through non-loopback RPC ${hostname}`);
-}
+requireLoopbackRpc(rpcUrl);
 
 const programId =
   process.env.VAULT_PROGRAM_ID ??

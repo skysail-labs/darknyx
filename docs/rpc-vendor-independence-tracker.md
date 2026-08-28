@@ -4,8 +4,9 @@
 
 **Last updated:** 2026-08-28
 
-**Current phase:** Phase 1 is `Surfpool validated` on local Apple Silicon and a
-clean hosted Linux amd64 runner. PR review/merge remains before Phase 2 starts.
+**Current phase:** Phase 2 is `Code complete` on local Apple Silicon. Two clean
+offline foundation cycles and the production oracle-fixture matrix pass;
+hosted Linux evidence, review, and the eventual whole-stack merge remain.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -132,10 +133,10 @@ validated` evidence.
 | SP-02 | P0 | **Surfpool validated** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Carry the proven nonempty history/root contract into the Phase 3 host-TEE restart test. |
 | SP-03 | P0 | **Surfpool validated** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Reuse the qualified installer in Phase 2's repeatable isolated foundation. |
 | SP-04 | P0 | **Surfpool validated** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Full host-TEE settlement remains Phase 3; do not report this row as CVM evidence. |
-| LF-01 | P0 | **Open** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Add pinned start, health, logs, timeout, and teardown orchestration. |
-| LF-02 | P0 | **Open** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Build a fresh deterministic foundation and explicit cleanup. |
-| LF-03 | P0 | **Open** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Encode and inject fresh, stale, future, partial, and malformed `PriceUpdateV2` states against the Surfnet clock. |
-| LF-04 | P1 | **Open** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Bind localhost; add endpoint guards and negative tests. |
+| LF-01 | P0 | **Code complete** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Reproduce both cycles on the clean hosted Linux runner. |
+| LF-02 | P0 | **Code complete** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Confirm hosted evidence contains no `.devnet` reference and no archived private material. |
+| LF-03 | P0 | **Code complete** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Reproduce the non-vacuous 15-case marker on hosted Linux. |
+| LF-04 | P1 | **Code complete** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Confirm hosted startup binds all services to `127.0.0.1` and teardown closes all three ports. |
 | LT-01 | P0 | **Open** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Add local supervisor and fail-closed simulator gating. |
 | LT-02 | P0 | **Open** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None expected | Replaces the paid provider's continuous local mirror traffic | Reset/foundation, append nonempty mixed leaves, restart, and compare all roots. |
 | LT-03 | P0 | **Open** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None expected | Makes routine full protocol testing free of external RPC/CVM cost | Promote existing flows into explicitly named local suites with non-vacuous gates. |
@@ -566,8 +567,48 @@ Hosted Linux amd64 evidence:
   before the lifecycle step, so a clean runner cannot turn missing WASM into a
   skipped green test.
 
-Evidence still owed before Phase 2 starts:
+Stack-level evidence still owed:
 
-1. Review and merge PR #213.
+1. Review and merge the Surfpool stack together, as explicitly selected after
+   Phase 1, rather than merging PR #213 before starting Phase 2.
 2. Preserve the evidence boundary: Phase 1 proves local SVM compatibility, not
    the Phase 3 host-TEE flow or a real Phala CVM.
+
+### Phase 2 — repeatable foundation and oracle fixtures
+
+Local Apple Silicon evidence, produced in two separate offline in-memory
+Surfnet processes:
+
+- `scripts/surfpool/foundation.sh cycle local-cycle-1` and
+  `cycle local-cycle-2` each installed the canonical fingerprinted vault
+  (`6c555594b2541171e79f27b63f5b3254946c74fbc8708181c203b0278b4a2db0`),
+  created fresh K=2 mints, market, vault/fee configuration, Merkle shards, TEE
+  signers, and settlement ALT, then proved PIDs and RPC/WS/Studio ports closed.
+- Both SDK foundation runs passed in approximately 4.5 seconds. The production
+  Rust oracle test itself passed in 2.69 seconds cold-run and 2.55 seconds on
+  the second cycle; the first run additionally paid 97 seconds for a cold host
+  Rust build after local build-cache cleanup.
+- Each oracle run emitted the required non-vacuous marker:
+  `cases=15 valid=1 rejected=14 recovered=14`. The mutations cover wrong PDA,
+  owner, write authority, feed, verification level, stale/future time, invalid
+  exponent, nonpositive spot/EMA, future posted slot, discriminator, trailing
+  bytes, and truncated data. Every rejection then recovered through the same
+  live production poller after installing a corrected account.
+- The two ledgers produced distinct mint identities. Both configs named only
+  `http://127.0.0.1:18899`, K=2, and their own `.surfpool/` state. Startup used
+  the pinned binary with `--offline --host 127.0.0.1`; wildcard RPC and any
+  datasource setting failed before process startup.
+- Teardown deletes ephemeral keypairs and strips mint secret keys before
+  retaining redacted gitignored evidence. No provider credential, public RPC,
+  real devnet, dstack simulator, Phala CVM, wire/circuit/account change, CU
+  change, or transaction-size change was involved.
+- A final `local-cycle-hardening` rerun passed after adding version/hash capture,
+  shell-safe environment generation, fixed `.surfpool/` state placement, and
+  secret redaction; its archived evidence contained neither keypairs nor mint
+  secret-key fields.
+
+Evidence still owed before Phase 2 advances to `Surfpool validated`:
+
+1. The modified hosted Linux qualification job must reproduce both clean
+   cycles, the exact 15-case oracle marker, and three-port teardown.
+2. Ordinary affected CI and review must pass on the Phase 2 PR.
