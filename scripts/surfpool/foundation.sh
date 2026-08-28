@@ -181,7 +181,7 @@ up() {
   require_label "$label"
   assert_local_contract
   local dependency
-  for dependency in node curl jq rg solana solana-keygen; do
+  for dependency in node curl jq grep solana solana-keygen; do
     command -v "$dependency" >/dev/null || die "$dependency is required"
   done
   [[ -x "$SURFPOOL_BIN" ]] \
@@ -248,7 +248,7 @@ up() {
   jq -e --arg rpc "$RPC_URL" --arg program "$VAULT_PROGRAM_ID" \
     '.l1RpcUrl == $rpc and .vaultProgramId == $program and .numTrees == 2 and (.merkleTreePdas | length) == 2' \
     "$DARKNYX_E2E_CONFIG_PATH" >/dev/null
-  if rg -n "\.devnet/|helius|api\.devnet\.solana\.com" "$CURRENT"; then
+  if grep -R -n -E "\.devnet/|helius|api\.devnet\.solana\.com" "$CURRENT"; then
     die "local foundation contains a real-devnet or provider reference"
   fi
   jq -n \
@@ -280,7 +280,7 @@ verify() {
     cd "$ROOT"
     cargo test -p darknyx-tee --test surfpool_oracle_fixture -- --nocapture
   ) 2>&1 | tee "$CURRENT/oracle-fixture.log"
-  rg -q 'SURFPOOL_ORACLE_FIXTURE cases=15 valid=1 rejected=14 recovered=14' \
+  grep -qF 'SURFPOOL_ORACLE_FIXTURE cases=15 valid=1 rejected=14 recovered=14' \
     "$CURRENT/oracle-fixture.log" \
     || die "oracle fixture suite did not emit its non-vacuous pass marker"
   echo "Surfpool foundation verification passed"
