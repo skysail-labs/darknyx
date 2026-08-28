@@ -252,14 +252,14 @@ up() {
     die "local foundation contains a real-devnet or provider reference"
   fi
   jq -n \
-    --arg label "$label" \
+    --arg runLabel "$label" \
     --arg rpc "$RPC_URL" \
     --arg pid "$(cat "$CURRENT/surfpool.pid")" \
     --arg startedAt "$(cat "$CURRENT/started-at")" \
     --arg config "$DARKNYX_E2E_CONFIG_PATH" \
     --arg surfpoolVersion "$surfpool_version" \
     --arg surfpoolSha256 "$surfpool_sha" \
-    '{label:$label,rpcUrl:$rpc,pid:($pid|tonumber),startedAt:$startedAt,configPath:$config,offline:true,bindHost:"127.0.0.1",numTrees:2,surfpoolVersion:$surfpoolVersion,surfpoolSha256:$surfpoolSha256}' \
+    '{"label":$runLabel,"rpcUrl":$rpc,"pid":($pid|tonumber),"startedAt":$startedAt,"configPath":$config,"offline":true,"bindHost":"127.0.0.1","numTrees":2,"surfpoolVersion":$surfpoolVersion,"surfpoolSha256":$surfpoolSha256}' \
     > "$CURRENT/manifest.json"
   echo "Surfpool foundation ready: $CURRENT"
 }
