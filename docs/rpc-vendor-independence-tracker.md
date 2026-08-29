@@ -2,10 +2,10 @@
 
 **Created:** 2026-08-27
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-29
 
-**Current phase:** Phase 2 is `Surfpool validated` on local Apple Silicon and a
-clean hosted Linux amd64 runner. Phase 3 is next; review and the eventual
+**Current phase:** Phase 3 is `Surfpool validated` on local Apple Silicon.
+Phase 4 scheduled-CI migration is next; hosted review and the eventual
 whole-stack merge remain.
 
 **Active stack base:** `main` at `41a2a518`
@@ -137,10 +137,10 @@ validated` evidence.
 | LF-02 | P0 | **Surfpool validated** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Keep Phase 3 simulator/process state inside the same isolated namespace without archiving secrets. |
 | LF-03 | P0 | **Surfpool validated** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Retain the exact non-vacuous marker when Phase 4 promotes this foundation into scheduled CI. |
 | LF-04 | P1 | **Surfpool validated** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Preserve loopback-only control-plane assertions across Phase 3 and Phase 4. |
-| LT-01 | P0 | **Open** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Add local supervisor and fail-closed simulator gating. |
-| LT-02 | P0 | **Open** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None expected | Replaces the paid provider's continuous local mirror traffic | Reset/foundation, append nonempty mixed leaves, restart, and compare all roots. |
-| LT-03 | P0 | **Open** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None expected | Makes routine full protocol testing free of external RPC/CVM cost | Promote existing flows into explicitly named local suites with non-vacuous gates. |
-| LT-04 | P1 | **Open** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Add result manifest and assertions that real quote verification does not pass. |
+| LT-01 | P0 | **Surfpool validated** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Carry the measured supervisor into Phase 4 hosted integration. |
+| LT-02 | P0 | **Surfpool validated** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None | Replaces the paid provider's continuous local mirror traffic | Require the same nonempty exact-root evidence in Phase 4. |
+| LT-03 | P0 | **Surfpool validated** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None | Makes routine full protocol testing free of external RPC/CVM cost | Select a measured hosted cadence in Phase 4 without weakening the full local matrix. |
+| LT-04 | P1 | **Surfpool validated** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Preserve the boundary manifest and simulator-quote rejection in hosted runs. |
 | CI-01 | P0 | **Open** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Replace/rename `nightly-devnet`, keep all flows non-vacuous, and tear down Surfpool with `always()`. |
 | CI-02 | P0 | **Open** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Add explicit run markers, expected test counts, timeouts, and process cleanup assertions. |
 | CI-03 | P1 | **Open** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Remove recurring schedule only after local CI is green; retain `workflow_dispatch` and teardown. |
@@ -634,3 +634,71 @@ Evidence still owed before Phase 2 is `Closed`:
 
 1. Merge the complete Surfpool stack only after the later phases selected for
    the same merge are ready; Phase 2 itself needs no CVM evidence.
+
+### Phase 3 — production host TEE and proof-backed protocol matrix
+
+Local Apple Silicon evidence, produced with an optimized production TEE binary
+and a fresh offline Surfnet per flow:
+
+- `scripts/surfpool/local-tee-matrix.sh all` emitted
+  `PHASE3_MATRIX_PASS cases=6 mode=all`. The six independent cases were
+  deposit-withdraw, merge, settle, multimatch, self-trade, and
+  merge-then-order. The deposit-withdraw case includes release/expiry
+  semantics; the settle case enables seed-plus-finalized-chain recovery.
+- Every case installed the fingerprinted canonical vault at
+  `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`, used real committed circuit
+  artifacts, generated real client and TEE proofs, and ran the production
+  Solana RPC, matcher, journal, and settlement paths. There is no local-only
+  matcher, prover, vault program, or RPC adapter.
+- The guest API was dstack v0.5.9 at exact commit
+  `282eeb27d22d8f091ad0fa5a90e638f85cf68751`. Discovery derived the exact K=2
+  signer set through the production dstack client; the supervisor then rotated
+  and funded both keys before governed boot. `DSTACK_SIMULATOR_ENDPOINT` is now
+  rejected unless `DARKNYX_TEE_DEPLOYMENT_TIER=development`, and known test
+  authentication remains disabled in this matrix.
+- The settle case produced one confirmed crossing match, then cold-restarted
+  the TEE without resetting Surfpool. The boot session changed, native gTFA
+  replay rebuilt seven leaves, and the production mirror reported exact
+  root/count matches: tree 0 had seven leaves at replay slot 114 and tree 1 had
+  zero leaves. The empty second shard correctly retained `on_chain_slot = 0`;
+  nonempty shards require a nonzero replay slot.
+- A separate venue-wide `MerkleReadiness` pause is set before the sync task
+  starts. Oracle/governance recovery cannot clear it; the local boot log showed
+  it clearing only after every shard reconciled exactly, on both the empty
+  first boot and the seven-leaf restart. Orders arriving in the small interval
+  between HTTP bind and reconciliation therefore fail closed.
+- The production SDK DCAP verifier rejected the simulator quote with
+  `AttestationError.kind = quote_invalid`. Each archived result manifest names
+  the untested boundary explicitly: Intel TDX isolation, Intel-valid DCAP,
+  Phala KMS durability/access control, RA-TLS passthrough, and real-validator
+  confirmation/finality/timing are not claimed.
+- The four-match N=16 case confirmed all four Tx D settlements in one Surfnet
+  slot. Its host-only benchmark record was: witness `659 ms`, Ark prove step
+  `1,844 ms`, total prove `2,516 ms`, verify `259 ms`, total pipeline
+  `3,137 ms`, with zero rejected/ambiguous results and zero rebroadcasts. These
+  numbers qualify the local cadence only; they are not CVM or cluster latency.
+- The final single crossing-settle evidence run recorded witness `675 ms`, Ark
+  prove step `1,799 ms`, total prove `2,483 ms`, verify `765 ms`, and total
+  pipeline `4,072 ms`, with one confirmed result, no rejection/ambiguity, and
+  no rebroadcast. The pre-restart log is preserved separately so the cold boot
+  cannot erase the timing record.
+- The single-match self-trade-policy continuation settled with witness
+  `672 ms`, Ark prove step `1,775 ms`, total prove `2,463 ms`, verify `261 ms`,
+  and total pipeline `3,048 ms`. Merge-then-order settled with witness
+  `693 ms`, Ark prove step `1,962 ms`, total prove `2,673 ms`, verify `259 ms`,
+  and total pipeline `3,768 ms`.
+- Persona and operator keys, API credentials, journal state, and local ledger
+  files remained in `.surfpool/` and were removed on teardown. After every
+  case, the supervisor proved RPC, WebSocket, and Studio ports
+  `18899/18900/19488` closed and archived only redacted evidence.
+- The oracle fixture installer refuses non-loopback RPC before issuing any
+  request. The full matrix emitted `SURFPOOL_TEE_LOOPBACK_GUARD_PASS`; no
+  public or paid Solana RPC and no Phala CVM was used.
+
+Evidence still owed before Phase 3 is `Closed`:
+
+1. Phase 4 must reproduce the selected local-TEE cadence on a clean hosted
+   Linux amd64 runner with explicit execution markers and unconditional
+   teardown. This is CI evidence, not a reason to weaken the full local matrix.
+2. Review and merge the complete Surfpool stack. Phase 3 itself needs no real
+   CVM evidence; the controlled real-CVM release gate remains Phase 5.

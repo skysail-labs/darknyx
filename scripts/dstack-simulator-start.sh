@@ -4,10 +4,10 @@
 # The simulator exposes the same Unix-socket interface (`/var/run/
 # dstack.sock` shape) that real TDX hardware exposes inside a Phala
 # Cloud CVM. With it running, `cargo run -p darknyx-tee` against
-# DSTACK_SIMULATOR_ENDPOINT behaves byte-equivalent to running
-# inside a real CVM — getKey() returns deterministic bytes,
-# getQuote() returns a stub-but-well-formed quote, info() returns
-# all expected fields.
+# DSTACK_SIMULATOR_ENDPOINT exercises the production guest-API calls:
+# getKey() returns deterministic development bytes, getQuote() returns
+# simulator evidence (which production verification must reject), and
+# info() returns the expected API shape. It does not emulate TDX or KMS.
 #
 # Usage:
 #
@@ -97,4 +97,5 @@ fi
 
 echo "[sim] starting dstack-simulator (DSTACK_SIMULATOR_ENDPOINT=$SOCK_PATH)" >&2
 echo "[sim] (Ctrl-C to stop)" >&2
+cd "$SIM_DIR"
 exec "$SIM_BIN"

@@ -82,10 +82,16 @@ import {
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
-  process.env.RUN_CVM_E2E === "1" && GATEWAY !== "" && existsSync(CONFIG_PATH);
+  (process.env.RUN_CVM_E2E === "1" ||
+    process.env.RUN_SURFPOOL_TEE_E2E === "1") &&
+  GATEWAY !== "" &&
+  existsSync(CONFIG_PATH);
 const maybeDescribe = READY ? describe : describe.skip;
 
 const MATCHES = Number(process.env.DARKNYX_CVM_MATCHES ?? "4");

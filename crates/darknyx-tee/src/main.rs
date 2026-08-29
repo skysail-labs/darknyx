@@ -679,10 +679,12 @@ async fn main() -> Result<()> {
                 // Feed the live `tree` channel of the multiplexed /v1/stream:
                 // every newly applied leaf is broadcast here for subscribers.
                 let tree_tx = api_state.tree_publisher();
-                // Venue-wide gate: a shard mirror that disagrees with its
-                // on-chain MerkleTree pauses new trading (cancel + settlement
-                // recovery stay open) until it reconciles.
+                // Venue-wide gate: startup stays paused until every shard
+                // exactly cold-reconciles. A later disagreement pauses new
+                // trading again; cancellation and settlement recovery stay
+                // available.
                 let merkle_gate = api_state.trading_gate.clone();
+                merkle_gate.pause_for(TradingPauseReason::MerkleReadiness);
                 let vault_program_id = darknyx_tee::settle::vault::vault_program_id();
                 let merkle_tree_pdas: Vec<_> = (0..mirrors.len() as u8)
                     .map(|tree_id| darknyx_tee::settle::vault::merkle_tree_pda(tree_id).0)

@@ -170,6 +170,7 @@ impl MerkleSync {
         let applied = self.scan_and_apply(floor).await?;
         if applied.txs_seen == 0 {
             tracing::info!("merkle cold-boot: vault has no transaction history in range yet");
+            self.reconcile().await;
             return Ok(0);
         }
         self.last_slot = applied.max_slot.max(self.last_slot);
@@ -201,7 +202,11 @@ impl MerkleSync {
         let floor = Some(self.last_slot.max(self.cfg.from_slot)).filter(|s| *s > 0);
         let result = self.scan_and_apply(floor).await?;
         self.last_slot = result.max_slot.max(self.last_slot);
-        if result.leaves_applied > 0 {
+        let bootstrap_pending = self
+            .trading_gate
+            .as_ref()
+            .is_some_and(|gate| gate.is_paused_for(TradingPauseReason::MerkleReadiness));
+        if result.leaves_applied > 0 || bootstrap_pending {
             self.reconcile().await;
         }
         Ok(result.leaves_applied)
@@ -334,20 +339,24 @@ impl MerkleSync {
     ///   Serving inclusion paths that fold to a root `lock_note` will reject is
     ///   worse than serving nothing, so divergence now stops rather than warns.
     async fn reconcile(&mut self) {
+        let mut every_shard_reconciled = true;
         for tree_id in 0..self.merkle_tree_pdas.len() {
             let tree_pda = self.merkle_tree_pdas[tree_id];
             let chain = match self.rpc.get_account_info(&tree_pda).await {
                 Ok(Some(acc)) => acc,
                 Ok(None) => {
+                    every_shard_reconciled = false;
                     tracing::warn!(tree_id, "merkle reconcile: merkle_tree account not found");
                     continue;
                 }
                 Err(e) => {
+                    every_shard_reconciled = false;
                     tracing::warn!(tree_id, error = %e, "merkle reconcile: merkle_tree read failed");
                     continue;
                 }
             };
             let Some((chain_count, chain_root)) = parse_merkle_tree_root(&chain.data) else {
+                every_shard_reconciled = false;
                 tracing::warn!(
                     tree_id,
                     len = chain.data.len(),
@@ -376,6 +385,7 @@ impl MerkleSync {
                     }
                 }
                 ReconcileState::Behind => {
+                    every_shard_reconciled = false;
                     // Normal sync lag; the next poll applies the new leaves.
                     tracing::debug!(
                         tree_id,
@@ -385,6 +395,7 @@ impl MerkleSync {
                     );
                 }
                 ReconcileState::Diverged => {
+                    every_shard_reconciled = false;
                     // Flag on EVERY diverged poll, not just the transition: the
                     // WARN is latched, the safety state is not. A mirror that
                     // was somehow cleared while still disagreeing must be
@@ -423,6 +434,10 @@ impl MerkleSync {
             } else if gate.is_paused_for(TradingPauseReason::MerkleDivergence) {
                 gate.resume_for(TradingPauseReason::MerkleDivergence);
                 tracing::info!("trading RESUMED — every merkle shard matches chain again");
+            }
+            if every_shard_reconciled && gate.is_paused_for(TradingPauseReason::MerkleReadiness) {
+                gate.resume_for(TradingPauseReason::MerkleReadiness);
+                tracing::info!("trading Merkle-readiness gate cleared after exact cold reconcile");
             }
         }
     }
@@ -937,7 +952,11 @@ mod tests {
         )
         .with_trading_gate(gate.clone());
 
-        assert!(gate.is_open(), "healthy at the start");
+        assert!(gate.pause_for(TradingPauseReason::MerkleReadiness));
+        assert!(
+            !gate.is_open(),
+            "cold-boot readiness must close trading before reconcile"
+        );
 
         sync.reconcile().await;
         assert!(
@@ -948,6 +967,7 @@ mod tests {
             gate.is_paused_for(TradingPauseReason::MerkleDivergence),
             "new trading must pause while the mirror disagrees with the chain"
         );
+        assert!(gate.is_paused_for(TradingPauseReason::MerkleReadiness));
         assert!(!gate.is_open());
 
         // A second diverged poll must not un-flag anything (the WARN latches;
@@ -961,6 +981,7 @@ mod tests {
         healthy.store(true, Ordering::SeqCst);
         sync.reconcile().await;
         assert!(!mirror.read().await.is_diverged());
+        assert!(!gate.is_paused_for(TradingPauseReason::MerkleReadiness));
         assert!(gate.is_open(), "recovery re-opens trading");
     }
 

@@ -107,3 +107,61 @@ generated material remains below the gitignored `.surfpool/` namespace;
 state. `loopback.test.mjs` pins the negative control for wildcard, LAN,
 internet, credentialed, and TLS URLs. There is deliberately no remote override
 for the Surfpool mutation helpers.
+
+## Production TEE process on Surfpool
+
+Phase 3 adds a second supervisor around the same foundation. It runs the
+production `darknyx-tee` process against the pinned dstack v0.5.9 simulator and
+the loopback Surfnet. The simulator supplies only the guest API shape and
+deterministic development keys. The TEE still uses its production RPC client,
+governance reads, K-shard mirror, matcher, prover, settlement journal, and vault
+transactions; there is no simulator-only protocol fork.
+
+Build the optimized host binary first. The Ark proving-key load is several
+minutes in an unoptimized build and seconds in release mode:
+
+```sh
+cargo build --release -p darknyx-tee
+
+# Run one crossing settlement plus cold restart/root reconciliation.
+bash scripts/surfpool/local-tee-matrix.sh settle
+
+# Run every Phase 3 flow, each on a separately created empty ledger.
+bash scripts/surfpool/local-tee-matrix.sh all
+```
+
+`all` covers deposit/withdraw/lock expiry, K=2 merge, crossing settlement with
+seed-plus-chain recovery, multimatch, self-trade policy, and merge-then-order.
+The settlement case then cold-restarts the TEE, requires a different boot
+session ID, and compares every shard's mirror root and count with the on-chain
+`MerkleTree` account. An empty shard may correctly retain `on_chain_slot = 0`;
+every nonempty shard must report the replay slot that reconstructed it.
+The venue-wide Merkle-readiness pause remains set until this exact reconcile,
+so an early HTTP request cannot trade against an uninitialized mirror.
+
+For interactive diagnosis, start a foundation and TEE separately:
+
+```sh
+bash scripts/surfpool/foundation.sh up local-tee-manual
+bash scripts/surfpool/local-tee.sh up local-tee-manual
+bash scripts/surfpool/local-tee.sh status
+source .surfpool/local-tee/current/env.sh
+# Run a selected SDK test here.
+bash scripts/surfpool/local-tee.sh restart
+bash scripts/surfpool/local-tee.sh down
+bash scripts/surfpool/foundation.sh down
+```
+
+The supervisor requires the dstack checkout's exact v0.5.9 commit and defaults
+to `target/release/darknyx-tee`. `DSTACK_REPO` and
+`DARKNYX_LOCAL_TEE_BIN` may select equivalent local paths. RPC and HTTP
+listeners remain loopback-only. Generated API credentials, trader keypairs,
+and TEE state are removed during teardown; redacted logs and result manifests
+are archived under `.surfpool/*/evidence/<label>/`.
+
+This evidence is deliberately named `Surfpool` or `local-tee`, never CVM
+evidence. It does not test Intel TDX isolation, an Intel-valid DCAP quote,
+Phala KMS durability or access control, RA-TLS passthrough, or real-validator
+confirmation/finality/timing. The production DCAP verifier must reject the
+dstack simulator quote, and the Phase 3 test records that rejection as
+`quote_invalid`.

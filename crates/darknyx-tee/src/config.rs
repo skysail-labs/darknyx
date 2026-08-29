@@ -585,7 +585,17 @@ fn is_known_test_credential(var: &str, value: &str) -> bool {
 /// Enforce the boundary between explicit local simulator fixtures and a real
 /// CVM boot. Known public test credentials are never accepted outside that
 /// simulator mode.
-fn validate_auth_mode(dstack_socket: Option<&str>, allow_test_auth: bool) -> Result<()> {
+fn validate_auth_mode(
+    deployment_tier: &str,
+    dstack_socket: Option<&str>,
+    allow_test_auth: bool,
+) -> Result<()> {
+    if dstack_socket.is_some() && deployment_tier != "development" {
+        bail!(
+            "DSTACK_SIMULATOR_ENDPOINT is permitted only with \
+             DARKNYX_TEE_DEPLOYMENT_TIER=development"
+        );
+    }
     if allow_test_auth && dstack_socket.is_none() {
         bail!("DARKNYX_TEE_ALLOW_TEST_AUTH is permitted only with DSTACK_SIMULATOR_ENDPOINT");
     }
@@ -634,7 +644,7 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let allow_test_auth = parse_bool_env("DARKNYX_TEE_ALLOW_TEST_AUTH", false)?;
-        validate_auth_mode(dstack_socket.as_deref(), allow_test_auth)?;
+        validate_auth_mode(&deployment_tier, dstack_socket.as_deref(), allow_test_auth)?;
         let base_mint_set = env_nonempty("DARKNYX_TEE_BASE_MINT").is_some();
         let quote_mint_set = env_nonempty("DARKNYX_TEE_QUOTE_MINT").is_some();
         if base_mint_set != quote_mint_set {
@@ -853,9 +863,18 @@ mod tests {
 
     #[test]
     fn test_auth_requires_an_explicit_simulator_endpoint() {
-        let err = validate_auth_mode(None, true).unwrap_err();
+        let err = validate_auth_mode("development", None, true).unwrap_err();
         assert!(err.to_string().contains("DSTACK_SIMULATOR_ENDPOINT"));
-        validate_auth_mode(Some("/tmp/dstack.sock"), true).unwrap();
+        validate_auth_mode("development", Some("/tmp/dstack.sock"), true).unwrap();
+    }
+
+    #[test]
+    fn simulator_endpoint_is_rejected_outside_development() {
+        let err = validate_auth_mode("mainnet", Some("/tmp/dstack.sock"), false).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("DARKNYX_TEE_DEPLOYMENT_TIER=development"));
+        validate_auth_mode("development", Some("/tmp/dstack.sock"), false).unwrap();
     }
 
     #[test]

@@ -28,6 +28,12 @@ pub enum TradingPauseReason {
     /// never had produces proofs `lock_note` will reject — after a match, with
     /// an honest counterparty's collateral already locked.
     MerkleDivergence = 1 << 3,
+    /// Initial Merkle history replay has not reconciled every shard yet.
+    ///
+    /// Kept independent from divergence so an oracle or governance refresh
+    /// cannot open intake during the cold-boot window. The Merkle sync clears
+    /// this only after every mirror exactly matches its on-chain shard.
+    MerkleReadiness = 1 << 4,
 }
 
 #[derive(Clone, Debug)]
@@ -102,7 +108,8 @@ impl TradingGate {
             TradingPauseReason::Oracle => &self.market_reasons,
             TradingPauseReason::Governance
             | TradingPauseReason::Drain
-            | TradingPauseReason::MerkleDivergence => &self.venue_reasons,
+            | TradingPauseReason::MerkleDivergence
+            | TradingPauseReason::MerkleReadiness => &self.venue_reasons,
         }
     }
 }

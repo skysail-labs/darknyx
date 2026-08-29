@@ -80,9 +80,13 @@ export const SOL_USD_FEED =
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 function cvmCredential(name: string, localFixture: string): string {
   const value = process.env[name];
-  if (process.env.RUN_CVM_E2E === "1" && !value) {
+  if (
+    (process.env.RUN_CVM_E2E === "1" ||
+      process.env.RUN_SURFPOOL_TEE_E2E === "1") &&
+    !value
+  ) {
     throw new Error(
-      `${name} is required for live CVM tests; load the encrypted-deploy credentials`,
+      `${name} is required for proof-backed TEE integration; load the selected environment credentials`,
     );
   }
   return value ?? localFixture;
@@ -422,11 +426,15 @@ export async function makePersona(
   name: string,
   seed0: number,
 ): Promise<Persona> {
+  const keypairDir = resolve(
+    repoRoot,
+    process.env.DARKNYX_E2E_KEYPAIR_DIR ?? ".devnet/keypairs",
+  );
   const payer = await loadOrCreateKeypair(
-    resolve(repoRoot, `.devnet/keypairs/${name}-payer.json`),
+    resolve(keypairDir, `${name}-payer.json`),
   );
   const trading = await loadOrCreateKeypair(
-    resolve(repoRoot, `.devnet/keypairs/${name}-trading.json`),
+    resolve(keypairDir, `${name}-trading.json`),
   );
   const masterSeed = new Uint8Array(64);
   for (let i = 0; i < 64; i++) {

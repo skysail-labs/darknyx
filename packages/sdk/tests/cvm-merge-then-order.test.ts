@@ -89,14 +89,18 @@ import { deriveLegacyMergeInner } from "./helpers/privacy-observer.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 const MERGE_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_merge_k2/circuit_final.zkey",
 );
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
-  process.env.RUN_CVM_E2E === "1" &&
+  (process.env.RUN_CVM_E2E === "1" ||
+    process.env.RUN_SURFPOOL_TEE_E2E === "1") &&
   GATEWAY !== "" &&
   existsSync(CONFIG_PATH) &&
   existsSync(MERGE_ZKEY);
