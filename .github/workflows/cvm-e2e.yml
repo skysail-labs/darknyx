@@ -1,4 +1,4 @@
-# Twice-weekly CVM + devnet end-to-end.
+# Manually dispatched CVM + devnet release gate.
 # (Historical note: the concurrency group `cvm-e2e-nightly`, the repo var
 # `DARKNYX_NIGHTLY_CVM_ID`, and the CVM name `nightly-test-cvm` keep their original
 # "nightly" names — they are stable identifiers, not the cadence.)
@@ -11,13 +11,11 @@
 # TDX quote (the one thing offline mocks can't do) — report_data K-shard
 # set-binding + event-log RTMR3 replay + the on-chain tee_pubkeys cross-check.
 #
-# WHY NIGHTLY, NOT PER-PUSH: this spins a BILLABLE CVM and spends devnet SOL on
-# every run (deploy + K-shard settles). Per-push would bill on every commit and
-# race concurrent deploys against one devnet program. A nightly on `main` (plus
-# manual `workflow_dispatch`) is the right cadence — it catches regressions in
-# the deployed-system contract without burning money on every push. The fast,
-# free, per-PR signal stays in pr-checks.yml (unit + litesvm + the SDK vitest
-# suite, whose CVM/devnet tests auto-skip without RUN_CVM_E2E/RUN_DEVNET_*).
+# WHY MANUAL: this spins a BILLABLE CVM and spends devnet SOL on every run
+# (deploy + K-shard settles). Routine protocol integration now runs against the
+# pinned Surfpool plus the production TEE under the dstack simulator. Dispatch
+# this workflow explicitly for a release, protocol change, or showcase that
+# needs real TDX, Phala KMS/gateway, RA-TLS, and real-cluster evidence.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ⚠️  TEARDOWN IS THE LOAD-BEARING PART. A CVM bills while running. The final
@@ -28,7 +26,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # ONE-TIME SETUP (out of band — NOT done by this workflow, because signer
-# rotation/funding and mint creation are not things you want to re-run nightly):
+# rotation/funding and mint creation are not things to re-run per release test):
 #   1. Provision a dedicated CVM named `darknyx-nightly-ci` (phala cvms create …) and
 #      record its app_id → repo variable `DARKNYX_NIGHTLY_CVM_ID` (e.g. app_xxxx).
 #   2. Run devnet-setup ONCE to mint the stable base/quote mints + settle ALT +
@@ -46,13 +44,9 @@
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
 
-name: cvm-e2e (twice-weekly)
+name: cvm-e2e (manual release gate)
 
 on:
-  schedule:
-    # Twice a week: 07:00 UTC on Monday and Thursday. Fewer runs than nightly →
-    # less Actions-minutes + less build-from-main signer/tag churn.
-    - cron: "0 7 * * 1,4"
   workflow_dispatch:
     inputs:
       image_tag:
@@ -63,7 +57,7 @@ on:
 # Never let a second run cancel a first mid-deploy — that could skip teardown and
 # leak a billable CVM. Queue instead.
 concurrency:
-  group: cvm-e2e-nightly
+  group: cvm-e2e-nightly # Stable identifier retained for mutual exclusion.
   cancel-in-progress: false
 
 permissions:
@@ -244,7 +238,7 @@ jobs:
           # below only accepts that. Both are valid OCI references and the
           # digest is what pins content either way, so the disagreement was
           # purely a shape mismatch between two workflows — but it failed the
-          # nightly at this step every run, after the job had already built the
+          # workflow at this step every run, after the job had already built the
           # image and reset the devnet tree.
           #
           # Strip only the tag: `%%@*` takes the repository part, `%:*` drops a
@@ -270,7 +264,7 @@ jobs:
       # NOTE: `phala cvms start` is async; issuing `phala deploy` while it is
       # still in flight fails with "Another operation is already in progress".
       # So: start → WAIT until status=running → deploy (with a busy-retry).
-      - name: Deploy to the nightly CVM
+      - name: Deploy to the dedicated release CVM
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -308,7 +302,7 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          # First cold boot includes a full ~GB image pull. The nightly builds a
+          # First cold boot includes a full ~GB image pull. This workflow builds a
           # NEW image every run, so the host has never cached it — this is
           # always the slow path, never the warm one.
           #
@@ -434,8 +428,8 @@ jobs:
       # multi-key (K-shard) report_data binding end-to-end; at numTrees=1 it
       # T-03P: the transport itself. This is the only suite that drives the
       # production adapter against a real TDX quote and a real passthrough
-      # route, and it was NOT previously in the nightly — the transport had no
-      # scheduled coverage at all. NODE_OPTIONS=--expose-gc is required: the RSS
+      # route, and it was NOT previously in this gate — the transport had no
+      # live-CVM coverage at all. NODE_OPTIONS=--expose-gc is required: the RSS
       # retention test refuses to run without it rather than silently measuring
       # uncollected garbage.
       - name: RA-TLS transport against the live CVM
@@ -598,7 +592,7 @@ jobs:
       # `cvm-daemon-lifecycle` was structurally unrunnable for weeks in
       # exactly that way while CI stayed green.
       #
-      # So the revert gets exercised once per nightly. That is what makes the
+      # So the revert gets exercised once per release run. That is what makes the
       # keep-decision durable rather than nominal.
       #
       # Runs LAST: it deploys a different compose, and every step above must
@@ -711,7 +705,7 @@ jobs:
 
 # Belt-and-suspenders teardown lives in cvm-sweeper.yml: it unconditionally stops
 # this CVM a few times a day, in the SAME concurrency group as this workflow so it
-# can never race a live nightly — covering the force-cancel edge where a hard
+# can never race a live release run — covering the force-cancel edge where a hard
 # cancel skips even the `if: always()` teardown above.
 #
 # Build-from-main honesty is handled by the `build-image` job (reuses

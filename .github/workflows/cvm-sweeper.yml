@@ -1,26 +1,23 @@
-# Belt-and-suspenders teardown for the nightly CVM (cvm-e2e.yml).
+# Manually dispatched belt-and-suspenders teardown for the release CVM.
 #
 # cvm-e2e's own `Stop the CVM` step runs `if: always()`, covering pass/fail/error.
-# But a HARD cancel (force-cancelling the run) can skip even always() steps, which
-# would leak a billable CVM. This sweeper unconditionally stops the nightly CVM a
-# few times a day, so any leak self-heals within hours instead of billing forever.
+# But a HARD cancel can skip even always() steps and leak a billable CVM. Run
+# this action explicitly whenever a release run was force-cancelled or its own
+# teardown status is uncertain.
 #
-# SAFE vs a live nightly: it shares the SAME concurrency group as cvm-e2e.yml
+# SAFE vs a live release run: it shares the SAME concurrency group as cvm-e2e.yml
 # (`cvm-e2e-nightly`, cancel-in-progress: false) — GitHub concurrency groups are
-# repo-global, so if a nightly is running this sweeper QUEUES behind it and can
-# never stop a CVM an in-flight test is using. When it does run, `phala cvms stop`
-# is a harmless no-op if the CVM is already stopped. The cron times are also
-# offset from the 07:00 UTC nightly window as a second layer of separation.
+# repo-global, so if an e2e run is active this sweeper QUEUES behind it and can
+# never stop the CVM mid-test. `phala cvms stop` is a harmless no-op when the CVM
+# is already stopped.
 
 name: cvm-sweeper (teardown safety)
 
 on:
-  schedule:
-    - cron: "0 3,9,15,21 * * *" # 4x/day, offset from the 07:00 nightly window
   workflow_dispatch:
 
 concurrency:
-  group: cvm-e2e-nightly # SAME group as cvm-e2e.yml — never race a live nightly
+  group: cvm-e2e-nightly # SAME group as cvm-e2e.yml — never race a live run
   cancel-in-progress: false
 
 permissions:
@@ -37,7 +34,7 @@ jobs:
           node-version: "22"
       - name: Install the Phala CLI
         run: npm install -g phala
-      - name: Stop the nightly CVM (unconditional; no-op if already stopped)
+      - name: Stop the release CVM (unconditional; no-op if already stopped)
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |

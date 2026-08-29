@@ -166,3 +166,26 @@ Phala KMS durability or access control, RA-TLS passthrough, or real-validator
 confirmation/finality/timing. The production DCAP verifier must reject the
 dstack simulator quote, and the Phase 3 test records that rejection as
 `quote_invalid`.
+
+## Hosted cadence
+
+The scheduled Linux amd64 workflow runs the foundation qualification followed
+by `hosted-smoke.sh`. The bounded smoke deliberately selects two cases from the
+six-case local matrix: deposit/withdraw/expiry exercises client proofs and
+note lifecycle, while settle exercises the production TEE, N=16 proof,
+transactions, cold gTFA replay, exact K-root reconciliation, and simulator
+quote rejection. Every case gets a fresh in-memory ledger.
+
+The wrapper requires explicit execution markers and independently checks that
+the TEE, Surfpool RPC/WebSocket/Studio, and simulator-facing process boundary
+have been torn down. A skipped env-gated suite or a surviving listener is a
+failure. Run the exact hosted cadence locally, after preparing the pinned
+Surfpool and dstack binaries, with:
+
+```sh
+DSTACK_REPO=/path/to/dstack bash scripts/surfpool/hosted-smoke.sh
+```
+
+Run `local-tee-matrix.sh all` before changes that affect a flow omitted from the
+scheduled subset. Real TDX, KMS, RA-TLS, and cluster/finality evidence remains a
+separately dispatched Phala release gate.

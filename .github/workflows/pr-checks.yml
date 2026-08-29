@@ -20,8 +20,8 @@
 #   - `programs/vault/tests/` litesvm integration tests (Phase 3 — they
 #     need built circuits AND a Solana SBF toolchain).
 #   - `cargo build-sbf` (Phase 4 — informational only on PRs).
-#   - Env-gated devnet/ER/CN end-to-end tests (auto-skipped without
-#     `RUN_*=1`; promoted to a nightly cron in Phase 4).
+#   - Real-devnet/CVM end-to-end tests (manual release gate). Routine
+#     proof-backed process integration runs in surfpool-qualification.yml.
 #
 # Required-for-merge status check: the aggregator `pr-checks success`.
 # Configure branch protection on `main` to require it.
@@ -108,6 +108,8 @@ jobs:
       # promise. Three such bugs shipped during the web3.js v3 port.
       - name: Async calls in untypechecked .mjs must be awaited
         run: node scripts/check-script-awaits.mjs
+      - name: Scheduled Surfpool and manual CVM boundaries stay separated
+        run: bash scripts/check-surfpool-workflow-boundaries.sh
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
@@ -260,7 +262,8 @@ jobs:
       - name: cvm-* suites reach the CVM through the verified transport
         run: bash scripts/check-cvm-suites-use-transport.sh
 
-      # The nightly builds the encrypted `-e` env in three places. When two of
+      # The manual release workflow builds the encrypted `-e` env in three
+      # places. When two of
       # them diverged, the redeployed CVM fell back to the compose's public
       # test credentials AND the differing env-key set moved compose_hash,
       # failing every tree-consuming test with `compose_mismatch`. One diff

@@ -104,10 +104,8 @@ const PRICE_SCALE = BigInt(process.env.DARKNYX_PRICE_SCALE ?? "100000000");
  *  `VaultConfig` is an operator error worth refusing (see `tryReadVaultConfig`).
  *  An UNPINNED one carries no intent, so refusing on it turns an unrelated
  *  re-foundation into a permanent failure of every caller that never set the
- *  variable — which is exactly what happened: devnet was re-founded with K=4,
- *  `nightly-devnet.yml` sets no `DARKNYX_NUM_TREES`, and the nightly failed
- *  every night from then on with "existing VaultConfig has 4 trees/signers but
- *  DARKNYX_NUM_TREES=1". */
+ *  variable. A former scheduled real-devnet caller exposed this when devnet
+ *  was re-founded with K=4 but its implicit fallback remained K=1. */
 const NUM_TREES_PINNED = (process.env.DARKNYX_NUM_TREES ?? "").trim() !== "";
 
 /** Number of Merkle-tree shards to provision. The CVM settle worker

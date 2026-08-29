@@ -2,11 +2,10 @@
 
 **Created:** 2026-08-27
 
-**Last updated:** 2026-08-29
+**Last updated:** 2026-08-30
 
-**Current phase:** Phase 3 is `Surfpool validated` on local Apple Silicon.
-Phase 4 scheduled-CI migration is next; hosted review and the eventual
-whole-stack merge remain.
+**Current phase:** Phase 4 is `Code complete` on `infra/surfpool-ci`. A clean
+hosted Linux amd64 run and the eventual whole-stack merge remain.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -141,9 +140,9 @@ validated` evidence.
 | LT-02 | P0 | **Surfpool validated** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None | Replaces the paid provider's continuous local mirror traffic | Require the same nonempty exact-root evidence in Phase 4. |
 | LT-03 | P0 | **Surfpool validated** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None | Makes routine full protocol testing free of external RPC/CVM cost | Select a measured hosted cadence in Phase 4 without weakening the full local matrix. |
 | LT-04 | P1 | **Surfpool validated** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Preserve the boundary manifest and simulator-quote rejection in hosted runs. |
-| CI-01 | P0 | **Open** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Replace/rename `nightly-devnet`, keep all flows non-vacuous, and tear down Surfpool with `always()`. |
-| CI-02 | P0 | **Open** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Add explicit run markers, expected test counts, timeouts, and process cleanup assertions. |
-| CI-03 | P1 | **Open** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Remove recurring schedule only after local CI is green; retain `workflow_dispatch` and teardown. |
+| CI-01 | P0 | **Code complete** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Obtain the clean hosted Linux amd64 run, then advance only as far as that evidence supports. |
+| CI-02 | P0 | **Code complete** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Confirm every required marker and final five-port teardown in hosted output. |
+| CI-03 | P1 | **Code complete** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Verify `workflow_dispatch` and unconditional stop remain intact in review; no CVM run is required here. |
 | RA-01 | P0 | **Open** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Execute using the already-paid endpoint after Phases 1–4 and before credential removal. |
 | RA-02 | P0 | **Open** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Record exact local and real entry/exit commands and rollback. |
 | CL-01 | P1 | **Open** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Inventory after CI migration; remove only proven-obsolete references/secrets. |
@@ -306,9 +305,9 @@ Required local protocol matrix:
 
 ### 8.1 Scheduled local integration
 
-The current `nightly-devnet` intent becomes a Surfpool integration job. Rename
-files/workflows where needed so logs do not say `devnet` when the chain is
-local. The job must:
+The former `nightly-devnet` intent is implemented by the scheduled Surfpool
+integration job. Logs name the chain `Surfpool` or `local-tee`, never devnet or
+CVM. The job must:
 
 - install the checksum-verified pinned Surfpool revision;
 - build the devnet-admin SBF with the fingerprint guard;
@@ -715,3 +714,51 @@ Evidence still owed before Phase 3 is `Closed`:
    teardown. This is CI evidence, not a reason to weaken the full local matrix.
 2. Review and merge the complete Surfpool stack. Phase 3 itself needs no real
    CVM evidence; the controlled real-CVM release gate remains Phase 5.
+
+### Phase 4 — scheduled Surfpool integration and manual real-CVM boundary
+
+Implementation on `infra/surfpool-ci`:
+
+- `.github/workflows/surfpool-qualification.yml` is now the daily scheduled
+  integration workflow. It builds the checksum-pinned Surfpool revision, the
+  fingerprinted devnet-admin vault, the optimized production TEE, and the
+  dstack v0.5.9 simulator at exact commit
+  `282eeb27d22d8f091ad0fa5a90e638f85cf68751`. Circuit, Solana, Surfpool,
+  workspace Rust, and dstack compiler outputs have source/pin-scoped caches.
+- The prior real-devnet `nightly-devnet.yml` workflow is removed. Its only
+  effective runtime gate was `RUN_DEVNET_E2E=1`; despite stale comments claiming
+  all SDK devnet gates ran, merge/deposit-withdraw/leaf-index each required
+  their own different flag and were skipped. The replacement therefore loses
+  no executed coverage and adds real deposit/withdraw plus production-TEE
+  settlement coverage.
+- `scripts/surfpool/hosted-smoke.sh` runs two fresh-ledger cases: the client
+  deposit/withdraw/lock-expiry lifecycle and one crossing TEE settlement. It
+  fails unless the output contains the loopback guard, both case-pass markers,
+  exact nonempty K-root restart reconciliation, simulator-quote rejection, and
+  the two-case matrix marker. Its own exit trap and the workflow's independent
+  `if: always()` step both stop local processes and require ports
+  `18080/18899/18900/19488` to be closed.
+- `scripts/check-surfpool-workflow-boundaries.sh` runs in both ordinary PR CI
+  and the scheduled workflow. It rejects a provider/public RPC, GitHub secret,
+  missing scheduled smoke, missing cleanup assertion, a restored paid-devnet
+  workflow, or a recurring real-CVM/sweeper schedule.
+- `cvm-e2e.yml` remains fully dispatchable with immutable-image resolution,
+  real devnet/TDX/RA-TLS checks, and unconditional CVM stop, but has no recurring
+  trigger. The emergency sweeper is likewise manual and shares the existing
+  concurrency group so it cannot race a live release run. Weekly GHCR image
+  retention remains scheduled because it starts no CVM and calls no Solana RPC.
+- Local source checks passed: both new shell scripts parse, the workflow
+  boundary guard passes, the port probe parses, and `git diff --check` is clean.
+  No provider credential, public RPC, Phala CVM, circuit, wire, account layout,
+  program behavior, CU, or transaction-size change is involved.
+
+Evidence still owed before Phase 4 is `Surfpool validated`:
+
+1. A clean hosted Linux amd64 run must emit
+   `PHASE4_HOSTED_SMOKE_PASS cases=2 proofs=real` and
+   `PHASE4_TEARDOWN_PASS ports=18080,18899,18900,19488`, with all nested required
+   markers present and no skipped protocol case.
+2. The ordinary affected PR matrix and review must pass. Record the exact run
+   URL and elapsed time here before advancing CI-01…CI-03.
+3. `Closed` remains reserved for the merged full stack. Phase 4 does not need a
+   billable CVM run; the controlled real-CVM baseline is Phase 5.

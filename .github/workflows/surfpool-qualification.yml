@@ -1,14 +1,25 @@
-name: surfpool-qualification
+name: surfpool-integration (qualification + TEE smoke)
 
 on:
+  schedule:
+    # Routine protocol integration is hermetic and consumes no Solana-provider
+    # credential or billable CVM. Cron is UTC.
+    - cron: '0 3 * * *'
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/surfpool-qualification.yml'
+      - '.github/workflows/cvm-e2e.yml'
+      - '.github/workflows/cvm-sweeper.yml'
+      - 'scripts/check-surfpool-workflow-boundaries.sh'
+      - 'scripts/dstack-simulator-start.sh'
       - 'scripts/surfpool/**'
+      - 'crates/darknyx-tee/**'
       - 'packages/sdk/tests/devnet-setup.test.ts'
       - 'packages/sdk/tests/devnet-deposit-withdraw.test.ts'
       - 'packages/sdk/tests/surfpool-qualification.test.ts'
+      - 'packages/sdk/tests/surfpool-local-tee.test.ts'
+      - 'packages/sdk/tests/cvm-settle-e2e.test.ts'
       - 'crates/darknyx-tee/tests/surfpool_merkle_sync.rs'
       - 'crates/darknyx-tee/tests/surfpool_oracle_fixture.rs'
       - 'programs/vault/**'
@@ -37,12 +48,13 @@ env:
   RUN_SURFPOOL_QUALIFICATION: '1'
   RUN_SURFPOOL_ORACLE_FIXTURE: '1'
   SOLANA_CLI_VERSION: v3.1.12
+  DSTACK_REPO: ${{ github.workspace }}/.surfpool/dstack
 
 jobs:
   qualify:
-    name: Linux amd64 qualification and foundation
+    name: Linux amd64 foundation and production-TEE smoke
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -57,6 +69,9 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
+
+      - name: Enforce hermetic-schedule and manual-CVM boundaries
+        run: bash scripts/check-surfpool-workflow-boundaries.sh
 
       - name: Restore source-hashed circuit artefacts
         id: cache-circuit-build
@@ -94,7 +109,7 @@ jobs:
       - name: Require proof-generation artefacts
         run: |
           set -euo pipefail
-          for name in valid_deposit valid_input valid_spend; do
+          for name in valid_deposit valid_input valid_spend match_batch_n16; do
             test -f "circuits/build/$name/circuit_js/circuit.wasm"
             test -f "circuits/build/$name/circuit_final.zkey"
           done
@@ -167,6 +182,9 @@ jobs:
           path: .surfpool/source/target
           key: ${{ steps.cache-surfpool.outputs.cache-primary-key }}
 
+      - name: Reclaim Surfpool compiler intermediates after cache save
+        run: rm -rf .surfpool/source/target
+
       - name: Reuse the fingerprinted vault SBF cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -178,6 +196,45 @@ jobs:
         run: |
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
           bash scripts/build-vault-sbf.sh devnet-admin
+
+      - name: Build optimized production TEE
+        run: cargo build --release --locked -p darknyx-tee
+
+      - name: Check out pinned dstack v0.5.9 guest simulator
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSTACK_REPO"
+          git -C "$DSTACK_REPO" init
+          git -C "$DSTACK_REPO" remote add origin https://github.com/Dstack-TEE/dstack.git
+          git -C "$DSTACK_REPO" fetch --depth 1 origin 282eeb27d22d8f091ad0fa5a90e638f85cf68751
+          git -C "$DSTACK_REPO" checkout --detach FETCH_HEAD
+          test "$(git -C "$DSTACK_REPO" rev-parse HEAD)" = \
+            282eeb27d22d8f091ad0fa5a90e638f85cf68751
+
+      - name: Restore pinned dstack simulator build
+        id: cache-dstack-simulator
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/dstack/target
+          key: dstack-simulator-${{ runner.os }}-rust-1.92-282eeb27d22d8f091ad0fa5a90e638f85cf68751
+
+      - name: Build pinned dstack simulator
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.92 --profile minimal
+          (
+            cd "$DSTACK_REPO/sdk/simulator"
+            cargo +1.92 build --release --locked -p dstack-guest-agent-simulator
+            cp ../../target/release/dstack-simulator .
+          )
+          test -x "$DSTACK_REPO/sdk/simulator/dstack-simulator"
+
+      - name: Save pinned dstack simulator build
+        if: steps.cache-dstack-simulator.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/dstack/target
+          key: ${{ steps.cache-dstack-simulator.outputs.cache-primary-key }}
 
       - name: Run first qualification and foundation cycle
         run: |
@@ -207,9 +264,20 @@ jobs:
       - name: Repeat foundation from an empty process and ledger
         run: bash scripts/surfpool/foundation.sh cycle hosted-cycle-2
 
-      - name: Stop Surfpool and prove teardown
+      - name: Run non-vacuous production-TEE smoke
+        run: bash scripts/surfpool/hosted-smoke.sh
+
+      - name: Stop local processes and prove teardown
         if: always()
         run: |
-          bash scripts/surfpool/foundation.sh down
+          cleanup_status=0
+          set +e
+          bash scripts/surfpool/local-tee.sh down || cleanup_status=1
+          bash scripts/surfpool/foundation.sh down || cleanup_status=1
+          node scripts/surfpool/ports-closed.mjs \
+            127.0.0.1 18080 18899 18900 19488 || cleanup_status=1
           find .surfpool/foundation/evidence -maxdepth 3 -name '*.log' \
             -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+          find .surfpool/local-tee/evidence -maxdepth 3 -name '*.log' \
+            -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+          exit "$cleanup_status"
