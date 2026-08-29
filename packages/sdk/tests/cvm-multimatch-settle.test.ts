@@ -32,7 +32,7 @@
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-multimatch-settle.test.ts )
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -84,14 +84,15 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(
   REPO_ROOT,
-  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+  process.env.DARKNYX_E2E_CONFIG_PATH?.trim() || ".devnet/e2e-config.json",
 );
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
   (process.env.RUN_CVM_E2E === "1" ||
     process.env.RUN_SURFPOOL_TEE_E2E === "1") &&
   GATEWAY !== "" &&
-  existsSync(CONFIG_PATH);
+  existsSync(CONFIG_PATH) &&
+  statSync(CONFIG_PATH).isFile();
 const maybeDescribe = READY ? describe : describe.skip;
 
 const MATCHES = Number(process.env.DARKNYX_CVM_MATCHES ?? "4");

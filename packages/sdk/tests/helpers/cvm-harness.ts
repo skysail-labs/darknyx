@@ -428,7 +428,7 @@ export async function makePersona(
 ): Promise<Persona> {
   const keypairDir = resolve(
     repoRoot,
-    process.env.DARKNYX_E2E_KEYPAIR_DIR ?? ".devnet/keypairs",
+    process.env.DARKNYX_E2E_KEYPAIR_DIR?.trim() || ".devnet/keypairs",
   );
   const payer = await loadOrCreateKeypair(
     resolve(keypairDir, `${name}-payer.json`),

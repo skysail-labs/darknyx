@@ -156,8 +156,9 @@ The supervisor requires the dstack checkout's exact v0.5.9 commit and defaults
 to `target/release/darknyx-tee`. `DSTACK_REPO` and
 `DARKNYX_LOCAL_TEE_BIN` may select equivalent local paths. RPC and HTTP
 listeners remain loopback-only. Generated API credentials, trader keypairs,
-and TEE state are removed during teardown; redacted logs and result manifests
-are archived under `.surfpool/*/evidence/<label>/`.
+and TEE state are removed during teardown. Logs and result manifests are
+archived under `.surfpool/*/evidence/<label>/`; the logs are not automatically
+redacted, so that gitignored evidence directory must remain local.
 
 This evidence is deliberately named `Surfpool` or `local-tee`, never CVM
 evidence. It does not test Intel TDX isolation, an Intel-valid DCAP quote,

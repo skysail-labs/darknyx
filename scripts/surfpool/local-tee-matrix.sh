@@ -41,12 +41,14 @@ run_vitest() {
 }
 
 assert_fixture_installer_loopback_guard() {
-  if SOLANA_RPC_URL="https://api.devnet.solana.com" \
-    node "$ROOT/scripts/surfpool/install-pyth-push.mjs" "$SOL_USD_FEED" \
-      >/dev/null 2>&1; then
-    echo "Surfpool oracle installer accepted a non-loopback RPC" >&2
+  local output
+  if output="$(node "$ROOT/scripts/surfpool/loopback.mjs" \
+    "https://api.devnet.solana.com" 2>&1)"; then
+    echo "Surfpool loopback validator accepted a non-loopback RPC" >&2
     return 1
   fi
+  grep -qF "must use plain HTTP on the local loopback" <<<"$output" \
+    || { echo "unexpected loopback guard failure: $output" >&2; return 1; }
   echo "SURFPOOL_TEE_LOOPBACK_GUARD_PASS"
 }
 

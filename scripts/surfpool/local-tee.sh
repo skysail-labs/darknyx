@@ -28,7 +28,7 @@ usage: scripts/surfpool/local-tee.sh <up|restart|status|env|down> [label]
   restart   cold-restart only the TEE, preserving Surfpool and its ledger
   status    require all three processes to be healthy and print public state
   env       print the shell exports used by local proof-backed SDK suites
-  down      stop the TEE and simulator and archive redacted evidence
+  down      stop the TEE and simulator, remove secrets, and archive evidence
 
 Start Surfpool first with scripts/surfpool/foundation.sh up LABEL. This helper
 never starts a Phala CVM and refuses every non-loopback RPC/listener.
@@ -190,14 +190,19 @@ start_tee() {
     export DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
     export DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET DARKNYX_TEE_PASSPHRASE
     if [[ "$mode" == governed ]]; then
-      export DARKNYX_TEE_BASE_MINT="$(jq -r .baseMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
-      export DARKNYX_TEE_QUOTE_MINT="$(jq -r .quoteMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
+      local base_mint quote_mint settle_lookup_table protocol_owner_commitment
+      base_mint="$(jq -er .baseMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
+      quote_mint="$(jq -er .quoteMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
+      settle_lookup_table="$(jq -er .settleLookupTable "$DARKNYX_E2E_CONFIG_PATH")"
+      protocol_owner_commitment="$(jq -er .protocol.ownerCommitmentHex "$DARKNYX_E2E_CONFIG_PATH")"
+      export DARKNYX_TEE_BASE_MINT="$base_mint"
+      export DARKNYX_TEE_QUOTE_MINT="$quote_mint"
       export DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
       export DARKNYX_TEE_FEED_IDS="$SOL_USD_FEED"
-      export DARKNYX_TEE_SETTLE_LOOKUP_TABLE="$(jq -r .settleLookupTable "$DARKNYX_E2E_CONFIG_PATH")"
+      export DARKNYX_TEE_SETTLE_LOOKUP_TABLE="$settle_lookup_table"
       export DARKNYX_TEE_FEE_RATE_BPS=30
       export DARKNYX_TEE_FEE_EPOCH_KEY
-      export DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT="$(jq -r .protocol.ownerCommitmentHex "$DARKNYX_E2E_CONFIG_PATH")"
+      export DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT="$protocol_owner_commitment"
     else
       unset DARKNYX_TEE_BASE_MINT DARKNYX_TEE_QUOTE_MINT DARKNYX_TEE_FEED_IDS
       unset DARKNYX_TEE_SETTLE_LOOKUP_TABLE DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT

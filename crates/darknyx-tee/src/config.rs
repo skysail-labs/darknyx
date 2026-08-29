@@ -573,6 +573,25 @@ fn env_nonempty(var: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Read a security-sensitive optional string without treating malformed bytes
+/// as if the variable were absent.
+fn env_nonempty_strict(var: &str) -> Result<Option<String>> {
+    normalize_optional_env(var, std::env::var(var))
+}
+
+fn normalize_optional_env(
+    var: &str,
+    value: std::result::Result<String, std::env::VarError>,
+) -> Result<Option<String>> {
+    match value {
+        Ok(value) => Ok(Some(value.trim().to_string()).filter(|value| !value.is_empty())),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error @ std::env::VarError::NotUnicode(_)) => {
+            bail!("{var} is set but is not valid UTF-8 ({error})")
+        }
+    }
+}
+
 fn is_known_test_credential(var: &str, value: &str) -> bool {
     matches!(
         (var, value),
@@ -639,10 +658,7 @@ impl Config {
         let deployment_tier = env_string_or("DARKNYX_TEE_DEPLOYMENT_TIER", "development");
         validate_deployment_oracle_policy(&deployment_tier, oracle_mode, pyth_api_key.is_some())?;
 
-        let dstack_socket = std::env::var("DSTACK_SIMULATOR_ENDPOINT")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let dstack_socket = env_nonempty_strict("DSTACK_SIMULATOR_ENDPOINT")?;
         let allow_test_auth = parse_bool_env("DARKNYX_TEE_ALLOW_TEST_AUTH", false)?;
         validate_auth_mode(&deployment_tier, dstack_socket.as_deref(), allow_test_auth)?;
         let base_mint_set = env_nonempty("DARKNYX_TEE_BASE_MINT").is_some();
@@ -875,6 +891,23 @@ mod tests {
             .to_string()
             .contains("DARKNYX_TEE_DEPLOYMENT_TIER=development"));
         validate_auth_mode("development", Some("/tmp/dstack.sock"), false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_simulator_endpoint_is_rejected() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let error = normalize_optional_env(
+            "DSTACK_SIMULATOR_ENDPOINT",
+            Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )),
+        )
+        .expect_err("a set but non-UTF-8 simulator endpoint must fail closed");
+        assert!(error
+            .to_string()
+            .contains("DSTACK_SIMULATOR_ENDPOINT is set but is not valid UTF-8"));
     }
 
     #[test]

@@ -6,6 +6,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { PublicKey } from "@solana/web3.js";
+
 import { requireLoopbackRpc } from "./loopback.mjs";
 
 const rpcUrl = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:18899";
@@ -19,7 +21,10 @@ assert.equal(
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   "qualification must use the canonical Darknyx vault program ID",
 );
-const programPath = resolve(process.env.VAULT_SBF_PATH ?? "target/deploy/vault.so");
+const programPath = resolve(
+  process.env.VAULT_SBF_PATH ?? "target/deploy/vault.so",
+);
+const loaderId = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 const fingerprintPath = `${programPath}.fingerprint`;
 const [program, fingerprint] = await Promise.all([
   readFile(programPath),
@@ -51,9 +56,37 @@ const account = await rpc("getAccountInfo", [
   { encoding: "base64", commitment: "confirmed" },
 ]);
 assert.equal(account.value?.executable, true);
+assert.equal(account.value?.owner, loaderId.toBase58());
+
+// Upgradeable programs keep executable bytes in the loader-derived ProgramData
+// account, after its 45-byte state header. The small Program account above only
+// proves the pointer to this account.
+const [programDataAddress] = await PublicKey.findProgramAddress(
+  [new PublicKey(programId).toBytes()],
+  loaderId,
+);
+const programDataAccount = await rpc("getAccountInfo", [
+  programDataAddress.toBase58(),
+  { encoding: "base64", commitment: "confirmed" },
+]);
+assert.equal(programDataAccount.value?.owner, loaderId.toBase58());
+assert.equal(programDataAccount.value?.executable, false);
+assert.ok(
+  Array.isArray(programDataAccount.value?.data),
+  "deployed ProgramData bytes are missing",
+);
+assert.equal(programDataAccount.value.data[1], "base64");
+const rawProgramData = Buffer.from(programDataAccount.value.data[0], "base64");
+assert.equal(rawProgramData.readUInt32LE(0), 3, "invalid ProgramData state");
+const deployedProgram = rawProgramData.subarray(45);
+const artifactSha256 = createHash("sha256").update(program).digest("hex");
+const deployedSha256 = createHash("sha256")
+  .update(deployedProgram)
+  .digest("hex");
 assert.equal(
-  account.value?.owner,
-  "BPFLoaderUpgradeab1e11111111111111111111111",
+  deployedSha256,
+  artifactSha256,
+  "deployed Surfnet program bytes differ from the built SBF artifact",
 );
 
 console.log(
@@ -62,9 +95,12 @@ console.log(
       result: "pass",
       rpcUrl,
       programId,
+      programDataAddress: programDataAddress.toBase58(),
       programPath,
       bytes: program.length,
-      sha256: createHash("sha256").update(program).digest("hex"),
+      artifactSha256,
+      deployedSha256,
+      deployedArtifactMatch: deployedSha256 === artifactSha256,
       fingerprint: fingerprint.trim().split("\n"),
     },
     null,

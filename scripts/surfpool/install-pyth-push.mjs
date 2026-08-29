@@ -4,6 +4,8 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 
+import { requireLoopbackRpc } from "./loopback.mjs";
+
 const RECEIVER = new PublicKey("rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp");
 const PUSH = new PublicKey("pyt2F414BA6dPttK6RddPZUdHfapoBN24GL5wbrPCou");
 const CLOCK = new PublicKey("SysvarC1ock11111111111111111111111111111111");
@@ -12,20 +14,15 @@ const FEED = (process.argv[2] ?? "").replace(/^0x/i, "").toLowerCase();
 const RPC = process.env.SOLANA_RPC_URL?.trim();
 
 if (!RPC) throw new Error("SOLANA_RPC_URL is required");
-const parsed = new URL(RPC);
-if (
-  parsed.protocol !== "http:" ||
-  !["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)
-) {
-  throw new Error("Surfpool fixture installation refuses a non-loopback RPC");
-}
+requireLoopbackRpc(RPC, "Surfpool fixture installation RPC");
 if (!/^[0-9a-f]{64}$/.test(FEED)) {
   throw new Error("feed id must be 32-byte hex");
 }
 
 const connection = new Connection(RPC, "confirmed");
 const clock = await connection.getAccountInfo(CLOCK, "confirmed");
-if (!clock || clock.data.length < 40) throw new Error("Surfnet clock is missing");
+if (!clock || clock.data.length < 40)
+  throw new Error("Surfnet clock is missing");
 const clockView = new DataView(
   clock.data.buffer,
   clock.data.byteOffset,
@@ -78,7 +75,8 @@ const response = await fetch(RPC, {
 });
 if (!response.ok) throw new Error(`surfnet_setAccount HTTP ${response.status}`);
 const body = await response.json();
-if (body.error) throw new Error(`surfnet_setAccount: ${JSON.stringify(body.error)}`);
+if (body.error)
+  throw new Error(`surfnet_setAccount: ${JSON.stringify(body.error)}`);
 
 console.log(
   `SURFPOOL_PYTH_PUSH_INSTALLED feed=${FEED} account=${account.toBase58()} slot=${slot}`,

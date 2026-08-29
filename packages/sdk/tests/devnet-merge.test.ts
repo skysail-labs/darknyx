@@ -13,7 +13,7 @@
  * environment paths allow the same protocol flow on an isolated Surfnet.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,7 +66,7 @@ import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(
   REPO_ROOT,
-  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+  process.env.DARKNYX_E2E_CONFIG_PATH?.trim() || ".devnet/e2e-config.json",
 );
 const SPEND_WASM = resolve(
   REPO_ROOT,
@@ -96,6 +96,7 @@ const VAULT_ID = new PublicKey(
 const READY =
   process.env.RUN_DEVNET_MERGE === "1" &&
   existsSync(CONFIG_PATH) &&
+  statSync(CONFIG_PATH).isFile() &&
   existsSync(DEPOSIT_WASM) &&
   existsSync(DEPOSIT_ZKEY) &&
   existsSync(MERGE_ZKEY) &&

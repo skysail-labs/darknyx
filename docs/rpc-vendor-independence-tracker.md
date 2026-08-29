@@ -650,6 +650,17 @@ and a fresh offline Surfnet per flow:
   artifacts, generated real client and TEE proofs, and ran the production
   Solana RPC, matcher, journal, and settlement paths. There is no local-only
   matcher, prover, vault program, or RPC adapter.
+- The post-review installer check fetched the upgradeable loader's derived
+  `ProgramData` account (`E3ndg5U5VT35b4JrJFGWk3h7R5tFFKnsQJRRRbZFVpGe`),
+  stripped its 45-byte state header, and compared the deployed bytes with the
+  built `target/deploy/vault.so`. Both 271,104-byte artifacts had SHA-256
+  `6c555594b2541171e79f27b63f5b3254946c74fbc8708181c203b0278b4a2db0`;
+  the devnet-admin build fingerprint was
+  `8c28c019d12f9e16f718aae390f7980735426cc40b68887e7109a474112e601c`.
+  Each matrix case creates a new empty in-memory ledger before installing the
+  program and initializing K=2 trees, so there was no prior program/VK tree
+  state to reset. An in-place program or VK change remains subject to the
+  mandatory tree-reset rule.
 - The guest API was dstack v0.5.9 at exact commit
   `282eeb27d22d8f091ad0fa5a90e638f85cf68751`. Discovery derived the exact K=2
   signer set through the production dstack client; the supervisor then rotated
@@ -690,7 +701,9 @@ and a fresh offline Surfnet per flow:
 - Persona and operator keys, API credentials, journal state, and local ledger
   files remained in `.surfpool/` and were removed on teardown. After every
   case, the supervisor proved RPC, WebSocket, and Studio ports
-  `18899/18900/19488` closed and archived only redacted evidence.
+  `18899/18900/19488` closed. It archived local logs and result manifests only
+  after deleting secret env files and state; those gitignored logs are not
+  automatically redacted and must remain local.
 - The oracle fixture installer refuses non-loopback RPC before issuing any
   request. The full matrix emitted `SURFPOOL_TEE_LOOPBACK_GUARD_PASS`; no
   public or paid Solana RPC and no Phala CVM was used.
