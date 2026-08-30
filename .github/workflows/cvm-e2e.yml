@@ -458,6 +458,13 @@ jobs:
         run: |
           set -uo pipefail
           redeploy_fresh() {
+            # A reset is not sufficient on its own: the mirror only forgets
+            # the prior tree after a genuine cold boot from the new floor.
+            # Remember the current boot identity so the readiness probe below
+            # cannot accidentally accept the still-running old process while
+            # an update is pending.
+            PREVIOUS_BOOT=$(curl -fsSk --max-time 20 "$GATEWAY/info" 2>/dev/null \
+              | jq -r '.boot_session_id // empty' || true)
             SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
               node scripts/reset-merkle-tree.mjs
             umask 077
@@ -486,16 +493,29 @@ jobs:
               echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
             } > /tmp/darknyx.env
-            for d in $(seq 1 6); do
-              OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env --wait 2>&1)
-              echo "$OUT" | grep -q "already in progress" || break
-              echo "deploy busy — retry $d in 20s"; sleep 20
+            # The CLI defaults to a 60-second request timeout. A prod9 update
+            # routinely takes longer than that, so the old command returned 1
+            # even though it had submitted an update; its captured output was
+            # then discarded and the harness waited against an unverified
+            # deployment. Give the operation its real budget, keep diagnostics
+            # visible, and never proceed unless the deploy command succeeds.
+            DEPLOYED=0
+            for d in $(seq 1 3); do
+              if phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml \
+                   -e /tmp/darknyx.env --timeout 240 --wait; then
+                DEPLOYED=1
+                break
+              fi
+              echo "::warning::redeploy attempt $d failed; retrying in 20s"
+              sleep 20
             done
             # Same secure-erase as the initial deploy — this file carries the
             # RPC and Pyth credentials, and this helper rewrites it once per
             # tree-consuming test, so a plain rm would leave the most-written
             # secret file on the runner as recoverable blocks.
             shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
+            [ "$DEPLOYED" = 1 ] \
+              || { echo "::error::CVM redeploy failed for $T"; exit 1; }
             # -k, like the first health wait: the enclave serves its OWN
             # boot-scoped certificate, so there is no CA chain to validate.
             # This is the SECOND health wait in this workflow and it was missed
@@ -508,10 +528,18 @@ jobs:
             # test failure several minutes later.
             READY=0
             for i in $(seq 1 40); do
-              curl -fsSk "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && { READY=1; break; }
+              if curl -fsSk "$GATEWAY/info" -o /tmp/info.json 2>/dev/null; then
+                CURRENT_BOOT=$(jq -r '.boot_session_id // empty' /tmp/info.json)
+                if [ -n "$CURRENT_BOOT" ] && [ "$CURRENT_BOOT" != "$PREVIOUS_BOOT" ]; then
+                  READY=1
+                  echo "cold boot confirmed for $T"
+                  break
+                fi
+              fi
               sleep 6
             done
-            [ "$READY" = 1 ] || { echo "::error::CVM did not come back after redeploy for $T"; exit 1; }
+            [ "$READY" = 1 ] \
+              || { echo "::error::CVM did not expose a new boot session after redeploy for $T"; exit 1; }
 
             # RE-READ the governance pins after EVERY redeploy.
             #
