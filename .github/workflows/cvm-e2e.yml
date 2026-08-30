@@ -717,6 +717,35 @@ jobs:
           done
           [ "$READY" = 1 ] || { echo "::error::legacy route never came up at $LEGACY_GW"; exit 1; }
 
+          # `/info` proves only that the process and gateway route are live.
+          # A cold boot still has to populate the Pyth cache and open the
+          # market-local trading gate. Running the order-error contract before
+          # that happens returns the correct readiness response (503), not the
+          # handler-level 4xx this API-surface test is meant to inspect.
+          MARKET_READY=0
+          for i in $(seq 1 120); do
+            INSTRUMENTS=$(curl -fsS "$LEGACY_GW/instruments" 2>/dev/null || true)
+            if jq -e '
+              if type == "array" then
+                any(.[]; .symbol == "SOL-USDC" and .trading_enabled == true)
+              elif (.instruments | type) == "array" then
+                any(.instruments[]; .symbol == "SOL-USDC" and .trading_enabled == true)
+              else
+                false
+              end
+            ' >/dev/null 2>&1 <<<"$INSTRUMENTS"; then
+              MARKET_READY=1
+              break
+            fi
+            sleep 2
+          done
+          [ "$MARKET_READY" = 1 ] || {
+            echo "::error::legacy SOL-USDC market did not become trading-enabled"
+            printf '%s\n' "$INSTRUMENTS"
+            curl -fsS "$LEGACY_GW/system/status" || true
+            exit 1
+          }
+
           # The INVERSE assertion. Without it this step would pass on a
           # deployment that never left ra-tls at all.
           RATLS_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$GATEWAY/info" || true)
