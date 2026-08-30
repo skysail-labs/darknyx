@@ -110,7 +110,7 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
 2. **OS image:** `dstack-nvidia-dev-*` (the **nvidia** image = GPU passthrough; the **dev** suffix =
    SSH access — required for the CC-mode check + the 2b spike).
 3. **Template:** Custom Configuration. Paste the compose below (devnet values inlined; the **only**
-   `${...}` reference is the Helius RPC, supplied as an encrypted secret). Refresh
+   `${...}` reference is the dedicated RPC, supplied as an encrypted secret). Refresh
    `DARKNYX_TEE_SYNC_FROM_SLOT` to the slot printed above.
 
 ```yaml
@@ -157,7 +157,7 @@ volumes:
   darknyx_state:
 ```
 
-4. **Advanced → Encrypted Secrets:** add the Helius URL plus fresh
+4. **Advanced → Encrypted Secrets:** add the dedicated RPC URL plus fresh
    `DARKNYX_TEE_API_KEY`, `DARKNYX_TEE_API_SECRET`, and `DARKNYX_TEE_PASSPHRASE` values.
    These are E2E-encrypted in the browser and never enter the compose hash. The
    public `darknyx-test-*` fixtures are rejected outside explicit simulator mode.
@@ -194,7 +194,7 @@ DARKNYX_TEE_ICICLE_DEVICE=CUDA
 EOF
 "$PHALA" deploy -n darknyx-gpu -c deploy/docker-compose.gpu.yaml -e .env.deploy \
   -t h200.small --kms phala --dev-os --ssh-pubkey ~/.ssh/id_ed25519.pub --wait
-rm -P .env.deploy            # shred the Helius key off disk (macOS has no `shred`)
+rm -P .env.deploy            # erase the RPC credential off disk (macOS has no `shred`)
 ```
 
 > **Image must be public:** Phala pulls `ghcr.io/skysail-labs/darknyx-tee` anonymously. It was public

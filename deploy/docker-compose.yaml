@@ -145,11 +145,12 @@ services:
       # the dashboard's encrypted-env UI). Only the var REFERENCE is in
       # the compose (and thus compose_hash); the value never is. An
       # unset var interpolates empty → the app falls back to its
-      # default (public devnet RPC / no sync floor).
+      # default (compiled chain RPC / no sync floor). Release deployments must
+      # always inject the reviewed dedicated endpoint explicitly.
       #
       # Solana RPC the Merkle sync and settlement pipeline use.
-      # MUST be a private RPC (Helius); the public devnet RPC 429s on
-      # the sync's getSignaturesForAddress. DO NOT hardcode a key here.
+      # MUST provide the capacity and history API required by the selected
+      # cluster. DO NOT hardcode a credential here.
       DARKNYX_TEE_SOLANA_RPC_URL: ${DARKNYX_TEE_SOLANA_RPC_URL}
       # Merkle cold-boot floor slot (Phase 2b). Set to the vault deploy
       # slot, or a reset_merkle_tree slot on devnet, so the mirror

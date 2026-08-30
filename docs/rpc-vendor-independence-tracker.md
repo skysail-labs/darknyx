@@ -4,8 +4,9 @@
 
 **Last updated:** 2026-08-30
 
-**Current phase:** Phase 4 is `Surfpool validated` on hosted Linux amd64.
-Phase 5 release assurance and the eventual whole-stack merge remain.
+**Current phase:** Phase 5 release assurance. The provider-neutral switching
+and cleanup implementation is code complete; the real-CVM run and eventual
+whole-stack merge remain.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -144,8 +145,8 @@ validated` evidence.
 | CI-02 | P0 | **Surfpool validated** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Preserve the explicit marker and five-port teardown contract. |
 | CI-03 | P1 | **Surfpool validated** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Exercise the retained dispatch once in Phase 5; no CVM run was required here. |
 | RA-01 | P0 | **Open** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Execute using the already-paid endpoint after Phases 1–4 and before credential removal. |
-| RA-02 | P0 | **Open** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Record exact local and real entry/exit commands and rollback. |
-| CL-01 | P1 | **Open** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Inventory after CI migration; remove only proven-obsolete references/secrets. |
+| RA-02 | P0 | **Code complete** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Validate the exact manual workflow and teardown during RA-01, then merge. |
+| CL-01 | P1 | **Code complete** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Complete RA-01, delete the obsolete repository secret, and merge. |
 | RP-01 | P2 | **Deferred** | future | A production TEE may explicitly fall back to standard Solana history RPC without O(pages²), unsafe 429 latching, or unbounded fan-out. | TEE RPC behavior only; no wire/circuit/account change expected | Useful provider resilience, but not required for Surfpool local testing | Re-enter if a real-CVM/devnet run must operate without any gTFA-capable dedicated endpoint. Review by 2026-10-01. |
 | RP-02 | P2 | **Deferred** | future | Optional indexer and fee collector have provider-neutral history strategies appropriate to live versus archival duties. | Off-chain operator/client behavior | Fee collector still needs archival mainnet service | Re-enter before changing production RPC vendor or mainnet fee recovery provider. Review by 2026-10-01. |
 
@@ -794,3 +795,49 @@ Evidence still owed before Phase 4 is `Closed`:
 
 1. Merge the complete Surfpool stack after Phase 5 is ready. Phase 4 itself
    needed no billable CVM run; the controlled real-CVM baseline remains Phase 5.
+
+### Phase 5 — real-CVM release assurance and provider exit
+
+Implementation on `infra/surfpool-release-assurance`:
+
+- The manual CVM workflow now consumes one provider-neutral repository secret,
+  `DEVNET_RPC_URL`. It no longer constructs a Helius URL or depends on a
+  provider-named secret. The selected endpoint must still provide the capacity
+  and `getTransactionsForAddress` behavior required by the real release suite.
+- [`docs/rpc-environment-switching.md`](rpc-environment-switching.md)
+  gives exact entry, exit, teardown, evidence, and rollback commands for the
+  isolated `.surfpool/` and `.devnet/` modes. Switching changes configuration,
+  not protocol code, and explicitly forbids cross-environment state reuse.
+- Routine operator/SDK documentation and helpers now use
+  `SOLANA_RPC_URL`/`DEVNET_RPC_URL`; `scripts/run-indexer-local.sh` no longer
+  silently falls back to public devnet and no longer prints a credentialed URL.
+  The workflow-boundary guard pins these properties.
+- Retained Helius references are intentional and classified: immutable audit or
+  benchmark evidence; provider-specific TEE/indexer gTFA implementation and its
+  optional smoke; and finalized archival fee recovery. RP-01/RP-02 remain the
+  separately deferred work needed to make those production history consumers
+  provider-independent. They are not routine Surfpool callers.
+- The most recent real-CVM attempt, run `33100867967`, built its image but
+  failed before reset or deploy because the repository lacked
+  `DARKNYX_NIGHTLY_FEE_EPOCH_KEY`. Its unconditional stop step succeeded, so it
+  incurred no CVM test window. The locally retained epoch-2 key was checked by
+  deriving public binding
+  `1f9924156fa129f910a18bd075359864882d2b25af5ba8806ee33d86c1a0aa86`,
+  which exactly matches `.devnet/e2e-config.json`; no governance rotation is
+  required.
+
+Evidence still owed before Phase 5 can advance:
+
+1. Configure the generic RPC secret and the already-governed epoch-2 fee key
+   without printing either value.
+2. Push this exact branch, dispatch the manual workflow, and record its source
+   SHA, immutable image digest, compose hash, signer-set binding, transaction
+   signatures/slots/K roots, stage timings, DCAP and RA-TLS results, and daemon
+   lifecycle result.
+3. Require the workflow stop step, automatic sweeper, and an independent CVM
+   status query to agree that billing has stopped.
+4. Remove the obsolete `HELIUS_API_KEY` repository secret only after the final
+   evidence is captured. Subscription cancellation remains an account/billing
+   action, not a repository change.
+5. Merge the complete stack; only then may implementation rows become
+   `Closed`.

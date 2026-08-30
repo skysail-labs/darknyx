@@ -421,7 +421,7 @@ describe("control-api — input and error hygiene (SW-20)", () => {
 
   it("returns a closed-set label, never the internal message", async () => {
     // SW-01's twin on the client side. The daemon holds
-    // DARKNYX_DAEMON_RPC_URL, whose Helius key rides in the query string, and a
+    // DARKNYX_DAEMON_RPC_URL, whose credential may ride in the query string, and a
     // Solana transport error typically embeds the request URL in its message.
     daemon.placeOrder.mockRejectedValueOnce(
       new Error(

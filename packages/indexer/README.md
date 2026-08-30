@@ -77,7 +77,7 @@ The explicit trailer makes the clean cutover fail closed on legacy v1 blobs.
 ## Run it locally
 
 ```sh
-INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh
+INDEXER_RPC_URL="$SOLANA_RPC_URL" scripts/run-indexer-local.sh
 ```
 
 See the script header for env vars (`INDEXER_PORT`, `INDEXER_DB`,

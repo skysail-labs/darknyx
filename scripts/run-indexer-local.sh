@@ -8,10 +8,10 @@
 # the account-agnostic, by-order_id design).
 #
 # Usage:
-#   INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh
+#   INDEXER_RPC_URL="$SOLANA_RPC_URL" scripts/run-indexer-local.sh
 #
 # Env (all optional except the RPC):
-#   INDEXER_RPC_URL   devnet RPC (falls back to $HELIUS, then public devnet)
+#   INDEXER_RPC_URL   dedicated devnet RPC (falls back to $SOLANA_RPC_URL)
 #   INDEXER_PORT      HTTP port (default 8090)
 #   INDEXER_DB        SQLite path (default: a fresh temp file, removed on exit)
 #   INDEXER_PROGRAM_ID  vault program id (default: the devnet deploy)
@@ -20,7 +20,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-RPC="${INDEXER_RPC_URL:-${HELIUS:-https://api.devnet.solana.com}}"
+RPC="${INDEXER_RPC_URL:-${SOLANA_RPC_URL:-}}"
+[[ -n "$RPC" ]] || {
+  echo "INDEXER_RPC_URL or SOLANA_RPC_URL is required" >&2
+  exit 1
+}
 PORT="${INDEXER_PORT:-8090}"
 DB="${INDEXER_DB:-$(mktemp -t darknyx-idx.XXXXXX).sqlite}"
 PROGRAM="${INDEXER_PROGRAM_ID:-C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx}"
@@ -33,7 +37,7 @@ echo "building @darknyx/indexer..."
 # INDEXER_START_FROM_TIP=0 to get the production backfill-from-history path.
 FROM_TIP="${INDEXER_START_FROM_TIP:-1}"
 
-echo "starting indexer: rpc=$RPC port=$PORT db=$DB start_from_tip=$FROM_TIP"
+echo "starting indexer: rpc=configured port=$PORT db=$DB start_from_tip=$FROM_TIP"
 INDEXER_RPC_URL="$RPC" INDEXER_PORT="$PORT" INDEXER_DB="$DB" INDEXER_PROGRAM_ID="$PROGRAM" \
   INDEXER_START_FROM_TIP="$FROM_TIP" \
   node packages/indexer/dist/bin/indexer.js &

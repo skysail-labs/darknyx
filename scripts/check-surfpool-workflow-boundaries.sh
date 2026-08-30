@@ -52,6 +52,10 @@ for file in "$CVM" "$SWEEPER"; do
   reject "$file" '^  schedule:$' 'recurring paid-infrastructure schedule'
 done
 require "$CVM" 'Stop the CVM \(always\)' 'unconditional real-CVM teardown'
+require "$CVM" 'DEVNET_RPC_URL:.*secrets\.DEVNET_RPC_URL' \
+  'provider-neutral dedicated-RPC secret'
+reject "$CVM" 'HELIUS_API_KEY|devnet\.helius-rpc\.com' \
+  'provider-specific release credential'
 require "$SWEEPER" '^  workflow_run:$' 'automatic post-CVM cleanup trigger'
 require "$SWEEPER" 'cvm-e2e \(manual release gate\)' \
   'exact source-workflow name for automatic cleanup'
@@ -64,5 +68,24 @@ require "$GHCR_CLEANUP" '^  workflow_dispatch:$|^  workflow_dispatch:' \
   'manual registry-retention trigger'
 reject "$GHCR_CLEANUP" 'phala cvms|PHALA_CLOUD|SOLANA_RPC|api\.devnet\.solana\.com|[Hh][Ee][Ll][Ii][Uu][Ss]' \
   'CVM control-plane or Solana-provider reference'
+
+# Routine operator and SDK entrypoints must use the provider-neutral RPC
+# interface. Historical evidence, provider-specific scanners, and archival fee
+# recovery are intentionally outside this list.
+for file in \
+  CLAUDE.md \
+  docs/cvm-run-runbook.md \
+  scripts/dev-commands.md \
+  scripts/deploy-devnet.sh \
+  scripts/read-pyth-push-price.mjs \
+  scripts/run-indexer-local.sh \
+  packages/sdk/.env.example \
+  packages/sdk/.env.devnet.example \
+  packages/sdk/tests/TESTS.md; do
+  reject "$file" 'HELIUS_API_KEY|devnet\.helius-rpc\.com|\$HELIUS|private Helius' \
+    'routine Helius dependency'
+done
+reject scripts/run-indexer-local.sh 'api\.devnet\.solana\.com' \
+  'implicit public-devnet fallback'
 
 echo "Surfpool scheduled/manual-CVM workflow boundaries are intact"

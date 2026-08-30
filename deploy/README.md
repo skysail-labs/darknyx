@@ -47,7 +47,7 @@ simulator instead — see `scripts/dstack-simulator-start.sh`.
 
 ## Why are env vars not in the file?
 
-Operational secrets (Helius RPC URL + API key, DNS provider token,
+Operational secrets (credentialed RPC URL, DNS provider token,
 etc.) get encrypted client-side via the Phala dashboard and decrypted
 inside the CVM at start. **Never** commit a plaintext secret to this
 file — even a placeholder. Same goes for default RPC URLs that

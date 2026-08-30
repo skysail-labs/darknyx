@@ -116,7 +116,7 @@ deploy env is shredded immediately after use.
 # Export once — the floor capture below needs it too. Setting it inline on the
 # reset command alone leaves it unset for 1b, and the curl then posts to an
 # empty URL.
-export SOLANA_RPC_URL="$HELIUS"
+export SOLANA_RPC_URL="$DEVNET_RPC"
 
 # 1a. reset on-chain
 ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs

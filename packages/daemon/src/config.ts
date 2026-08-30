@@ -46,7 +46,7 @@ export interface DaemonConfig {
    * proves the channel but not that the enclave holds the governed settle keys.
    */
   expectSignerSetSha256?: string;
-  /** Solana RPC (Helius) for settlement reconciliation / leaf-index reads. */
+  /** Solana RPC for settlement reconciliation and leaf-index reads. */
   rpcUrl: string;
   /** Local sqlite path for note + managed-order persistence. */
   dbPath: string;

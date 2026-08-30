@@ -37,7 +37,7 @@
 #      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
-#   4. Add secrets `PHALA_CLOUD_API_KEY`, `HELIUS_API_KEY`, and
+#   4. Add secrets `PHALA_CLOUD_API_KEY`, `DEVNET_RPC_URL`, and
 #      `DARKNYX_NIGHTLY_FEE_EPOCH_KEY`. The fee key must be the 32-byte hex
 #      secret whose Poseidon binding is recorded in DEVNET_E2E_CONFIG_B64.
 # The K shard signers are deterministic per app_id; this workflow re-rotates +
@@ -87,7 +87,7 @@ jobs:
     # this just bounds a hung job so it can't run forever before teardown).
     timeout-minutes: 50
     env:
-      HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
+      DEVNET_RPC_URL: ${{ secrets.DEVNET_RPC_URL }}
       CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
       DARKNYX_NIGHTLY_FEE_EPOCH_KEY: ${{ secrets.DARKNYX_NIGHTLY_FEE_EPOCH_KEY }}
     steps:
@@ -146,12 +146,14 @@ jobs:
           echo "${{ secrets.DEVNET_ADMIN_KEYPAIR_B64 }}"  | base64 -d > .devnet/keypairs/admin.json
           echo "${{ secrets.DEVNET_FUNDER_KEYPAIR_B64 }}" | base64 -d > .devnet/keypairs/funder.json
           echo "${{ secrets.DEVNET_E2E_CONFIG_B64 }}"     | base64 -d > .devnet/e2e-config.json
-          # The SDK harness loads the Helius key from packages/sdk/.env (gitignored).
-          printf 'SOLANA_RPC_URL=%s\n' "$HELIUS_RPC" > packages/sdk/.env
+          # The SDK harness loads the dedicated RPC URL from packages/sdk/.env
+          # (gitignored). The provider credential, if any, stays in this secret.
+          printf 'SOLANA_RPC_URL=%s\n' "$DEVNET_RPC_URL" > packages/sdk/.env
 
       - name: Preflight — CVM id + config present
         run: |
           test -n "$CVM" || { echo "::error::repo variable DARKNYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
+          test -n "$DEVNET_RPC_URL" || { echo "::error::DEVNET_RPC_URL secret is unset"; exit 1; }
           jq -e .baseMint.pubkey .devnet/e2e-config.json > /dev/null
           [[ "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" =~ ^[0-9a-fA-F]{64}$ ]] \
             || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be a nonzero 32-byte hex secret"; exit 1; }
@@ -162,7 +164,7 @@ jobs:
       #    our deposits land at leaf 0.. (cvm tests assert startCount == 0) ──
       - name: Reset the Merkle tree (devnet)
         run: |
-          SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             node scripts/reset-merkle-tree.mjs
 
       # ── build the encrypted env (-e) file: real-mint regime (cvm-settle-e2e).
@@ -171,7 +173,7 @@ jobs:
         id: envfile
         run: |
           umask 077
-          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
 
           # Per-window CVM credentials.
           #
@@ -195,7 +197,7 @@ jobs:
             echo "DARKNYX_TEE_API_KEY=$API_KEY"
             echo "DARKNYX_TEE_API_SECRET=$API_SECRET"
             echo "DARKNYX_TEE_PASSPHRASE=$PASSPHRASE"
-            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
             echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -388,12 +390,12 @@ jobs:
           # Fall back to the /info primary if the log grep came up empty.
           [ -z "$KEYS" ] && KEYS=$(jq -r '.tee_pubkey' /tmp/info.json)
           echo "shard signers: $KEYS"
-          SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             node scripts/rotate-tee-pubkey.mjs $KEYS
           # 0.5 SOL/signer — a night of tests spends well under that, and it keeps
           # the funder from draining (and limits stranded SOL when build-from-main
           # rotates to new signers). Override with FUND_TARGET_SOL.
-          SOLANA_RPC_URL="$HELIUS_RPC" FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             FUND_TARGET_SOL="${FUND_TARGET_SOL:-0.5}" \
             node scripts/fund-tee-keys.mjs $KEYS
 
@@ -405,7 +407,7 @@ jobs:
       - name: Devnet round-trip (deposit → withdraw; no CVM needed)
         run: |
           cd packages/sdk
-          RUN_DEVNET_DW=1 SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_DEVNET_DW=1 SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts
@@ -415,7 +417,7 @@ jobs:
       - name: CVM API-surface e2e
         run: |
           cd packages/sdk
-          RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             ../../node_modules/.bin/vitest run tests/cvm-api-surface.test.ts
@@ -442,7 +444,7 @@ jobs:
       - name: CVM attestation e2e (real DCAP)
         run: |
           cd packages/sdk
-          RUN_CVM_ATTEST=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_ATTEST=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             ../../node_modules/.bin/vitest run tests/cvm-attestation-e2e.test.ts
 
       # Each of these asserts startCount==0 then deposits+settles, so they CANNOT
@@ -456,10 +458,10 @@ jobs:
         run: |
           set -uo pipefail
           redeploy_fresh() {
-            SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
               node scripts/reset-merkle-tree.mjs
             umask 077
-            FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+            FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
             {
               # The SAME per-window credentials the initial deploy used.
               #
@@ -472,7 +474,7 @@ jobs:
               echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
               echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
               echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
-              echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
               echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
               echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -490,7 +492,7 @@ jobs:
               echo "deploy busy — retry $d in 20s"; sleep 20
             done
             # Same secure-erase as the initial deploy — this file carries the
-            # Helius and Pyth credentials, and this helper rewrites it once per
+            # RPC and Pyth credentials, and this helper rewrites it once per
             # tree-consuming test, so a plain rm would leave the most-written
             # secret file on the runner as recoverable blocks.
             shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
@@ -540,7 +542,7 @@ jobs:
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
             echo "::group::$T"
             redeploy_fresh
-            ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+            ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
                 FUNDER_KEYPAIR=.devnet/keypairs/funder.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
                 ../../node_modules/.bin/vitest run tests/$T.test.ts ) || FAILED="$FAILED $T"
             echo "::endgroup::"
@@ -578,7 +580,7 @@ jobs:
             || { echo "::error::bad compose hash before the daemon run"; exit 1; }
           ( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 \
               DARKNYX_CVM_TRANSPORT=ra-tls \
-              DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+              DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
               ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
               FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
               ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
@@ -625,14 +627,14 @@ jobs:
             || { echo "::error::legacy transform did not publish :8080"; exit 1; }
 
           umask 077
-          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
           echo "checkpoint: sync floor = $FLOOR"
           set +x
           {
             echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
             echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
             echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
-            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
             echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -684,7 +686,7 @@ jobs:
           # deliberately UNSET so the harness selects plain fetch — the code
           # path a revert would actually take.
           ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$LEGACY_GW" \
-              SOLANA_RPC_URL="$HELIUS_RPC" \
+              SOLANA_RPC_URL="$DEVNET_RPC_URL" \
               env -u DARKNYX_CVM_TRANSPORT -u DARKNYX_EXPECT_COMPOSE_HASH -u DARKNYX_EXPECT_SIGNER_SET \
               ../../node_modules/.bin/vitest run --project cvm tests/cvm-api-surface.test.ts )
       # ═══════════════════════════════════════════════════════════════════════

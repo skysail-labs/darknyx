@@ -28,7 +28,7 @@
  * treat them as a steady-state estimate, not a guaranteed single-batch measurement.
  *
  * Real-mint regime + a fresh tree reset (like cvm-settle-e2e). Run:
- *   RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=4 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
+ *   RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=4 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$DEVNET_RPC \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-multimatch-settle.test.ts )
  */

@@ -19,7 +19,7 @@
  * ask's fee-inclusive collateral for qty Q (intake's `orders.rs` derivation).
  *
  * Gate: RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY + the VALID_MERGE artifacts. Run:
- *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$DEVNET_RPC \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-merge-then-order.test.ts )
  */

@@ -8,9 +8,9 @@
  *    issuer and account provisioning all talk to the enclave. Threading it
  *    into two of the three would leave a verified-looking deployment with one
  *    unverified path.
- * 2. **The Solana RPC path does NOT.** That upstream is Helius, not the
+ * 2. **The Solana RPC path does NOT.** That upstream is the chain provider, not the
  *    enclave. Routing it through an enclave-pinned transport would fail
- *    verification against a certificate Helius has no reason to present — so
+ *    verification against a certificate that provider has no reason to present — so
  *    the bug would look like an outage, not a security hole, and would be
  *    "fixed" by widening the transport.
  */
@@ -22,7 +22,9 @@ import type { ReleaseHostOptions } from "../src/types.js";
 
 const ORIGIN = "https://trade.example";
 
-function hostOptions(over: Partial<ReleaseHostOptions> = {}): ReleaseHostOptions {
+function hostOptions(
+  over: Partial<ReleaseHostOptions> = {},
+): ReleaseHostOptions {
   return {
     origin: ORIGIN,
     staticRoot: "/tmp",

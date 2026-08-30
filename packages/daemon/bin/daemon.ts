@@ -7,7 +7,7 @@
  * stay on this host.
  *
  *   DARKNYX_DAEMON_GATEWAY_URL=https://<app>-8443s.dstack-…  \
- *   DARKNYX_DAEMON_TOKEN=<jwt>  DARKNYX_DAEMON_RPC_URL=$HELIUS   \
+ *   DARKNYX_DAEMON_TOKEN=<jwt>  DARKNYX_DAEMON_RPC_URL=$SOLANA_RPC_URL \
  *   DARKNYX_DAEMON_EXPECT_COMPOSE_HASH=<approved-hex>             \
  *   DARKNYX_DAEMON_EXPECT_SIGNER_SET_SHA256=<finalized-set-hash>  \
  *   DARKNYX_DAEMON_API_KEY=<key> DARKNYX_DAEMON_API_SECRET=<secret> \
