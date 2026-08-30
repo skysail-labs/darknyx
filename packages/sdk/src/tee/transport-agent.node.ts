@@ -146,6 +146,17 @@ export class TransportAgent extends Agent {
       // meaningless here and its absence is NOT the security model. The SPKI
       // comparison against a quote-bound manifest is.
       rejectUnauthorized: false,
+      // TLS session resumption can legitimately omit the Certificate message.
+      // That is incompatible with this connector: every replacement socket
+      // must expose a certificate so its SPKI can be checked against the
+      // quote-bound boot key before an application byte is written. Undici
+      // otherwise caches 100 sessions per connector, which made an idle
+      // keep-alive reconnect intermittently fail `peer presented no
+      // certificate` even though the peer was the same enclave.
+      //
+      // One long-lived connection is the normal path, so disabling resumption
+      // costs only a full handshake after genuine socket churn.
+      maxCachedSessions: 0,
     });
     super({
       // One connection: with a pool, the attestation exchange and the request
