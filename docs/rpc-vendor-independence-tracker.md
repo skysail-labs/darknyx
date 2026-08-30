@@ -751,6 +751,14 @@ Implementation on `infra/surfpool-ci`:
   boundary guard passes, the port probe parses, and `git diff --check` is clean.
   No provider credential, public RPC, Phala CVM, circuit, wire, account layout,
   program behavior, CU, or transaction-size change is involved.
+- The first clean hosted attempt reached the production-TEE smoke after both
+  foundation cycles, then correctly failed before settlement because Actions
+  had checked out `match_batch_n16/circuit_final.zkey` as a 132-byte Git LFS
+  pointer. Ark surfaced this late as `read_zkey ... Invalid argument`. The
+  independent teardown still proved all five ports closed. The workflow now
+  hydrates LFS during checkout, excludes committed zkeys from the generated
+  circuit cache, invalidates the pointer-contaminated cache generation, and
+  rejects every required proving key smaller than 100,000 bytes before builds.
 
 Evidence still owed before Phase 4 is `Surfpool validated`:
 

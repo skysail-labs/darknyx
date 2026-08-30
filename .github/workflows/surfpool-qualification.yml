@@ -59,6 +59,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
+          # The prover keys are Git LFS objects. A pointer file passes `-f` but
+          # Ark reports only `Invalid argument` much later during TEE boot.
+          lfs: true
           persist-credentials: false
 
       - name: Install Node.js
@@ -77,8 +80,10 @@ jobs:
         id: cache-circuit-build
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: circuits/build
-          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
+          path: |
+            circuits/build
+            !circuits/build/*/circuit_final.zkey
+          key: circuit-build-v2-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
 
       - name: Restore circom 2.2.2
         if: steps.cache-circuit-build.outputs.cache-hit != 'true'
@@ -103,15 +108,24 @@ jobs:
         if: steps.cache-circuit-build.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: circuits/build
+          path: |
+            circuits/build
+            !circuits/build/*/circuit_final.zkey
           key: ${{ steps.cache-circuit-build.outputs.cache-primary-key }}
 
       - name: Require proof-generation artefacts
         run: |
           set -euo pipefail
           for name in valid_deposit valid_input valid_spend match_batch_n16; do
-            test -f "circuits/build/$name/circuit_js/circuit.wasm"
-            test -f "circuits/build/$name/circuit_final.zkey"
+            wasm="circuits/build/$name/circuit_js/circuit.wasm"
+            zkey="circuits/build/$name/circuit_final.zkey"
+            test -f "$wasm"
+            test -f "$zkey"
+            size=$(wc -c < "$zkey")
+            test "$size" -gt 100000 || {
+              echo "$zkey is only $size bytes; Git LFS object was not hydrated" >&2
+              exit 1
+            }
           done
 
       - name: Install Surfpool Linux build dependencies
