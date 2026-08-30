@@ -137,6 +137,20 @@ jobs:
           bash scripts/download-ptau.sh
           bash scripts/build-circuits.sh
 
+      # `actions/cache` normally saves in its post-job hook. A later CVM test
+      # failure skips that hook, throwing away the seven-minute deterministic
+      # build and making the diagnostic rerun rebuild the same artifacts.
+      # Persist immediately once the artifacts are complete; a settlement or
+      # transport failure later in the job must not invalidate this cache.
+      - name: Save circuit artifacts immediately (cache miss only)
+        if: steps.cache-circuits.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            circuits/build
+            scripts/ptau
+          key: circuits-${{ hashFiles('circuits/**/*.circom', 'circuits/templates/*.circom', 'scripts/build-circuits.sh') }}
+
       # ── restore devnet secrets to the paths the tests + scripts expect ──
       # `umask 077` + never echo; these are keypairs/API keys.
       - name: Restore devnet keypairs + e2e-config (from secrets)
