@@ -238,6 +238,14 @@ const MERGE = (k: 2 | 4) => ({
 });
 
 const withFee = (n: bigint) => n + (n * FEE_BPS) / 10_000n;
+const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
+  if (price <= 0n || tickSize <= 0n) {
+    throw new Error("price and tick size must be positive");
+  }
+  const aligned = price - (price % tickSize);
+  if (aligned === 0n) throw new Error("tick size exceeds the price");
+  return aligned;
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SOL_USD_FEED =
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
@@ -780,16 +788,19 @@ maybe("daemon full lifecycle (fill → leaf-resolve → merge → cancel)", () =
 
     // read-surface sanity (utilizes /transparency, /instruments, /account).
     expect(await buyer.tee.transparency()).toBeTruthy();
-    expect(await buyer.tee.instruments()).toBeTruthy();
+    const instruments = await buyer.tee.instruments();
+    const instrument = instruments.find((item) => item.symbol === SYMBOL);
+    expect(instrument, `missing live instrument ${SYMBOL}`).toBeTruthy();
+    const tickSize = BigInt(instrument!.tick_size);
 
     const anchor = await oracleAnchor();
-    const bidPrice = (anchor * 12n) / 10n; // above clearing
-    const askPrice = (anchor * 8n) / 10n; // below → crosses
+    const bidPrice = floorPriceToTick((anchor * 12n) / 10n, tickSize); // above clearing
+    const askPrice = floorPriceToTick((anchor * 8n) / 10n, tickSize); // below → crosses
     const SLICE = 1000n;
     const buyQty = SLICE * 10n; // resting bid covers many asks
     const collateral = withFee(buyQty * bidPrice);
     console.log(
-      `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
+      `  · anchor=${anchor} tick=${tickSize} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
     );
     const buyerAta = await associatedTokenAddress(
       quoteMint,
