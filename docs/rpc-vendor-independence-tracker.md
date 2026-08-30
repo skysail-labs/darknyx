@@ -744,9 +744,11 @@ Implementation on `infra/surfpool-ci`:
   workflow, or a recurring real-CVM/sweeper schedule.
 - `cvm-e2e.yml` remains fully dispatchable with immutable-image resolution,
   real devnet/TDX/RA-TLS checks, and unconditional CVM stop, but has no recurring
-  trigger. The emergency sweeper is likewise manual and shares the existing
-  concurrency group so it cannot race a live release run. Weekly GHCR image
-  retention remains scheduled because it starts no CVM and calls no Solana RPC.
+  trigger. The emergency sweeper runs automatically after that workflow
+  completes, including cancellation, is also manually dispatchable, and shares
+  the existing concurrency group so it cannot race a live release run. Weekly
+  GHCR image retention remains scheduled because it starts no CVM and calls no
+  Solana RPC; the source guard enforces that separate boundary.
 - Local source checks passed: both new shell scripts parse, the workflow
   boundary guard passes, the port probe parses, and `git diff --check` is clean.
   No provider credential, public RPC, Phala CVM, circuit, wire, account layout,

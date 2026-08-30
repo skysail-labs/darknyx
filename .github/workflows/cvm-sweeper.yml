@@ -1,4 +1,5 @@
-# Manually dispatched belt-and-suspenders teardown for the release CVM.
+# Post-run and manually dispatched belt-and-suspenders teardown for the release
+# CVM.
 #
 # cvm-e2e's own `Stop the CVM` step runs `if: always()`, covering pass/fail/error.
 # But a HARD cancel can skip even always() steps and leak a billable CVM. Run
@@ -14,6 +15,11 @@
 name: cvm-sweeper (teardown safety)
 
 on:
+  # A force-cancel can bypass the source workflow's `if: always()` step. The
+  # completed event still launches this default-branch cleanup workflow.
+  workflow_run:
+    workflows: ["cvm-e2e (manual release gate)"]
+    types: [completed]
   workflow_dispatch:
 
 concurrency:

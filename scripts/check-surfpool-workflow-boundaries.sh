@@ -11,6 +11,7 @@ cd "$ROOT"
 SURFPOOL=.github/workflows/surfpool-qualification.yml
 CVM=.github/workflows/cvm-e2e.yml
 SWEEPER=.github/workflows/cvm-sweeper.yml
+GHCR_CLEANUP=.github/workflows/cvm-ghcr-cleanup.yml
 
 require() {
   local file="$1"
@@ -51,5 +52,17 @@ for file in "$CVM" "$SWEEPER"; do
   reject "$file" '^  schedule:$' 'recurring paid-infrastructure schedule'
 done
 require "$CVM" 'Stop the CVM \(always\)' 'unconditional real-CVM teardown'
+require "$SWEEPER" '^  workflow_run:$' 'automatic post-CVM cleanup trigger'
+require "$SWEEPER" 'cvm-e2e \(manual release gate\)' \
+  'exact source-workflow name for automatic cleanup'
+
+# Registry retention is intentionally still scheduled: it starts no CVM and
+# calls no Solana RPC. Keep that distinction explicit instead of placing it in
+# the manual-CVM loop above.
+require "$GHCR_CLEANUP" '^  schedule:$' 'weekly registry-retention trigger'
+require "$GHCR_CLEANUP" '^  workflow_dispatch:$|^  workflow_dispatch:' \
+  'manual registry-retention trigger'
+reject "$GHCR_CLEANUP" 'phala cvms|PHALA_CLOUD|SOLANA_RPC|api\.devnet\.solana\.com|[Hh][Ee][Ll][Ii][Uu][Ss]' \
+  'CVM control-plane or Solana-provider reference'
 
 echo "Surfpool scheduled/manual-CVM workflow boundaries are intact"
