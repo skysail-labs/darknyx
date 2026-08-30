@@ -283,6 +283,8 @@ jobs:
 
       - name: Stop local processes and prove teardown
         if: always()
+        env:
+          PRIOR_JOB_STATUS: ${{ job.status }}
         run: |
           cleanup_status=0
           set +e
@@ -290,8 +292,13 @@ jobs:
           bash scripts/surfpool/foundation.sh down || cleanup_status=1
           node scripts/surfpool/ports-closed.mjs \
             127.0.0.1 18080 18899 18900 19488 || cleanup_status=1
-          find .surfpool/foundation/evidence -maxdepth 3 -name '*.log' \
-            -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
-          find .surfpool/local-tee/evidence -maxdepth 3 -name '*.log' \
-            -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+          if [[ "$PRIOR_JOB_STATUS" != success || "$cleanup_status" -ne 0 ]]; then
+            echo "Earlier execution or teardown failed; dumping diagnostic logs"
+            find .surfpool/foundation/evidence -maxdepth 3 -name '*.log' \
+              -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+            find .surfpool/local-tee/evidence -maxdepth 3 -name '*.log' \
+              -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+          else
+            echo "Teardown clean; successful-run evidence logs are not dumped"
+          fi
           exit "$cleanup_status"

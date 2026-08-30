@@ -4,8 +4,8 @@
 
 **Last updated:** 2026-08-30
 
-**Current phase:** Phase 4 is `Code complete` on `infra/surfpool-ci`. A clean
-hosted Linux amd64 run and the eventual whole-stack merge remain.
+**Current phase:** Phase 4 is `Surfpool validated` on hosted Linux amd64.
+Phase 5 release assurance and the eventual whole-stack merge remain.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -140,9 +140,9 @@ validated` evidence.
 | LT-02 | P0 | **Surfpool validated** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None | Replaces the paid provider's continuous local mirror traffic | Require the same nonempty exact-root evidence in Phase 4. |
 | LT-03 | P0 | **Surfpool validated** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None | Makes routine full protocol testing free of external RPC/CVM cost | Select a measured hosted cadence in Phase 4 without weakening the full local matrix. |
 | LT-04 | P1 | **Surfpool validated** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Preserve the boundary manifest and simulator-quote rejection in hosted runs. |
-| CI-01 | P0 | **Code complete** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Obtain the clean hosted Linux amd64 run, then advance only as far as that evidence supports. |
-| CI-02 | P0 | **Code complete** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Confirm every required marker and final five-port teardown in hosted output. |
-| CI-03 | P1 | **Code complete** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Verify `workflow_dispatch` and unconditional stop remain intact in review; no CVM run is required here. |
+| CI-01 | P0 | **Surfpool validated** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Merge the complete stack after Phase 5 evidence is recorded. |
+| CI-02 | P0 | **Surfpool validated** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Preserve the explicit marker and five-port teardown contract. |
+| CI-03 | P1 | **Surfpool validated** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Exercise the retained dispatch once in Phase 5; no CVM run was required here. |
 | RA-01 | P0 | **Open** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Execute using the already-paid endpoint after Phases 1–4 and before credential removal. |
 | RA-02 | P0 | **Open** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Record exact local and real entry/exit commands and rollback. |
 | CL-01 | P1 | **Open** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Inventory after CI migration; remove only proven-obsolete references/secrets. |
@@ -762,13 +762,35 @@ Implementation on `infra/surfpool-ci`:
   circuit cache, invalidates the pointer-contaminated cache generation, and
   rejects every required proving key smaller than 100,000 bytes before builds.
 
-Evidence still owed before Phase 4 is `Surfpool validated`:
+Hosted Linux amd64 evidence:
 
-1. A clean hosted Linux amd64 run must emit
-   `PHASE4_HOSTED_SMOKE_PASS cases=2 proofs=real` and
-   `PHASE4_TEARDOWN_PASS ports=18080,18899,18900,19488`, with all nested required
-   markers present and no skipped protocol case.
-2. The ordinary affected PR matrix and review must pass. Record the exact run
-   URL and elapsed time here before advancing CI-01…CI-03.
-3. `Closed` remains reserved for the merged full stack. Phase 4 does not need a
-   billable CVM run; the controlled real-CVM baseline is Phase 5.
+- [Run 33299056037](https://github.com/skysail-labs/darknyx/actions/runs/33299056037)
+  passed from a clean runner in 12 minutes 33 seconds. LFS proving-key hydration,
+  source/pin-scoped caches, the fingerprinted SBF, optimized production TEE,
+  and exact dstack simulator build all passed.
+- The two independent fresh-ledger cases emitted
+  `PHASE3_CASE_PASS flow=deposit-withdraw`,
+  `PHASE3_CASE_PASS flow=settle`, and
+  `PHASE3_MATRIX_PASS cases=2 mode=smoke`. The settle confirmed one match with
+  no rejected or ambiguous result and no rebroadcast.
+- The cold restart emitted
+  `SURFPOOL_TEE_RESTART_RECONCILED shards=2 total_leaves=7 tree0=7 tree1=0`;
+  production DCAP rejected simulator evidence with `kind=quote_invalid`.
+- The host-only Ark record was witness `866 ms`, proof step `4,776 ms`, total
+  prove `5,660 ms`, and total pipeline `7,245 ms`. These are shared-runner
+  diagnostics, not CVM or production latency claims.
+- The wrapper emitted `PHASE4_HOSTED_SMOKE_PASS cases=2 proofs=real` and
+  `PHASE4_TEARDOWN_PASS ports=18080,18899,18900,19488`. The independent
+  `if: always()` step repeated process shutdown and the same five-port probe.
+  Red `ERROR` lines visible in its original successful output came from tailed
+  negative-control Surfpool logs, not cleanup failures; successful runs now
+  retain those logs without dumping them.
+- The ordinary affected PR matrix passed. Review comments were revalidated:
+  automatic post-run sweeper coverage and an explicit GHCR-retention boundary
+  were added; the timezone, unrelated threat-model duplication, and misleading
+  command requests were rejected.
+
+Evidence still owed before Phase 4 is `Closed`:
+
+1. Merge the complete Surfpool stack after Phase 5 is ready. Phase 4 itself
+   needed no billable CVM run; the controlled real-CVM baseline remains Phase 5.
