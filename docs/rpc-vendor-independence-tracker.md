@@ -4,9 +4,9 @@
 
 **Last updated:** 2026-08-31
 
-**Current phase:** Phase 5 release assurance. The provider-neutral switching
-and cleanup implementation is code complete; the real-CVM run and eventual
-whole-stack merge remain.
+**Current phase:** Complete. The provider-neutral switching and cleanup
+implementation, hosted Surfpool validation, real-CVM release run, and complete
+stack merge are finished.
 
 **Active stack base:** `main` at `41a2a518`
 
@@ -129,24 +129,24 @@ validated` evidence.
 
 | ID | Priority | Status | Phase | Invariant/deliverable | Wire/circuit/account impact | Cost or fidelity impact | Next action |
 | --- | --- | --- | ---: | --- | --- | --- | --- |
-| SP-01 | P0 | **Surfpool validated** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | Cached source build; removes moving-main ambiguity | Retain the exact pin until a released build containing gTFA passes the same matrix. |
-| SP-02 | P0 | **Surfpool validated** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Carry the proven nonempty history/root contract into the Phase 3 host-TEE restart test. |
-| SP-03 | P0 | **Surfpool validated** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Reuse the qualified installer in Phase 2's repeatable isolated foundation. |
-| SP-04 | P0 | **Surfpool validated** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Full host-TEE settlement remains Phase 3; do not report this row as CVM evidence. |
-| LF-01 | P0 | **Surfpool validated** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Reuse the supervisor for Phase 3 host-TEE lifecycle and restart evidence. |
-| LF-02 | P0 | **Surfpool validated** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Keep Phase 3 simulator/process state inside the same isolated namespace without archiving secrets. |
-| LF-03 | P0 | **Surfpool validated** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Retain the exact non-vacuous marker when Phase 4 promotes this foundation into scheduled CI. |
-| LF-04 | P1 | **Surfpool validated** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Preserve loopback-only control-plane assertions across Phase 3 and Phase 4. |
-| LT-01 | P0 | **Surfpool validated** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Carry the measured supervisor into Phase 4 hosted integration. |
-| LT-02 | P0 | **Surfpool validated** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None | Replaces the paid provider's continuous local mirror traffic | Require the same nonempty exact-root evidence in Phase 4. |
-| LT-03 | P0 | **Surfpool validated** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None | Makes routine full protocol testing free of external RPC/CVM cost | Select a measured hosted cadence in Phase 4 without weakening the full local matrix. |
-| LT-04 | P1 | **Surfpool validated** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Preserve the boundary manifest and simulator-quote rejection in hosted runs. |
-| CI-01 | P0 | **Surfpool validated** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Merge the complete stack after Phase 5 evidence is recorded. |
-| CI-02 | P0 | **Surfpool validated** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Preserve the explicit marker and five-port teardown contract. |
-| CI-03 | P1 | **Surfpool validated** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Exercise the retained dispatch once in Phase 5; no CVM run was required here. |
-| RA-01 | P0 | **CVM validated** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Merge the complete stack after CI is green; retain the recorded run as the release baseline. |
-| RA-02 | P0 | **CVM validated** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Merge the complete stack after CI is green. |
-| CL-01 | P1 | **CVM validated** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Merge the complete stack after CI is green; subscription cancellation remains an account action. |
+| SP-01 | P0 | **Closed** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | Cached source build; removes moving-main ambiguity | Retain the exact pin until a released build containing gTFA passes the same matrix. |
+| SP-02 | P0 | **Closed** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Preserve the proven nonempty history/root contract. |
+| SP-03 | P0 | **Closed** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Preserve the fingerprinted installer and deployed-byte comparison. |
+| SP-04 | P0 | **Closed** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Preserve the conformance matrix. |
+| LF-01 | P0 | **Closed** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Preserve supervisor and teardown assertions. |
+| LF-02 | P0 | **Closed** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Preserve local/real state isolation. |
+| LF-03 | P0 | **Closed** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Preserve positive and adversarial fixture coverage. |
+| LF-04 | P1 | **Closed** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Preserve loopback-only guards. |
+| LT-01 | P0 | **Closed** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Preserve the simulator evidence boundary. |
+| LT-02 | P0 | **Closed** | 3 | Cold boot and restart reconstruct every K-shard Merkle mirror through Surfpool native gTFA and reconcile exact counts and roots before trading. | None | Replaces the paid provider's continuous local mirror traffic | Preserve exact-root restart coverage. |
+| LT-03 | P0 | **Closed** | 3 | Deposit/withdraw, merge, settle, multimatch, self-trade, merge-then-order, expiry, and recovery run against local RPC with real proofs. | None | Makes routine full protocol testing free of external RPC/CVM cost | Preserve the non-vacuous full matrix. |
+| LT-04 | P1 | **Closed** | 3 | Local results state exactly which TDX/RA-TLS/KMS/real-cluster properties remain untested. | Documentation/test naming only | Prevents simulator evidence inflation | Preserve boundary manifests and quote rejection. |
+| CI-01 | P0 | **Closed** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Preserve the scheduled provider-free gate. |
+| CI-02 | P0 | **Closed** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Preserve explicit markers and teardown checks. |
+| CI-03 | P1 | **Closed** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Preserve manual dispatch and automatic sweeper coverage. |
+| RA-01 | P0 | **Closed** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Retain the recorded run as the release baseline. |
+| RA-02 | P0 | **Closed** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Preserve configuration-only switching and state isolation. |
+| CL-01 | P1 | **Closed** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Subscription cancellation remains an account action. |
 | RP-01 | P2 | **Deferred** | future | A production TEE may explicitly fall back to standard Solana history RPC without O(pages²), unsafe 429 latching, or unbounded fan-out. | TEE RPC behavior only; no wire/circuit/account change expected | Useful provider resilience, but not required for Surfpool local testing | Re-enter if a real-CVM/devnet run must operate without any gTFA-capable dedicated endpoint. Review by 2026-10-01. |
 | RP-02 | P2 | **Deferred** | future | Optional indexer and fee collector have provider-neutral history strategies appropriate to live versus archival duties. | Off-chain operator/client behavior | Fee collector still needs archival mainnet service | Re-enter before changing production RPC vendor or mainnet fee recovery provider. Review by 2026-10-01. |
 
@@ -898,9 +898,6 @@ Implementation on `infra/surfpool-release-assurance`:
   threat-model expansion, stale trigger observations, and cosmetic/minor
   suggestions without a runtime or evidence consequence were declined.
 
-Evidence still owed before Phase 5 is `Closed`:
-
-1. Let the Git LFS quota renew and obtain green PR checks without weakening
-   artifact hydration or verification.
-2. Merge the complete stack. Only then may RA-01, RA-02, and CL-01 move from
-   `CVM validated` to `Closed`.
+Phase 5 and the complete Surfpool migration stack are closed. RP-01 and RP-02
+remain separately deferred under their recorded re-entry conditions; they are
+not incomplete work in this migration.
