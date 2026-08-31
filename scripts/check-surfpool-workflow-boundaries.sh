@@ -54,6 +54,12 @@ done
 require "$CVM" 'Stop the CVM \(always\)' 'unconditional real-CVM teardown'
 require "$CVM" 'DEVNET_RPC_URL:.*secrets\.DEVNET_RPC_URL' \
   'provider-neutral dedicated-RPC secret'
+require "$CVM" 'capture_settlement_metrics' \
+  'pre-redeploy settlement timing capture'
+require "$CVM" '/admin/metrics/settlement\?limit=100' \
+  'authenticated settlement metrics query'
+require "$CVM" 'CVM_SETTLEMENT_METRICS' \
+  'structured real-CVM timing evidence marker'
 reject "$CVM" 'HELIUS_API_KEY|devnet\.helius-rpc\.com' \
   'provider-specific release credential'
 

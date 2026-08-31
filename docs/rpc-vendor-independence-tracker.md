@@ -837,19 +837,32 @@ Implementation on `infra/surfpool-release-assurance`:
   shards before taking the compatibility redeploy's post-reset floor, with a
   source guard enforcing that order. This partial run is diagnostic evidence,
   not RA-01 closure; the corrected complete run remains mandatory.
+- Corrected run
+  [`33383848125`](https://github.com/skysail-labs/darknyx/actions/runs/33383848125)
+  at source SHA `f8c2244c43391ca50534f6b9e517058846119edd`
+  passed the complete matrix, including the corrected gateway-terminated
+  compatibility cold boot. It used immutable image digest
+  `sha256:f04d1734253048236e91039e3c92b9889edd7da5a398ccf7fc632d236ba82771`,
+  verified RA-TLS plus real DCAP, passed all four reset-isolated settlement
+  suites and the live daemon lifecycle, and ended with both the workflow stop
+  and an independent control-plane query reporting `status: stopped`, no
+  instance, and no services. The run did not capture the scheduler's
+  admin-only timing snapshot before each subsequent cold redeploy, and stopped
+  CVMs expose no historical container through the CLI. It is therefore
+  complete behavioral evidence but not yet the timing-complete RA-01 closure
+  run. The workflow now makes that snapshot mandatory after every successful
+  tree-consuming suite and emits a redacted `CVM_SETTLEMENT_METRICS` record.
 
 Evidence still owed before Phase 5 can advance:
 
-1. Configure the generic RPC secret and the already-governed epoch-2 fee key
-   without printing either value.
-2. Push this exact branch, dispatch the manual workflow, and record its source
-   SHA, immutable image digest, compose hash, signer-set binding, transaction
-   signatures/slots/K roots, stage timings, DCAP and RA-TLS results, and daemon
-   lifecycle result.
-3. Require the workflow stop step, automatic sweeper, and an independent CVM
+1. Re-run the exact manual workflow with mandatory scheduler-metrics capture;
+   record its source SHA, immutable image digest, compose hash, signer-set
+   binding, transaction signatures/slots/K roots, stage timings, DCAP and
+   RA-TLS results, and daemon lifecycle result.
+2. Require the workflow stop step, automatic sweeper, and an independent CVM
    status query to agree that billing has stopped.
-4. Remove the obsolete `HELIUS_API_KEY` repository secret only after the final
+3. Remove the obsolete `HELIUS_API_KEY` repository secret only after the final
    evidence is captured. Subscription cancellation remains an account/billing
    action, not a repository change.
-5. Merge the complete stack; only then may implementation rows become
+4. Merge the complete stack; only then may implementation rows become
    `Closed`.

@@ -580,13 +580,97 @@ jobs:
               || { echo "::error::bad signer set after redeploy for $T"; exit 1; }
             echo "re-pinned: compose=$DARKNYX_EXPECT_COMPOSE_HASH"
           }
+          capture_settlement_metrics() {
+            local label="$1"
+            local token metrics_file
+            # Metrics live in the scheduler process and are intentionally reset
+            # on every cold redeploy. Capture them immediately after the test,
+            # before the next loop iteration replaces that process. This is an
+            # authenticated, privacy-reviewed surface: the response excludes
+            # prices, amounts, note identities, and raw provider errors.
+            token=$(curl -fsSk --max-time 40 \
+              -H 'content-type: application/json' \
+              --data "$(jq -nc \
+                --arg api_key "$DARKNYX_TEE_API_KEY" \
+                --arg api_secret "$DARKNYX_TEE_API_SECRET" \
+                --arg passphrase "$DARKNYX_TEE_PASSPHRASE" \
+                '{api_key:$api_key,api_secret:$api_secret,passphrase:$passphrase}')" \
+              "$GATEWAY/auth/token" | jq -er '.access_token')
+            metrics_file="/tmp/${label}-settlement-metrics.json"
+            curl -fsSk --max-time 40 \
+              -H "authorization: Bearer $token" \
+              "$GATEWAY/admin/metrics/settlement?limit=100" \
+              -o "$metrics_file"
+
+            # A green protocol test without a complete timing record is not
+            # release evidence. Require one confirmed batch and every field
+            # needed to compare witness/prover time with the transaction-bound
+            # stages on the real CVM and validator.
+            jq -e '
+              (.schema_version | type) == "number" and
+              (.boot_session_id | type) == "string" and
+              (.compose_hash | type) == "string" and
+              any(.recent_batches[];
+                .outcomes.confirmed > 0 and
+                ([.timings.lock_ms,
+                  .timings.witness_ms,
+                  .timings.prove_step_ms,
+                  .timings.prove_ms,
+                  .timings.verify_ms,
+                  .timings.alt_tx_ms,
+                  .timings.alt_wait_ms,
+                  .timings.parallel_ms,
+                  .timings.settle_ms,
+                  .timings.close_ms,
+                  .timings.total_ms]
+                 | all(type == "number")))
+            ' "$metrics_file" >/dev/null || {
+              echo "::error::$label completed without a full settlement timing record"
+              jq '{schema_version,boot_session_id,compose_hash,counters,recent_batches}' \
+                "$metrics_file" || true
+              return 1
+            }
+
+            # Deliberately omit match IDs. This compact record is sufficient
+            # for release evidence and remains safe to retain in Actions logs.
+            jq -c --arg test "$label" '{
+              event: "CVM_SETTLEMENT_METRICS",
+              test: $test,
+              boot_session_id,
+              compose_hash,
+              counters,
+              batches: [.recent_batches[] | {
+                seq,
+                market_id,
+                active_matches,
+                padded_slots,
+                prover_backend,
+                witness_backend,
+                prover_device,
+                settle_concurrency,
+                settle_send_concurrency,
+                timings,
+                outcomes,
+                confirmed_slots,
+                distinct_confirmed_slots,
+                rebroadcasts,
+                pipeline_failure
+              }]
+            }' "$metrics_file"
+          }
           FAILED=""
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
             echo "::group::$T"
             redeploy_fresh
+            TEST_PASSED=1
             ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
                 FUNDER_KEYPAIR=.devnet/keypairs/funder.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-                ../../node_modules/.bin/vitest run tests/$T.test.ts ) || FAILED="$FAILED $T"
+                ../../node_modules/.bin/vitest run tests/$T.test.ts ) || TEST_PASSED=0
+            if [ "$TEST_PASSED" = 1 ]; then
+              capture_settlement_metrics "$T" || FAILED="$FAILED $T-metrics"
+            else
+              FAILED="$FAILED $T"
+            fi
             echo "::endgroup::"
           done
           [ -z "$FAILED" ] || { echo "::error::CVM tests failed:$FAILED"; exit 1; }
