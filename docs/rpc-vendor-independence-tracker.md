@@ -2,7 +2,7 @@
 
 **Created:** 2026-08-27
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-08-31
 
 **Current phase:** Phase 5 release assurance. The provider-neutral switching
 and cleanup implementation is code complete; the real-CVM run and eventual
@@ -825,6 +825,18 @@ Implementation on `infra/surfpool-release-assurance`:
   `1f9924156fa129f910a18bd075359864882d2b25af5ba8806ee33d86c1a0aa86`,
   which exactly matches `.devnet/e2e-config.json`; no governance rotation is
   required.
+- Run `33315362243` at source SHA `99417a4eaa8ec56553c52485edf1069230271662`
+  passed the real deposit/withdraw round trip, CVM API surface, RA-TLS socket
+  binding, real DCAP attestation, all reset-isolated tree-consuming suites,
+  and the daemon lifecycle. Its only failed step was the final
+  gateway-terminated compatibility redeploy: that cold mirror took a current
+  sync floor after the preceding suites had added leaves, so the independent
+  `MerkleReadiness` gate correctly remained closed. The oracle snapshot was
+  healthy (`age_ms=210339`, `max_age_ms=420000`); this was not an oracle
+  failure. The unconditional CVM stop succeeded. The workflow now resets all
+  shards before taking the compatibility redeploy's post-reset floor, with a
+  source guard enforcing that order. This partial run is diagnostic evidence,
+  not RA-01 closure; the corrected complete run remains mandatory.
 
 Evidence still owed before Phase 5 can advance:
 

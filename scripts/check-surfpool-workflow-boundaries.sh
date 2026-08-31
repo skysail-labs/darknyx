@@ -56,6 +56,19 @@ require "$CVM" 'DEVNET_RPC_URL:.*secrets\.DEVNET_RPC_URL' \
   'provider-neutral dedicated-RPC secret'
 reject "$CVM" 'HELIUS_API_KEY|devnet\.helius-rpc\.com' \
   'provider-specific release credential'
+
+# The final legacy-transport check is a real cold redeploy after earlier suites
+# have added leaves. Its fresh mirror may use a current sync floor only after
+# the on-chain trees are reset; reversing or dropping these lines leaves the
+# independent MerkleReadiness gate closed even while the oracle is healthy.
+legacy_block=$(sed -n '/- name: Legacy (gateway-terminated) path still works/,/- name: Stop the CVM (always)/p' "$CVM")
+legacy_reset_line=$(printf '%s\n' "$legacy_block" | grep -n 'node scripts/reset-merkle-tree\.mjs' | head -1 | cut -d: -f1 || true)
+legacy_floor_line=$(printf '%s\n' "$legacy_block" | grep -n 'FLOOR=$(node -e' | head -1 | cut -d: -f1 || true)
+if [[ -z "$legacy_reset_line" || -z "$legacy_floor_line" || "$legacy_reset_line" -ge "$legacy_floor_line" ]]; then
+  echo "$CVM: legacy cold redeploy must reset every Merkle shard before taking its sync floor" >&2
+  exit 1
+fi
+
 require "$SWEEPER" '^  workflow_run:$' 'automatic post-CVM cleanup trigger'
 require "$SWEEPER" 'cvm-e2e \(manual release gate\)' \
   'exact source-workflow name for automatic cleanup'

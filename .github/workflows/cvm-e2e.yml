@@ -669,6 +669,15 @@ jobs:
             || { echo "::error::legacy transform did not publish :8080"; exit 1; }
 
           umask 077
+          # This redeploy cold-starts another Merkle mirror. The suites above
+          # have consumed the initially empty tree, so taking a current sync
+          # floor without resetting would skip those historical leaves and
+          # correctly leave the venue paused for MerkleReadiness forever. The
+          # legacy API-surface check owns no state from the RA-TLS run; give it
+          # the same empty-tree/post-reset-floor boundary as every other cold
+          # CVM test.
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            node scripts/reset-merkle-tree.mjs
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
           echo "checkpoint: sync floor = $FLOOR"
           set +x
