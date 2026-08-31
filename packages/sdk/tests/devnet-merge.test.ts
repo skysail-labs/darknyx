@@ -9,10 +9,11 @@
  * and that the merged note is a real, spendable leaf.
  *
  * Gate: RUN_DEVNET_MERGE=1 + a vault deployed with the merge ix + the built merge
- * circuits. Uses .devnet/keypairs/admin.json + .devnet/e2e-config.json.
+ * circuits. The config and admin keypair default to `.devnet/`, but explicit
+ * environment paths allow the same protocol flow on an isolated Surfnet.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,7 +64,10 @@ import { noteCommitmentFromBytes } from "../src/utxo/note-identity.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH?.trim() || ".devnet/e2e-config.json",
+);
 const SPEND_WASM = resolve(
   REPO_ROOT,
   "circuits/build/valid_spend/circuit_js/circuit.wasm",
@@ -92,6 +96,7 @@ const VAULT_ID = new PublicKey(
 const READY =
   process.env.RUN_DEVNET_MERGE === "1" &&
   existsSync(CONFIG_PATH) &&
+  statSync(CONFIG_PATH).isFile() &&
   existsSync(DEPOSIT_WASM) &&
   existsSync(DEPOSIT_ZKEY) &&
   existsSync(MERGE_ZKEY) &&
@@ -119,7 +124,9 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = await loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(
+      process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
+    );
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const ata = await associatedTokenAddress(mint, admin.publicKey);
 

@@ -9,7 +9,7 @@
 #
 # Usage:
 #   ./scripts/deploy-devnet.sh
-#   SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=... \
+#   SOLANA_RPC_URL=https://<your-devnet-rpc-provider>/<credential> \
 #     ./scripts/deploy-devnet.sh
 #
 # Prereqs:

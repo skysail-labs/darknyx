@@ -279,8 +279,7 @@ function queryAllowed(pathname: string, search: URLSearchParams): boolean {
   }
   if (path === "/attestation") {
     return (
-      search.size === 1 &&
-      /^[0-9a-f]{64}$/.test(search.get("reportData") ?? "")
+      search.size === 1 && /^[0-9a-f]{64}$/.test(search.get("reportData") ?? "")
     );
   }
   return [...search.values()].every((value) => /^[0-9a-f]{1,128}$/.test(value));
@@ -335,7 +334,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
     throw new Error("public release endpoints do not match the live proxy");
   }
   // T-03P: CVM-bound requests may use a verified transport; the RPC upstream
-  // must not (it is Helius, not the enclave — see `cvmFetch` in types.ts).
+  // must not (it is the chain RPC, not the enclave — see `cvmFetch` in types.ts).
   const cvmFetch = options.cvmFetch ?? fetch;
   const timeoutMs = options.proxyTimeoutMs ?? 20_000;
   const rateLimit = options.maxProxyRequestsPerMinute ?? 600;
@@ -428,10 +427,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
       upstream.on("open", () => {
         for (const message of pending) {
           const length = rawBytes(message.data).length;
-          if (
-            upstream.bufferedAmount + length >
-            MAX_WS_BUFFERED_BYTES
-          ) {
+          if (upstream.bufferedAmount + length > MAX_WS_BUFFERED_BYTES) {
             closeBoth(1009, "relay buffer exceeded");
             break;
           }
@@ -558,8 +554,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         const session = admit(request);
         if (!session) return rejectUpgrade(socket, 401);
         if (
-          (activeRelays.get(session) ?? 0) >=
-          MAX_WS_CONNECTIONS_PER_SESSION
+          (activeRelays.get(session) ?? 0) >= MAX_WS_CONNECTIONS_PER_SESSION
         ) {
           return rejectUpgrade(socket, 429);
         }
@@ -581,10 +576,8 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
           }
         };
         if (url.pathname === `${VENUE_PREFIX}/v1/stream`) {
-          return beginRelay(
-            new URL("v1/stream", gateway),
-            (bytes) =>
-              bytes.length <= MAX_WS_MESSAGE_BYTES ? bytes : null,
+          return beginRelay(new URL("v1/stream", gateway), (bytes) =>
+            bytes.length <= MAX_WS_MESSAGE_BYTES ? bytes : null,
           );
         }
         if (url.pathname === RPC_PATH) {

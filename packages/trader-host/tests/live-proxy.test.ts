@@ -171,7 +171,7 @@ function closeSocket(socket: WebSocket): Promise<void> {
 }
 
 describe("same-origin live proxy", () => {
-  it("keeps the upstreams and Helius key server-side", async () => {
+  it("keeps the upstreams and RPC credential server-side", async () => {
     const { base, cookie, upstreamRequests, tokenRequests } = await setup();
     expect(tokenRequests()).toBe(0);
     const info = await fetch(`${base}/api/darknyx/venue/info`, {

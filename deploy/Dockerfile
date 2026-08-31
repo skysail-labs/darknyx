@@ -225,7 +225,7 @@ FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf8
 # userspace runtime libs + the icicle backend .so for the GPU image.
 ARG ENABLE_CUDA=0
 
-# ca-certificates: needed for outbound HTTPS to Helius RPC + Pyth.
+# ca-certificates: needed for outbound HTTPS to the configured RPC + Pyth.
 # tini: PID 1 reaper, gives us clean signal handling.
 # libstdc++6: the rapidsnark static libs (librapidsnark/fr/fq) are C++;
 #   gmp is linked statically but libstdc++ is dynamic, so the runtime needs

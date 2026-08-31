@@ -63,7 +63,7 @@ cd /path/to/repo/root
 - §1 Unit + integration tests (no devnet, no CVM)
 - §2 The "everything green" pre-commit gate
 - §3 Circuits
-- §4 Devnet foundation — CLI, Helius RPC, deploy, fresh state, mints
+- §4 Devnet foundation — CLI, dedicated RPC, deploy, fresh state, mints
 - §5 The CVM (Phala TEE) — build image, deploy, env, signer rotation
 - §6 Devnet E2E #1 — CVM-driven settle (`cvm-settle-e2e`)
 - §7 Devnet E2E #2 — loadgen against a CVM
@@ -237,7 +237,37 @@ redeploy the vault — see CLAUDE.md §5. Only a TEE-proved circuit change
 
 ---
 
-## 4. Devnet foundation — CLI, Helius RPC, deploy, fresh state, mints
+## 3.5 Offline Surfpool foundation (no CVM, devnet, or provider RPC)
+
+The exact pre-release Surfpool source revision and binary checksums live in
+`scripts/surfpool/pin.json`; build or install only that revision. The lifecycle
+requires the fingerprinted devnet-admin SBF and keeps every generated key,
+mint, ALT, config, log, and signature below `.surfpool/`:
+
+```sh
+bash scripts/build-vault-sbf.sh devnet-admin
+
+# Explicit lifecycle, useful while inspecting the local ledger:
+bash scripts/surfpool/foundation.sh up manual-1
+bash scripts/surfpool/foundation.sh verify
+bash scripts/surfpool/foundation.sh status
+bash scripts/surfpool/foundation.sh down
+
+# Or the cleanup-safe complete cycle used by hosted validation:
+bash scripts/surfpool/foundation.sh cycle manual-1
+```
+
+The runner binds all Surfpool services to `127.0.0.1`, passes `--offline`,
+rejects datasource configuration and non-loopback RPC URLs, and proves the
+recorded PID plus RPC/WS/Studio ports are gone during `down`. `verify` drives
+the production Rust Pyth push poller through the exact fresh and adversarial
+`PriceUpdateV2` fixture matrix. Full setup, artifact installation, and binary
+provenance instructions are in `scripts/surfpool/README.md`.
+
+This is Surfpool evidence only. The real Phala/devnet commands below remain the
+manual release and demo gate and use the independent `.devnet/` namespace.
+
+## 4. Devnet foundation — CLI, dedicated RPC, deploy, fresh state, mints
 
 ### 4.1 Point the Solana CLI at devnet + fund your local wallet
 
@@ -250,26 +280,26 @@ solana balance                                    # need a few SOL; faucet or a 
 The local wallet (`~/.config/solana/id.json`) is the upgrade authority +
 fee payer for deploys and the funder for test personas / the CVM signer.
 
-### 4.2 Helius RPC (why, and how to use it)
+### 4.2 Dedicated release RPC (why, and how to use it)
 
-The public `api.devnet.solana.com` **429s** the heavy paths — the e2e
-harness's many reads — AND the TEE Merkle sync + the fills indexer now use
-Helius' **`getTransactionsForAddress`** (gTFA), which is **Helius-exclusive**
-(not a standard Solana RPC method), so a private RPC (Helius) is **required**,
-not just nice-to-have:
+The public `api.devnet.solana.com` is suitable for a small human diagnostic,
+not the heavy release suite. The real-CVM gate also needs the history method
+`getTransactionsForAddress` and enough capacity for proof-backed setup,
+settlement, reconciliation, and recovery. Configure a dedicated provider URL:
 
 ```text
-https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>
+https://<your-devnet-rpc-provider>/<credential>
 ```
 
 Rules:
-- **Never commit the key.** It goes into the CVM via the encrypted `-e`
+- **Never commit the credential.** It goes into the CVM via the encrypted `-e`
   env file (§5.3) and into test runs via the `SOLANA_RPC_URL` env var.
 - The light path (deploys, the reset/rotate scripts, faucet transfers) is
   fine on the public devnet URL.
-- A handy alias for the rest of this doc:
+- A provider-neutral alias for the rest of this doc:
+
   ```sh
-  HELIUS="https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
+  DEVNET_RPC="https://<your-devnet-rpc-provider>/<credential>"
   ```
 
 ### 4.3 Deploy the programs
@@ -298,7 +328,7 @@ settle ALT** (`[vault_config, sysvar, system, merkle_tree(0..K-1)]` — the
 **`numTrees`**, **`merkleTreePdas[]`**, and governed market fields).
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" \
+SOLANA_RPC_URL="$DEVNET_RPC" \
 RUN_DEVNET_E2E=1 \
   DARKNYX_NUM_TREES=4 \                                # shard count (default 1); must equal the CVM's DARKNYX_TEE_NUM_TREES
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
@@ -321,10 +351,10 @@ The CVM e2e harness (§6) asserts the tree starts **empty**. Between runs you
 only need the reset, not a full setup:
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/reset-merkle-tree.mjs                 # --all (default): reads num_trees, resets every shard
 # or a single shard:
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/reset-merkle-tree.mjs --tree 2
 ```
 
@@ -428,7 +458,7 @@ curl -s "$GW/info" | jq .                          # signer (tee_pubkey), app_id
 `deploy/docker-compose.yaml` references secret/per-deploy values as
 `${VAR}`; `phala deploy -e <file>` injects them as **encrypted env** (the
 reference is in `compose_hash`, the value never is). Build the file fresh
-each deploy (the Helius key is secret — write it `umask 077`, **shred it
+each deploy (the RPC credential is secret — write it `umask 077`, **shred it
 after**):
 
 ```sh
@@ -437,9 +467,9 @@ BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
-FLOOR=$(solana slot --url "$HELIUS")              # cold-boot floor (so the sync rebuilds the CURRENT tree)
+FLOOR=$(solana slot --url "$DEVNET_RPC")          # cold-boot floor (so the sync rebuilds the CURRENT tree)
 cat > /tmp/darknyx.env <<EOF
-DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC
 DARKNYX_TEE_DEPLOYMENT_TIER=development
 DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
@@ -462,7 +492,7 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 
 | Var | Used by | Notes |
 |---|---|---|
-| `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
+| `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | Dedicated cluster RPC with the required history API and capacity. Release composes set it explicitly. |
 | `DARKNYX_TEE_DEPLOYMENT_TIER` | boot policy | Set `development` explicitly for CVM/devnet push rehearsals. Mainnet composes default to `mainnet`, which rejects push mode or a missing router credential. |
 | `DARKNYX_TEE_ORACLE_MODE` | oracle source + freshness | Exactly one versioned mode: `pyth-solana-push-v1` (development, finalized Solana push account, 7 min) or `pyth-router-quorum-v1` (mainnet low-latency, upgraded router 3-of-5, 5 s). |
 | `DARKNYX_TEE_HERMES_ENDPOINT` | router-only transport | The router mode accepts the upgraded `https://pyth.dourolabs.app/hermes` endpoint (loopback is allowed only for tests). Ignored by push mode. |
@@ -502,11 +532,11 @@ phala cvms logs "$CVM" | grep "derived K-shard TEE signer set"
 K0=…; K1=…; K2=…; K3=…
 
 # Install the FULL authorized set (admin-gated set_tee_pubkey(Vec<Pubkey>)):
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/rotate-tee-pubkey.mjs $K0 $K1 $K2 $K3      # one key still works for K=1
 
 # Fund each shard signer (default 2 SOL/key; idempotent, skips if already ≥target):
-SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
+SOLANA_RPC_URL="$DEVNET_RPC" FUNDER_KEYPAIR=~/.config/solana/id.json \
   node scripts/fund-tee-keys.mjs $K0 $K1 $K2 $K3
 ```
 
@@ -525,21 +555,21 @@ grows.
 **Prereqs (in order):**
 
 ```sh
-HELIUS="https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
+DEVNET_RPC="https://<your-devnet-rpc-provider>/<credential>"
 GW="https://$CVM-8443s.dstack-pha-$NODE.phala.network"  # resolve $CVM + $NODE first
 
 # 1. Fresh devnet state (mints + settle ALT + reset + e2e-config.json):  §4.4
-# 2. CVM deployed with the REAL mints + fee 30 + owner + Helius + sync floor:  §5.1–5.3
+# 2. CVM deployed with the REAL mints + fee 30 + owner + dedicated RPC + sync floor: §5.1–5.3
 # 3. vault.tee_pubkey rotated to the CVM signer + signer funded:  §5.4
 # 4. Tree reset right before the run:
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs
 ```
 
 **Run:**
 
 ```sh
 RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" \
-  SOLANA_RPC_URL="$HELIUS" \
+  SOLANA_RPC_URL="$DEVNET_RPC" \
   DARKNYX_CVM_SETTLE_TIMEOUT_MS=150000 \
   FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
@@ -576,7 +606,7 @@ single-tree ~2.67×). Same real-mint regime as §6.
 
 ```sh
 # Reset all shards first (the test asserts trees start empty), then:
-RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=16 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=16 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$DEVNET_RPC" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-multimatch-settle.test.ts'
 
@@ -598,13 +628,13 @@ same devnet RPC, and the CVM never talks to it.
 
 ```sh
 # 1. Start the local indexer (temp SQLite, reads devnet read-only) in another shell.
-INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh    # serves :8090 — GET /fills, /health
+INDEXER_RPC_URL="$DEVNET_RPC" scripts/run-indexer-local.sh # serves :8090 — GET /fills, /health
 
 # 2. Run cvm-settle-e2e with fills mode on. It mints note_e → asserts the buyer's
 #    change note over (a) the indexer GET /fills and (b) the live per-account WS,
 #    and reconstructs the spendable opening from the seed (the integrity check).
 RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" DARKNYX_INDEXER_URL="http://127.0.0.1:8090" \
-  SOLANA_RPC_URL="$HELIUS" DARKNYX_CVM_SETTLE_TIMEOUT_MS=150000 \
+  SOLANA_RPC_URL="$DEVNET_RPC" DARKNYX_CVM_SETTLE_TIMEOUT_MS=150000 \
   FUNDER_KEYPAIR="$HOME/.config/solana/id.json" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts'
 ```
@@ -635,15 +665,15 @@ orders carry no real VALID_INPUT proof, so their settles fail gracefully at
 
 **Prereqs:** deploy the CVM with the **placeholder dev mints** (omit
 `DARKNYX_TEE_BASE_MINT`/`_QUOTE_MINT` from `-e`) + `DARKNYX_TEE_FEE_RATE_BPS=30` +
-Helius:
+the configured dedicated RPC:
 
 ```sh
 umask 077
 cat > /tmp/darknyx-lg.env <<EOF
-DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC
 DARKNYX_TEE_DEPLOYMENT_TIER=development
 DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
-DARKNYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$HELIUS")
+DARKNYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$DEVNET_RPC")
 DARKNYX_TEE_FEE_RATE_BPS=30
 EOF
 phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx-lg.env
@@ -655,7 +685,7 @@ drifts far from the matcher's live Pyth feed and the circuit breaker trips → 0
 matches), and `--fee-rate-bps` MUST equal the CVM's rate:
 
 ```sh
-RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+RAW=$(SOLANA_RPC_URL="$DEVNET_RPC" node scripts/read-pyth-push-price.mjs \
   ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 
 cargo run -q -p darknyx-tee-loadgen -- \
@@ -701,7 +731,7 @@ Use it to test vault crypto and lock-layout changes without spending on a CVM;
 it does not replace a full settlement smoke.
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_DW=1 \
+SOLANA_RPC_URL="$DEVNET_RPC" RUN_DEVNET_DW=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts'
@@ -718,7 +748,7 @@ merged note with a VALID_SPEND proof and asserts the consolidated amount
 round-trips (and `leaf_count` 2 → 3: two inputs nullified, one output leaf).
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_MERGE=1 \
+SOLANA_RPC_URL="$DEVNET_RPC" RUN_DEVNET_MERGE=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-merge.test.ts'
@@ -762,7 +792,7 @@ rm -rf node_modules packages/sdk/dist circuits/build
 ### 9.2 On-chain Merkle tree (devnet only)
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs
 ```
 
 Symptom that you need it: `StaleMerkleRoot (6004 / 0x1774)` on withdraw, or

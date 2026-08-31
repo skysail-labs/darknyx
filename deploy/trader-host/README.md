@@ -1,7 +1,7 @@
 # Separate trader-host deployment
 
 The browser origin is deliberately **not** a service in the Phala compose. It
-serves public code, terminates browser sessions, retains the private Helius URL,
+serves public code, terminates browser sessions, retains the credentialed RPC URL,
 and provisions isolated non-admin CVM accounts. Putting it inside the CVM would
 couple frontend releases to the attested matcher image and expand the enclave's
 internet-facing attack surface without protecting users from a malicious web
@@ -57,7 +57,7 @@ container):
 - `account-store.key`: a different 32-byte canonical base64url key.
 - `admin.json`: exactly `api_key`, `api_secret`, and `passphrase` for the CVM
   bootstrap admin.
-- `rpc.url`: the complete private Helius URL, including its query credential.
+- `rpc.url`: the complete dedicated RPC URL, including any query credential.
 
 The encrypted browser-account mapping is written beneath the state mount. Do
 not place it on ephemeral storage: losing it can strand existing browser

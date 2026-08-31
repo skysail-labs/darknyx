@@ -50,6 +50,7 @@ function opensslAvailable(): boolean {
 
 const HAS_OPENSSL = opensslAvailable();
 let connectionCount = 0;
+let resumedSessions: boolean[] = [];
 
 describe("socketSpkiSha256 — against a real TLS handshake", () => {
   let dir: string;
@@ -84,8 +85,9 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
     );
     // Counted so the single-connection property can be asserted behaviourally;
     // undici's Agent does not expose its options.
-    server.on("secureConnection", () => {
+    server.on("secureConnection", (socket) => {
       connectionCount += 1;
+      resumedSessions.push(socket.isSessionReused());
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     port = (server.address() as { port: number }).port;
@@ -134,21 +136,57 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
       // neither of which constrains `connections` at all, so raising it to 8
       // would have left this green.
       const agent = new TransportAgent();
-      connectionCount = 0;
-      const { fetch: uf } = await import("undici");
-      await Promise.all(
-        Array.from({ length: 4 }, () =>
-          uf(`https://127.0.0.1:${port}/`, { dispatcher: agent } as never).then(
-            (r) => r.text(),
+      try {
+        connectionCount = 0;
+        const { fetch: uf } = await import("undici");
+        await Promise.all(
+          Array.from({ length: 4 }, () =>
+            uf(`https://127.0.0.1:${port}/`, { dispatcher: agent } as never).then(
+              (r) => r.text(),
+            ),
           ),
-        ),
-      );
-      expect(
-        connectionCount,
-        "the agent opened more than one connection; attestation and request " +
-          "can no longer be assumed to share a socket",
-      ).toBe(1);
-      await agent.close();
+        );
+        expect(
+          connectionCount,
+          "the agent opened more than one connection; attestation and request " +
+            "can no longer be assumed to share a socket",
+        ).toBe(1);
+      } finally {
+        await agent.close();
+      }
+    },
+  );
+
+  it.skipIf(!HAS_OPENSSL)(
+    "uses a full certificate-bearing handshake after socket churn",
+    async () => {
+      // Undici caches TLS sessions by default. A resumed handshake may omit
+      // the Certificate message, leaving getPeerX509Certificate() empty and
+      // making an otherwise legitimate replacement impossible to bind to the
+      // attested SPKI. Force a reconnect and pin the production requirement:
+      // every socket this adapter accepts completes a full handshake.
+      const agent = new TransportAgent();
+      try {
+        const { fetch: uf } = await import("undici");
+        connectionCount = 0;
+        resumedSessions = [];
+
+        await uf(`https://127.0.0.1:${port}/`, {
+          dispatcher: agent,
+        } as never).then((r) => r.text());
+        const first = agent.currentSocket();
+        expect(first).toBeDefined();
+        agent.destroySocket(first!);
+
+        await uf(`https://127.0.0.1:${port}/`, {
+          dispatcher: agent,
+        } as never).then((r) => r.text());
+
+        expect(connectionCount).toBe(2);
+        expect(resumedSessions).toEqual([false, false]);
+      } finally {
+        await agent.close();
+      }
     },
   );
 });

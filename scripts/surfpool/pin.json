@@ -1,0 +1,27 @@
+{
+  "repository": "solana-foundation/surfpool",
+  "commit": "d419af7a671fca4f2c9e94621a3f9540b639f6f8",
+  "toolchain": "1.95.0",
+  "buildRunId": 33089478745,
+  "buildCommand": "cargo build --release --locked --target <target> --features supervisor_ui --features version_check",
+  "reportedVersion": "surfpool 1.5.0",
+  "studioUi": {
+    "release": "v0.2.0-alpha.0",
+    "url": "https://github.com/solana-foundation/surfpool-web-ui/releases/download/v0.2.0-alpha.0/studio-dist.zip",
+    "sha256": "84970f226b5e8eabebf75acc266c6db72b9af6c79ffa68e8f5b69351cde85d11"
+  },
+  "artifacts": {
+    "darwin-arm64": {
+      "artifactId": 9654344973,
+      "archive": "surfpool-darwin-arm64.tar.gz",
+      "archiveSha256": "2441366d0c0bbcccaee324c8f5baf8d3ead063332f4d457f329c5ba00a8fad18",
+      "binarySha256": "326a07455ba6d097c91b8d646c76f26354e6ddc7580175c58e472807831132ab"
+    },
+    "linux-x64": {
+      "artifactId": 9654169314,
+      "archive": "surfpool-linux-x64.tar.gz",
+      "archiveSha256": "63a4effa40681d5dca9ffecb95af2815683cc18878e082077670666cc73489c8",
+      "binarySha256": "f2b867eda5d3c056a4650043072fdfcd0c680841174d8fde2fb8de6a301164c1"
+    }
+  }
+}

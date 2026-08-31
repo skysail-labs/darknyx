@@ -10,8 +10,8 @@
 //!
 //! 2. **Real devnet smoke** — gated on `RUN_DEVNET_RPC_SMOKE=1`.
 //!    Hits `api.devnet.solana.com` and asserts the live network
-//!    returns a sane blockhash. Runs locally + during the
-//!    `/test-devnet` flow but never in CI by default.
+//!    returns a sane blockhash. It is a manual diagnostic and never
+//!    part of scheduled or default CI.
 //!
 //! Run with: `cargo test -p darknyx-tee --test solana_rpc`
 

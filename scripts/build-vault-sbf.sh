@@ -30,15 +30,18 @@ fi
 SO="$ROOT/target/deploy/vault.so"
 test -f "$SO" || { echo "expected $SO after build-sbf" >&2; exit 1; }
 
-# Two-line manifest: the feature set the artifact was built with, then the
-# fingerprint of the source it was built from. The reader needs the feature set
-# to recompute the fingerprint, and needs it stated explicitly so it can also
+# Three-line manifest: the feature set, source fingerprint, and exact artifact
+# digest. The source fingerprint rejects an artifact built from stale source;
+# the binary digest also rejects a `vault.so` modified after the manifest was
+# written. The reader needs the feature set to recompute the fingerprint and to
 # reject an artifact built without `devnet-admin` (which omits instructions the
 # LiteSVM suite exercises, and would otherwise fail in confusing ways deep
 # inside a test rather than at load).
 FP="$(bash "$ROOT/scripts/vault-sbf-fingerprint.sh" "$FEATURES")"
+SO_SHA256="$(shasum -a 256 "$SO" | awk '{print $1}')"
 {
   printf 'features=%s\n' "$FEATURES"
   printf 'fingerprint=%s\n' "$FP"
+  printf 'binary_sha256=%s\n' "$SO_SHA256"
 } > "$SO.fingerprint"
-echo "wrote $SO.fingerprint (features='$FEATURES', fingerprint=$FP)"
+echo "wrote $SO.fingerprint (features='$FEATURES', fingerprint=$FP, binary_sha256=$SO_SHA256)"

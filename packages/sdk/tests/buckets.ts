@@ -6,7 +6,7 @@
  * Three buckets, by required infrastructure:
  *   - LOCAL  : pure unit / parity / prover / wire-format tests. No network,
  *              no env gate. The default `vitest run` and `test:local` target.
- *   - DEVNET : need a Solana devnet RPC (Helius) + the `.devnet/` foundation
+ *   - DEVNET : need a dedicated Solana devnet RPC + the `.devnet/` foundation
  *              (e2e-config + keypairs). Gated by their own `RUN_DEVNET_*` env
  *              flag (they `describe.skip` themselves when unset).
  *   - CVM    : need a *running* Phala CVM gateway in addition to devnet.

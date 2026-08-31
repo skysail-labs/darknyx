@@ -1,8 +1,7 @@
 # Prune old cvm-e2e-* images from ghcr.io/skysail-labs/darknyx-tee.
 #
-# The twice-weekly cvm-e2e run (cvm-e2e.yml) pushes a fresh `cvm-e2e-<sha>` image for
-# every distinct main SHA it builds, so those accumulate over time. This keeps
-# only the newest N and prunes the rest.
+# Each manually dispatched cvm-e2e run can push a fresh `cvm-e2e-<sha>` image
+# for a distinct main SHA. This keeps only the newest N and prunes the rest.
 #
 # SAFETY — it NEVER touches the hand-curated `tee-v3-hardening-*` release tags or
 # `buildcache`: it only selects versions whose tags are ALL `cvm-e2e-*` (and

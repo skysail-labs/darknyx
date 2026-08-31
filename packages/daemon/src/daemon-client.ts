@@ -2,7 +2,7 @@
  * createDaemonClient — a deposit-capable SDK `DarkPoolClient` for the daemon.
  *
  * Wires the daemon's keystore (seed-derived spending/recovery keys) + the operator's payer
- * keypair + a Helius connection into the SDK client that backs the daemon's
+ * keypair + a configured Solana connection into the SDK client that backs the daemon's
  * direct on-chain actions.
  *
  * SCOPE: this client is wired for **deposit** only. Deposits generate a real

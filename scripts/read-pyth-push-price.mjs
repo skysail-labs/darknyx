@@ -12,9 +12,7 @@ const FEED = (process.argv[2] ?? "").replace(/^0x/i, "").toLowerCase();
 const RPC = process.env.SOLANA_RPC_URL?.trim();
 
 if (!RPC)
-  throw new Error(
-    "SOLANA_RPC_URL is required (use the private Helius endpoint)",
-  );
+  throw new Error("SOLANA_RPC_URL is required (use the configured chain RPC)");
 if (!/^[0-9a-f]{64}$/.test(FEED))
   throw new Error("feed id must be 32-byte hex");
 
