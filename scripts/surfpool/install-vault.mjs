@@ -32,6 +32,16 @@ const [program, fingerprint] = await Promise.all([
 ]);
 assert.match(fingerprint, /^features=devnet-admin$/m);
 assert.match(fingerprint, /^fingerprint=[0-9a-f]{64}$/m);
+const recordedArtifactSha256 = fingerprint.match(
+  /^binary_sha256=([0-9a-f]{64})$/m,
+)?.[1];
+assert.ok(recordedArtifactSha256, "fingerprint has no binary_sha256 binding");
+const artifactSha256 = createHash("sha256").update(program).digest("hex");
+assert.equal(
+  artifactSha256,
+  recordedArtifactSha256,
+  "vault.so differs from the binary bound by its fingerprint manifest",
+);
 
 let id = 0;
 async function rpc(method, params) {
@@ -79,7 +89,6 @@ assert.equal(programDataAccount.value.data[1], "base64");
 const rawProgramData = Buffer.from(programDataAccount.value.data[0], "base64");
 assert.equal(rawProgramData.readUInt32LE(0), 3, "invalid ProgramData state");
 const deployedProgram = rawProgramData.subarray(45);
-const artifactSha256 = createHash("sha256").update(program).digest("hex");
 const deployedSha256 = createHash("sha256")
   .update(deployedProgram)
   .digest("hex");

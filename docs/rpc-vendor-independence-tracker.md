@@ -892,11 +892,11 @@ Implementation on `infra/surfpool-release-assurance`:
   landed after the final paid run and will be exercised by the next ordinary
   release dispatch rather than causing another billable run.
 - Review comments were handled by substance. Fail-closed qualification input,
-  real pagination assertions, independent compose identity, transport-agent
-  cleanup, secure GPU-runbook secret handling, and stale command fixes were
-  accepted. Unrelated threat-model expansion, stale trigger observations, and
-  cosmetic/minor suggestions without a runtime or evidence consequence were
-  declined.
+  real pagination assertions, pre-upload fingerprint-to-SBF binary binding,
+  independent compose identity, transport-agent cleanup, secure GPU-runbook
+  secret handling, and stale command fixes were accepted. Unrelated
+  threat-model expansion, stale trigger observations, and cosmetic/minor
+  suggestions without a runtime or evidence consequence were declined.
 
 Evidence still owed before Phase 5 is `Closed`:
 

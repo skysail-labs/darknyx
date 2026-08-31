@@ -31,7 +31,7 @@ async fn cold_boot_reconstructs_exact_surfpool_shard_roots() {
     assert!(
         matches!(
             parsed_url.host_str(),
-            Some("127.0.0.1" | "localhost" | "::1")
+            Some("127.0.0.1" | "localhost" | "::1" | "[::1]")
         ),
         "qualification refuses a non-loopback RPC"
     );

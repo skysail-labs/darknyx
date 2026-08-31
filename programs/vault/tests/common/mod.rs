@@ -39,6 +39,8 @@ pub fn repo_root() -> PathBuf {
 /// here rather than reimplemented, so the build side and the check side cannot
 /// drift.
 pub fn vault_program_so() -> PathBuf {
+    use sha2::{Digest, Sha256};
+
     let root = repo_root();
     let so = root.join("target/deploy/vault.so");
     assert!(
@@ -61,21 +63,35 @@ pub fn vault_program_so() -> PathBuf {
 
     let mut features = None;
     let mut recorded_fp = None;
+    let mut recorded_binary_sha256 = None;
     for line in recorded.lines() {
         if let Some(v) = line.strip_prefix("features=") {
             features = Some(v.trim().to_string());
         } else if let Some(v) = line.strip_prefix("fingerprint=") {
             recorded_fp = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("binary_sha256=") {
+            recorded_binary_sha256 = Some(v.trim().to_string());
         }
     }
-    let (features, recorded_fp) = match (features, recorded_fp) {
-        (Some(f), Some(p)) => (f, p),
-        _ => panic!(
-            "\n\n{} is malformed (want `features=` and `fingerprint=` lines).\n\
-             Fix: bash scripts/build-vault-sbf.sh\n",
-            manifest.display()
-        ),
-    };
+    let (features, recorded_fp, recorded_binary_sha256) =
+        match (features, recorded_fp, recorded_binary_sha256) {
+            (Some(f), Some(p), Some(binary)) => (f, p, binary),
+            _ => panic!(
+                "\n\n{} is malformed (want `features=`, `fingerprint=`, and \
+                 `binary_sha256=` lines).\n\
+                 Fix: bash scripts/build-vault-sbf.sh\n",
+                manifest.display()
+            ),
+        };
+
+    let current_binary_sha256 = format!("{:x}", Sha256::digest(fs::read(&so).unwrap()));
+    assert_eq!(
+        recorded_binary_sha256, current_binary_sha256,
+        "\n\ntarget/deploy/vault.so does not match its fingerprint manifest. The binary \
+         changed after the manifest was written.\n  recorded: {recorded_binary_sha256}\n  \
+         current:  {current_binary_sha256}\n\
+         Fix: bash scripts/build-vault-sbf.sh\n"
+    );
 
     // The suite exercises `reset_merkle_tree` / `close_vault_config`, which only
     // exist under `devnet-admin` (F-01/F-02 keep them out of a mainnet build).
