@@ -6,7 +6,10 @@ import { pipeline } from "node:stream/promises";
 
 import { publicReleaseJson } from "./release.js";
 import { createLiveProxy } from "./live-proxy.js";
-import { securityHeaders } from "./security.js";
+import {
+  securityHeaders,
+  tradingViewFrameSecurityHeaders,
+} from "./security.js";
 import { handleSession, type SessionRuntimeState } from "./session.js";
 import type { ReleaseHostOptions } from "./types.js";
 
@@ -188,6 +191,13 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
       if (request.method !== "GET" && request.method !== "HEAD") {
         response.writeHead(405, { "cache-control": "no-store" });
         return response.end();
+      }
+      if (url.pathname === "/tradingview.html") {
+        apply(response, tradingViewFrameSecurityHeaders());
+        // The default custody document is deliberately unframeable. This one
+        // isolated chart document is the narrow exception; setting a looser
+        // CSP cannot override an inherited X-Frame-Options: DENY header.
+        response.removeHeader("X-Frame-Options");
       }
       if (url.pathname === "/release.json") {
         response.writeHead(200, {

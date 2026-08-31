@@ -56,6 +56,10 @@ async function fixture(
     join(root, "index.html"),
     "<!doctype html><main>Darknyx</main>",
   );
+  await writeFile(
+    join(root, "tradingview.html"),
+    "<!doctype html><main>Public chart</main>",
+  );
   await writeFile(join(root, `app.${"a".repeat(16)}.js`), "export {};\n");
   let randomCounter = 0;
   const server = createReleaseHost({
@@ -305,9 +309,7 @@ describe("release host", () => {
     const page = await fetch(base);
     expect(await page.text()).toContain("Darknyx");
     expect(page.headers.get("cross-origin-opener-policy")).toBe("same-origin");
-    expect(page.headers.get("cross-origin-embedder-policy")).toBe(
-      "require-corp",
-    );
+    expect(page.headers.get("cross-origin-embedder-policy")).toBeNull();
     expect(page.headers.get("cross-origin-resource-policy")).toBe(
       "same-origin",
     );
@@ -324,8 +326,26 @@ describe("release host", () => {
     expect(csp).toContain("require-trusted-types-for 'script'");
     expect(csp).toContain("https://artifacts.example");
     expect(csp).toContain("https://pccs.phala.network");
+    expect(csp).toContain("frame-src 'self' http://127.0.0.1:8080");
+    expect(csp).not.toContain("s3.tradingview.com");
     expect(csp).not.toContain("unsafe-inline");
     expect(csp).not.toContain("preload");
+    const chart = await fetch(`${base}/tradingview.html`);
+    expect(await chart.text()).toContain("Public chart");
+    expect(chart.headers.get("cross-origin-opener-policy")).toBe("unsafe-none");
+    expect(chart.headers.get("cross-origin-embedder-policy")).toBe(
+      "unsafe-none",
+    );
+    expect(chart.headers.get("x-frame-options")).toBeNull();
+    expect(chart.headers.get("permissions-policy")).not.toContain(
+      "publickey-credentials-get=(self)",
+    );
+    const chartCsp = String(chart.headers.get("content-security-policy"));
+    expect(chartCsp).toContain("https://s3.tradingview.com");
+    expect(chartCsp).toContain("https://www.tradingview-widget.com");
+    expect(chartCsp).toContain("frame-ancestors http://localhost:8080");
+    expect(chartCsp).not.toContain("https://gateway.example");
+    expect(chartCsp).not.toContain("https://rpc.example");
     const etag = page.headers.get("etag");
     expect(etag).toBeTruthy();
     expect(

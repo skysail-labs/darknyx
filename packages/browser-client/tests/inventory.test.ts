@@ -129,6 +129,127 @@ describe("browser inventory plane", () => {
     await expect(reloaded.allocateOrderIndex()).resolves.toBe(1);
   });
 
+  it("exposes a locally created deposit as soon as its transaction is confirmed", async () => {
+    const store = new InMemoryInventoryStore();
+    const inventory = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const deposited = await note(mint(0x9e), 250n, 39n, 7n);
+
+    await inventory.recordConfirmedDeposit({
+      ...deposited,
+      treeId: 0,
+      leafIndex: 7n,
+    });
+
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "250",
+        reservedAtoms: "0",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+    const reloaded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(reloaded.listBalances()).resolves.toEqual(
+      await inventory.listBalances(),
+    );
+  });
+
+  it("atomically replaces confirmed merge inputs with their output note", async () => {
+    const store = new InMemoryInventoryStore();
+    const inventory = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("merge-a", "merge-b"),
+    });
+    const first = await note(mint(0x9e), 70n, 51n, 7n);
+    const second = await note(mint(0x9e), 30n, 52n, 8n);
+    await inventory.recover(report([first, second]), async () => false);
+    const held = await inventory.reserveAccountMerge(market.quoteMintHex);
+    expect(held).toHaveLength(2);
+    const output = await note(mint(0x9e), 100n, 53n, 9n);
+
+    await inventory.recordConfirmedMerge(
+      held.map(({ note: heldNote }) => heldNote.commitment),
+      { ...output, treeId: 0, leafIndex: 9n },
+    );
+
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "100",
+        reservedAtoms: "0",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+    await expect(
+      inventory.noteLayout(market.quoteMintHex),
+    ).resolves.toMatchObject({
+      totalNotes: 1,
+      spendableNotes: 1,
+    });
+    const reloaded = await BrowserInventory.create({
+      store,
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    await expect(reloaded.listBalances()).resolves.toEqual(
+      await inventory.listBalances(),
+    );
+  });
+
+  it("rolls back the entire merge transition when durable storage fails", async () => {
+    const backing = new InMemoryInventoryStore();
+    let rejectSave = false;
+    const inventory = await BrowserInventory.create({
+      store: {
+        load: () => backing.load(),
+        save: async (snapshot) => {
+          if (rejectSave) throw new Error("durable save failed");
+          await backing.save(snapshot);
+        },
+        clear: () => backing.clear(),
+      },
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("merge-a", "merge-b"),
+    });
+    const first = await note(mint(0x9e), 70n, 61n, 10n);
+    const second = await note(mint(0x9e), 30n, 62n, 11n);
+    await inventory.recover(report([first, second]), async () => false);
+    const held = await inventory.reserveAccountMerge(market.quoteMintHex);
+    const output = await note(mint(0x9e), 100n, 63n, 12n);
+    rejectSave = true;
+
+    await expect(
+      inventory.recordConfirmedMerge(
+        held.map(({ note: heldNote }) => heldNote.commitment),
+        { ...output, treeId: 0, leafIndex: 12n },
+      ),
+    ).rejects.toThrow("durable save failed");
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "100",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
   it("rolls an account reservation back when durable persistence fails", async () => {
     const backing = new InMemoryInventoryStore();
     let rejectSave = false;
@@ -366,6 +487,128 @@ describe("browser inventory plane", () => {
     await expect(inventory.order(orderId)).resolves.toMatchObject({
       kind: "open",
     });
+  });
+
+  it("does not let an older venue snapshot close a newer accepted order", async () => {
+    let now = 100;
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-race", "reservation-race"),
+      now: () => now,
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 55n, 15n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    await inventory.allocateOrderIndex();
+    const orderId = "dd".repeat(16);
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "submitting",
+      createdAtMs: now,
+      updatedAtMs: now,
+    });
+
+    // The request producing this empty snapshot starts first. The placement
+    // acknowledgement updates the local order while that request is in flight.
+    const snapshotStartedAtMs = 110;
+    now = 120;
+    await inventory.updateOrder(orderId, { kind: "open" });
+    await inventory.reconcileVenueOpenOrders([], { snapshotStartedAtMs });
+
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "open",
+      updatedAtMs: 120,
+    });
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "2000",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("repairs a falsely closed order when the venue still reports it open", async () => {
+    let now = 200;
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-repair", "reservation-repair"),
+      now: () => now,
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 57n, 16n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    await inventory.allocateOrderIndex();
+    const orderId = "ee".repeat(16);
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "open",
+      createdAtMs: now,
+      updatedAtMs: now,
+    });
+    now = 300;
+    await inventory.reconcileVenueOpenOrders([]);
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "closed",
+    });
+
+    now = 400;
+    await inventory.reconcileVenueOpenOrders([orderId]);
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "open",
+      updatedAtMs: 400,
+    });
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "0",
+        reservedAtoms: "2000",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
   });
 
   it("does not release collateral for an offline-closed order whose on-chain lock remains", async () => {

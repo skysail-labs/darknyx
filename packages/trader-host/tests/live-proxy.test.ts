@@ -50,7 +50,7 @@ async function listen(
   return address.port;
 }
 
-async function setup() {
+async function setup(options: { verifiedStream?: boolean } = {}) {
   const upstreamRequests: Array<{
     path: string;
     body: string;
@@ -89,6 +89,7 @@ async function setup() {
   await writeFile(join(root, "index.html"), "ok");
   let random = 0;
   let tokenRequests = 0;
+  let verifiedStreamConnections = 0;
   const host = createReleaseHost({
     origin,
     staticRoot: root,
@@ -105,6 +106,30 @@ async function setup() {
     randomBytes: (length) => new Uint8Array(length).fill((random += 1)),
     gatewayUpstreamUrl: `http://localhost:${upstreamPort}/gateway/`,
     rpcUpstreamUrl: `http://localhost:${upstreamPort}/rpc?api-key=private`,
+    ...(options.verifiedStream
+      ? {
+          cvmFetch: fetch,
+          cvmWebSocketFactory: (url: string) => {
+            verifiedStreamConnections += 1;
+            const socket = new WebSocket(url);
+            const pending: string[] = [];
+            let opened = false;
+            socket.once("open", () => {
+              opened = true;
+              for (const frame of pending.splice(0)) socket.send(frame);
+            });
+            return {
+              addEventListener: (type, callback) =>
+                socket.addEventListener(type, callback as never),
+              send: (frame) => {
+                if (opened) socket.send(frame);
+                else pending.push(frame);
+              },
+              close: () => socket.close(),
+            };
+          },
+        }
+      : {}),
   });
   const hostPort = await listen(host);
   const base = `http://127.0.0.1:${hostPort}`;
@@ -127,6 +152,7 @@ async function setup() {
     cookie,
     upstreamRequests,
     tokenRequests: () => tokenRequests,
+    verifiedStreamConnections: () => verifiedStreamConnections,
   };
 }
 
@@ -239,6 +265,34 @@ describe("same-origin live proxy", () => {
     });
   });
 
+  it("preserves confirmed only when reading back a submitted transaction", async () => {
+    const { base, cookie, upstreamRequests } = await setup();
+    const response = await fetch(`${base}/api/darknyx/rpc`, {
+      method: "POST",
+      headers: {
+        ...hostHeaders(cookie),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "getTransaction",
+        params: [
+          "signature",
+          { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(upstreamRequests.at(-1)?.body ?? "{}")).toMatchObject({
+      method: "getTransaction",
+      params: [
+        "signature",
+        { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+      ],
+    });
+  });
+
   it("requires a signed session and rejects unknown venue and RPC methods", async () => {
     const { base, cookie } = await setup();
     expect((await fetch(`${base}/api/darknyx/venue/info`)).status).toBe(401);
@@ -326,6 +380,21 @@ describe("same-origin live proxy", () => {
       }),
     );
     await expect(closed).resolves.toBe(1008);
+  });
+
+  it("routes the venue stream through the supplied verified factory", async () => {
+    const { base, cookie, verifiedStreamConnections } = await setup({
+      verifiedStream: true,
+    });
+    const venue = await openSocket(
+      `${base.replace("http://", "ws://")}/api/darknyx/venue/v1/stream`,
+      cookie,
+    );
+    const echoed = nextMessage(venue);
+    venue.send(JSON.stringify({ op: "login", token: "t".repeat(64) }));
+    await expect(echoed).resolves.toContain('"op":"login"');
+    expect(verifiedStreamConnections()).toBe(1);
+    await closeSocket(venue);
   });
 
   it("caps live relays per authenticated browser session", async () => {

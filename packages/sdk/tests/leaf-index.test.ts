@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import {
   leafIndexFromLogs,
   noteCreatedFromLogs,
+  noteMergedFromLogs,
 } from "../src/utxo/leaf-index.js";
 
 /** The vault, and a program that is not the vault. */
@@ -83,7 +84,12 @@ describe("leafIndexFromLogs", () => {
     );
     // Looking for NoteCreated, only a NoteMerged line present.
     expect(
-      leafIndexFromLogs(vaultTx([other]), NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
+      leafIndexFromLogs(
+        vaultTx([other]),
+        NOTE_CREATED,
+        NOTE_CREATED_OFF,
+        VAULT,
+      ),
     ).toBeNull();
   });
 
@@ -101,7 +107,12 @@ describe("leafIndexFromLogs", () => {
     // disc present but body too short to hold the leaf_index.
     const short = `Program data: ${Buffer.concat([Buffer.from(NOTE_CREATED), Buffer.alloc(4)]).toString("base64")}`;
     expect(
-      leafIndexFromLogs(vaultTx([short]), NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
+      leafIndexFromLogs(
+        vaultTx([short]),
+        NOTE_CREATED,
+        NOTE_CREATED_OFF,
+        VAULT,
+      ),
     ).toBeNull();
   });
 });
@@ -123,8 +134,44 @@ describe("noteCreatedFromLogs", () => {
 
   it("returns null when no NoteCreated event is present", () => {
     expect(
-      noteCreatedFromLogs(vaultTx(["Program log: Instruction: Deposit"]), VAULT),
+      noteCreatedFromLogs(
+        vaultTx(["Program log: Instruction: Deposit"]),
+        VAULT,
+      ),
     ).toBeNull();
+  });
+});
+
+describe("noteMergedFromLogs", () => {
+  it("reads and preserves the confirmed merged output identity", () => {
+    const body = Buffer.alloc(1 + 32 + 32 + 1 + 8 + 32, 0);
+    body.writeUInt8(2, 0);
+    body.fill(0x44, 1, 33);
+    body.fill(0x55, 33, 65);
+    body.writeUInt8(4, 65);
+    body.writeBigUInt64LE(73n, NOTE_MERGED_OFF);
+    const line = `Program data: ${Buffer.concat([
+      Buffer.from(NOTE_MERGED),
+      body,
+    ]).toString("base64")}`;
+
+    expect(noteMergedFromLogs(vaultTx([line]), VAULT)).toEqual({
+      treeId: 2,
+      outputCommitment: new Uint8Array(32).fill(0x44),
+      tokenMint: new Uint8Array(32).fill(0x55),
+      k: 4,
+      leafIndex: 73n,
+    });
+  });
+
+  it("ignores a byte-identical merge event emitted by another program", () => {
+    const line = logLine(
+      NOTE_MERGED,
+      1 + 32 + 32 + 1 + 8 + 32,
+      NOTE_MERGED_OFF,
+      73n,
+    );
+    expect(noteMergedFromLogs(scoped(ATTACKER, 1, [line]), VAULT)).toBeNull();
   });
 });
 

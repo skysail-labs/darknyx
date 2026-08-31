@@ -30,6 +30,7 @@ export function securityHeaders(
     "style-src 'self'",
     "font-src 'self'",
     "img-src 'self' data:",
+    "frame-src 'self' http://127.0.0.1:8080",
     "manifest-src 'self'",
     "form-action 'none'",
     "base-uri 'none'",
@@ -41,7 +42,6 @@ export function securityHeaders(
   const headers: Record<string, string> = {
     "Content-Security-Policy": csp,
     "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -54,4 +54,42 @@ export function securityHeaders(
       "max-age=63072000; includeSubDomains";
   }
   return Object.freeze(headers);
+}
+
+/**
+ * Narrow exception for the opaque-origin TradingView child document.
+ *
+ * The custody application retains `securityHeaders()`. Only
+ * `/tradingview.html`, which the parent loads with `sandbox=allow-scripts`,
+ * receives this policy and may execute the external widget bootstrap.
+ */
+export function tradingViewFrameSecurityHeaders(): Readonly<
+  Record<string, string>
+> {
+  const csp = [
+    "default-src 'none'",
+    "script-src 'self' https://s3.tradingview.com",
+    "frame-src https://www.tradingview-widget.com",
+    "style-src 'unsafe-inline'",
+    "img-src data: https:",
+    "font-src data: https:",
+    "connect-src https:",
+    "form-action 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors http://localhost:8080",
+  ].join("; ");
+  return Object.freeze({
+    "Content-Security-Policy": csp,
+    "Cross-Origin-Opener-Policy": "unsafe-none",
+    "Cross-Origin-Embedder-Policy": "unsafe-none",
+    // The local recording build deliberately serves this frame from
+    // 127.0.0.1 while the custody app uses localhost. The sandboxed document
+    // carries no credentials or private state.
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy":
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=(), publickey-credentials-get=(), publickey-credentials-create=()",
+  });
 }

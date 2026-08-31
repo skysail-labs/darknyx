@@ -1,4 +1,4 @@
-import { getWallets, type Wallets } from "@wallet-standard/app";
+import { DEPRECATED_getWallets, type Wallets } from "@wallet-standard/app";
 import type {
   IdentifierString,
   Wallet,
@@ -53,7 +53,12 @@ export class ExternalWalletController {
     } = {},
   ) {
     this.#chain = options.chain ?? "solana:devnet";
-    this.#wallets = options.wallets ?? getWallets();
+    // Phantom versions still in circulation may register through the original
+    // `navigator.wallets` callback, while newer wallets use the event-based
+    // Wallet Standard API. The compatibility entry point listens to both and
+    // returns the same registry; using only `getWallets()` made Backpack appear
+    // while a legacy-registering Phantom remained invisible.
+    this.#wallets = options.wallets ?? DEPRECATED_getWallets();
     this.#offUnregister = this.#wallets.on("unregister", (...removed) => {
       if (this.#wallet && removed.includes(this.#wallet)) {
         this.#wallet = null;
