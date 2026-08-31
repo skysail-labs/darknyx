@@ -144,9 +144,9 @@ validated` evidence.
 | CI-01 | P0 | **Surfpool validated** | 4 | The scheduled SDK integration workflow uses pinned Surfpool instead of real devnet and requires no RPC/keypair provider secrets. | CI/test configuration only | Eliminates routine Helius requests; adds source-build/cache time | Merge the complete stack after Phase 5 evidence is recorded. |
 | CI-02 | P0 | **Surfpool validated** | 4 | CI proves the exact local foundation and TEE integration rather than silently skipping env-gated suites. | CI gates only | Higher local confidence; bounded runner time/memory required | Preserve the explicit marker and five-port teardown contract. |
 | CI-03 | P1 | **Surfpool validated** | 4 | The real-CVM workflow remains available as a manual/release gate and no longer implies routine RPC billing. | Workflow trigger/config only | Retains TDX and real-cluster evidence at controlled cost | Exercise the retained dispatch once in Phase 5; no CVM run was required here. |
-| RA-01 | P0 | **Open** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Execute using the already-paid endpoint after Phases 1–4 and before credential removal. |
-| RA-02 | P0 | **Code complete** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Validate the exact manual workflow and teardown during RA-01, then merge. |
-| CL-01 | P1 | **Code complete** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Complete RA-01, delete the obsolete repository secret, and merge. |
+| RA-01 | P0 | **CVM validated** | 5 | One final digest-pinned real-CVM run records attestation, RA-TLS, real devnet settle, Merkle reconciliation, signatures, and stage timings before recurring Helius cancellation. | No protocol change expected | One controlled paid run | Merge the complete stack after CI is green; retain the recorded run as the release baseline. |
+| RA-02 | P0 | **CVM validated** | 5 | Runbooks switch between local Surfpool and real CVM/devnet without code changes or state reuse. | Documentation/config only | Preserves rapid return to real evidence for demos/releases | Merge the complete stack after CI is green. |
+| CL-01 | P1 | **CVM validated** | 5 | Routine docs/workflows/scripts no longer require or call a Helius endpoint; intentional archival/production references remain accurate. | Documentation/config cleanup | Removes accidental paid traffic | Merge the complete stack after CI is green; subscription cancellation remains an account action. |
 | RP-01 | P2 | **Deferred** | future | A production TEE may explicitly fall back to standard Solana history RPC without O(pages²), unsafe 429 latching, or unbounded fan-out. | TEE RPC behavior only; no wire/circuit/account change expected | Useful provider resilience, but not required for Surfpool local testing | Re-enter if a real-CVM/devnet run must operate without any gTFA-capable dedicated endpoint. Review by 2026-10-01. |
 | RP-02 | P2 | **Deferred** | future | Optional indexer and fee collector have provider-neutral history strategies appropriate to live versus archival duties. | Off-chain operator/client behavior | Fee collector still needs archival mainnet service | Re-enter before changing production RPC vendor or mainnet fee recovery provider. Review by 2026-10-01. |
 
@@ -852,17 +852,55 @@ Implementation on `infra/surfpool-release-assurance`:
   complete behavioral evidence but not yet the timing-complete RA-01 closure
   run. The workflow now makes that snapshot mandatory after every successful
   tree-consuming suite and emits a redacted `CVM_SETTLEMENT_METRICS` record.
+- Final run
+  [`33386688313`](https://github.com/skysail-labs/darknyx/actions/runs/33386688313)
+  at exact source SHA `e9d00c098d4371e5f68a4bae8a5abb6201e65c84`
+  completed the timing-enabled release matrix. It reused immutable image
+  `ghcr.io/skysail-labs/darknyx-tee@sha256:f04d1734253048236e91039e3c92b9889edd7da5a398ccf7fc632d236ba82771`,
+  and the RA-TLS/DCAP evidence bound compose hash
+  `d07e9c8ee486a34e3546c2e72a4e7b31aac54b55d66ad78586618fd90be9a6d7`
+  plus signer-set hash
+  `7a58eae8ca0feca55b83ee17ff1b6fd2199fb28a321cbe27534289a43ceceb0c`.
+  The real deposit/withdraw, API, RA-TLS, DCAP, daemon lifecycle, and
+  gateway-terminated compatibility gates all passed.
+- Each tree-consuming suite used a fresh reset and cold boot, passed Merkle
+  readiness, and confirmed every match with no rejected or ambiguous outcome:
 
-Evidence still owed before Phase 5 can advance:
+  | Suite | Active matches | Leaf transition | Witness / proof step / total prove | Settlement pipeline total | Slot evidence |
+  | --- | ---: | --- | --- | ---: | --- |
+  | `cvm-settle-e2e` | 1 | `2 -> 7` | `414 / 3250 / 3724 ms` | `8062 ms` | `1/1` confirmed/distinct; 1 rebroadcast |
+  | `cvm-self-trade` | 1 | `3 -> 8` | `441 / 3087 / 3546 ms` | `8451 ms` | `1/1`; 1 rebroadcast |
+  | `cvm-multimatch-settle` | 4 | deposits `0 -> 8`, settle `8 -> 28` across four shards | `366 / 3133 / 3535 ms` | `8318 ms` | `4/2`; 4 rebroadcasts |
+  | `cvm-merge-then-order` | 1 | `4 -> 9` | `482 / 2993 / 3520 ms` | `8060 ms` | `1/1`; 1 rebroadcast |
 
-1. Re-run the exact manual workflow with mandatory scheduler-metrics capture;
-   record its source SHA, immutable image digest, compose hash, signer-set
-   binding, transaction signatures/slots/K roots, stage timings, DCAP and
-   RA-TLS results, and daemon lifecycle result.
-2. Require the workflow stop step, automatic sweeper, and an independent CVM
-   status query to agree that billing has stopped.
-3. Remove the obsolete `HELIUS_API_KEY` repository secret only after the final
-   evidence is captured. Subscription cancellation remains an account/billing
-   action, not a repository change.
-4. Merge the complete stack; only then may implementation rows become
-   `Closed`.
+  The two explicit observer-negative settlement signatures were
+  `3HGJF3oah8VSYwD4yJQ9UzQ8mLVez4JZs4rFmFVxMdX2eQgnqy396K3fWsEePEETuQgQZZQC5yziKRSc4BUbCJbu`
+  and
+  `PPUZ2VNxmYVmgVysRjTVC8nKFQ3ktNKaTktRNZpQwGucN6XDTzjTFS5n51XZxiJ44Lg9fXVcBXjkR1Z7UKbbWoK`.
+- Billing teardown has three agreeing signals: the workflow's unconditional
+  stop passed; manual sweeper run
+  [`33406417429`](https://github.com/skysail-labs/darknyx/actions/runs/33406417429)
+  passed; and an independent control-plane query reported CVM
+  `app_9ca3cded105f16923afb0e3f62537882c14db637` as `stopped`, with
+  `in_progress: false`, no instance, and no services. The automatic
+  `workflow_run` sweeper trigger exists but cannot fire from a workflow file
+  that has not yet reached the default branch; it becomes active on merge.
+- The obsolete `HELIUS_API_KEY` repository secret was deleted after evidence
+  capture. The provider-neutral `DEVNET_RPC_URL` release secret remains. The
+  workflow now also compares each observed attested compose hash with the
+  independently queried Phala control-plane identity; this review hardening
+  landed after the final paid run and will be exercised by the next ordinary
+  release dispatch rather than causing another billable run.
+- Review comments were handled by substance. Fail-closed qualification input,
+  real pagination assertions, independent compose identity, transport-agent
+  cleanup, secure GPU-runbook secret handling, and stale command fixes were
+  accepted. Unrelated threat-model expansion, stale trigger observations, and
+  cosmetic/minor suggestions without a runtime or evidence consequence were
+  declined.
+
+Evidence still owed before Phase 5 is `Closed`:
+
+1. Let the Git LFS quota renew and obtain green PR checks without weakening
+   artifact hydration or verification.
+2. Merge the complete stack. Only then may RA-01, RA-02, and CL-01 move from
+   `CVM validated` to `Closed`.

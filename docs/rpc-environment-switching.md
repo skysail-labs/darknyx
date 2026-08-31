@@ -23,7 +23,7 @@ Prepare the pinned binaries as described in
 the bounded hosted-equivalent smoke or the full matrix:
 
 ```sh
-# Two fresh ledgers: deposit/withdraw and one real TEE settlement.
+# Two fresh ledgers: deposit/withdraw and one production-binary simulator settlement.
 DSTACK_REPO=/path/to/dstack bash scripts/surfpool/hosted-smoke.sh
 
 # Six fresh ledgers: all maintained client and settlement flows.
@@ -64,10 +64,12 @@ printing them:
 support the real release suite's request volume and
 `getTransactionsForAddress`; public devnet is not a release dependency.
 
-Dispatch the retained release gate from the exact branch or commit under test:
+Dispatch the retained release gate from an immutable tag at the tested commit:
 
 ```sh
-gh workflow run cvm-e2e.yml --ref <branch-or-commit>
+git tag <release-test-tag> <tested-commit>
+git push origin <release-test-tag>
+gh workflow run cvm-e2e.yml --ref <release-test-tag>
 gh run watch <run-id> --repo skysail-labs/darknyx --exit-status
 ```
 

@@ -113,7 +113,7 @@ enough.
 
 ```sh
 # One-time: put the dedicated devnet RPC URL in the gitignored env (NOT /tmp):
-cp packages/sdk/.env.example packages/sdk/.env   # then edit SOLANA_RPC_URL=<helius>
+cp packages/sdk/.env.example packages/sdk/.env   # then edit SOLANA_RPC_URL=<credentialed-devnet-rpc-url>
 set -a; . packages/sdk/.env; set +a               # export SOLANA_RPC_URL for the scripts below
 ```
 

@@ -260,6 +260,8 @@ assert.equal(
 
 const pagedSignatures = [];
 let paginationToken;
+let pageCount = 0;
+const seenPaginationTokens = new Set();
 do {
   const page = await gtfa(
     recipientAddress,
@@ -269,9 +271,29 @@ do {
       filters: { slot: { gte: floorSlot }, status: "succeeded" },
     }),
   );
+  pageCount += 1;
+  assert.equal(
+    page.data.length <= 3,
+    true,
+    "pagination page exceeded the requested limit",
+  );
   pagedSignatures.push(...page.data.map(signatureOf));
-  paginationToken = page.paginationToken ?? undefined;
+  const nextToken = page.paginationToken ?? undefined;
+  if (nextToken !== undefined) {
+    assert.equal(
+      seenPaginationTokens.has(nextToken),
+      false,
+      "pagination repeated a continuation token",
+    );
+    seenPaginationTokens.add(nextToken);
+  }
+  paginationToken = nextToken;
 } while (paginationToken);
+assert.equal(
+  pageCount > 1,
+  true,
+  "pagination probe completed in one page; limit enforcement was not proven",
+);
 assert.deepEqual(
   pagedSignatures,
   succeededSignatures,

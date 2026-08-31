@@ -310,9 +310,15 @@ jobs:
           BASE=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
                  | jq -r '.. | objects | .base_domain // empty' 2>/dev/null | grep . | head -1)
           [ -n "$BASE" ] || { echo "::error::could not resolve gateway base_domain for $CVM"; exit 1; }
+          APPROVED_COMPOSE_HASH=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
+                 | jq -r '.compose_hash // empty')
+          printf '%s' "$APPROVED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "::error::control plane returned no approved compose hash"; exit 1; }
           GW="https://${APP_ID}-8443s.${BASE}"
           echo "gateway: $GW"
+          echo "approved compose_hash: $APPROVED_COMPOSE_HASH"
           echo "GATEWAY=$GW" >> "$GITHUB_ENV"
+          echo "DARKNYX_APPROVED_COMPOSE_HASH=$APPROVED_COMPOSE_HASH" >> "$GITHUB_ENV"
 
       - name: Wait for the CVM to be healthy
         env:
@@ -358,12 +364,11 @@ jobs:
             fi
           done
 
-      # T-03P: every cvm-* suite runs over the VERIFIED transport, which needs
-      # the two governance pins. They are read from the live enclave rather than
-      # stored, because a compose edit of ANY kind moves compose_hash — a stored
-      # value would go stale silently and the suites would fail closed with a
-      # pin error that looks like an attack.
-      - name: Read the RA-TLS governance pins from the enclave
+      # T-03P: every cvm-* suite runs over the verified transport. The measured
+      # compose hash must equal the independently selected deployment identity
+      # returned by the control plane after the digest-pinned deploy; accepting
+      # the enclave's own measurement as its expected value would be circular.
+      - name: Verify the RA-TLS governance pins
         run: |
           set -euo pipefail
           NONCE=$(openssl rand -hex 32)
@@ -376,6 +381,10 @@ jobs:
           # Fail closed: an empty pin would disable the very check it configures.
           printf '%s' "$COMPOSE" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad compose hash from /transport-attestation: $COMPOSE"; exit 1; }
+          [ "$COMPOSE" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+            echo "::error::attested compose hash does not match approved deployment identity"
+            exit 1
+          }
           printf '%s' "$SIGNERS" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad signer set from /transport-attestation: $SIGNERS"; exit 1; }
           [ "$MODE" = "ra-tls" ] \
@@ -385,7 +394,7 @@ jobs:
           echo "signer_set     : $SIGNERS"
           {
             echo "DARKNYX_CVM_TRANSPORT=ra-tls"
-            echo "DARKNYX_EXPECT_COMPOSE_HASH=$COMPOSE"
+            echo "DARKNYX_EXPECT_COMPOSE_HASH=$DARKNYX_APPROVED_COMPOSE_HASH"
             echo "DARKNYX_EXPECT_SIGNER_SET=$SIGNERS"
             echo "DARKNYX_TEE_RATLS_URL=$GATEWAY"
           } >> "$GITHUB_ENV"
@@ -570,12 +579,17 @@ jobs:
             NONCE=$(openssl rand -hex 32)
             curl -fsSk --max-time 40 \
               "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta.json
-            DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+            MEASURED_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
                               | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta.json)
             DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta.json)
+            DARKNYX_EXPECT_COMPOSE_HASH="$DARKNYX_APPROVED_COMPOSE_HASH"
             export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
-            printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+            printf '%s' "$MEASURED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
               || { echo "::error::bad compose hash after redeploy for $T"; exit 1; }
+            [ "$MEASURED_COMPOSE_HASH" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+              echo "::error::redeployed $T enclave does not match approved compose hash"
+              exit 1
+            }
             printf '%s' "$DARKNYX_EXPECT_SIGNER_SET" | grep -qE '^[0-9a-f]{64}$' \
               || { echo "::error::bad signer set after redeploy for $T"; exit 1; }
             echo "re-pinned: compose=$DARKNYX_EXPECT_COMPOSE_HASH"
@@ -698,12 +712,17 @@ jobs:
           NONCE=$(openssl rand -hex 32)
           curl -fsSk --max-time 40 \
             "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta-daemon.json
-          DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+          MEASURED_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
                             | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta-daemon.json)
           DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta-daemon.json)
+          DARKNYX_EXPECT_COMPOSE_HASH="$DARKNYX_APPROVED_COMPOSE_HASH"
           export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
-          printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+          printf '%s' "$MEASURED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad compose hash before the daemon run"; exit 1; }
+          [ "$MEASURED_COMPOSE_HASH" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+            echo "::error::daemon target does not match approved compose hash"
+            exit 1
+          }
           ( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 \
               DARKNYX_CVM_TRANSPORT=ra-tls \
               DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \

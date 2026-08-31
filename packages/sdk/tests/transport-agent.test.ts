@@ -136,21 +136,24 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
       // neither of which constrains `connections` at all, so raising it to 8
       // would have left this green.
       const agent = new TransportAgent();
-      connectionCount = 0;
-      const { fetch: uf } = await import("undici");
-      await Promise.all(
-        Array.from({ length: 4 }, () =>
-          uf(`https://127.0.0.1:${port}/`, { dispatcher: agent } as never).then(
-            (r) => r.text(),
+      try {
+        connectionCount = 0;
+        const { fetch: uf } = await import("undici");
+        await Promise.all(
+          Array.from({ length: 4 }, () =>
+            uf(`https://127.0.0.1:${port}/`, { dispatcher: agent } as never).then(
+              (r) => r.text(),
+            ),
           ),
-        ),
-      );
-      expect(
-        connectionCount,
-        "the agent opened more than one connection; attestation and request " +
-          "can no longer be assumed to share a socket",
-      ).toBe(1);
-      await agent.close();
+        );
+        expect(
+          connectionCount,
+          "the agent opened more than one connection; attestation and request " +
+            "can no longer be assumed to share a socket",
+        ).toBe(1);
+      } finally {
+        await agent.close();
+      }
     },
   );
 
@@ -163,24 +166,27 @@ describe("socketSpkiSha256 — against a real TLS handshake", () => {
       // attested SPKI. Force a reconnect and pin the production requirement:
       // every socket this adapter accepts completes a full handshake.
       const agent = new TransportAgent();
-      const { fetch: uf } = await import("undici");
-      connectionCount = 0;
-      resumedSessions = [];
+      try {
+        const { fetch: uf } = await import("undici");
+        connectionCount = 0;
+        resumedSessions = [];
 
-      await uf(`https://127.0.0.1:${port}/`, {
-        dispatcher: agent,
-      } as never).then((r) => r.text());
-      const first = agent.currentSocket();
-      expect(first).toBeDefined();
-      agent.destroySocket(first!);
+        await uf(`https://127.0.0.1:${port}/`, {
+          dispatcher: agent,
+        } as never).then((r) => r.text());
+        const first = agent.currentSocket();
+        expect(first).toBeDefined();
+        agent.destroySocket(first!);
 
-      await uf(`https://127.0.0.1:${port}/`, {
-        dispatcher: agent,
-      } as never).then((r) => r.text());
+        await uf(`https://127.0.0.1:${port}/`, {
+          dispatcher: agent,
+        } as never).then((r) => r.text());
 
-      expect(connectionCount).toBe(2);
-      expect(resumedSessions).toEqual([false, false]);
-      await agent.close();
+        expect(connectionCount).toBe(2);
+        expect(resumedSessions).toEqual([false, false]);
+      } finally {
+        await agent.close();
+      }
     },
   );
 });

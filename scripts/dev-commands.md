@@ -297,6 +297,7 @@ Rules:
 - The light path (deploys, the reset/rotate scripts, faucet transfers) is
   fine on the public devnet URL.
 - A provider-neutral alias for the rest of this doc:
+
   ```sh
   DEVNET_RPC="https://<your-devnet-rpc-provider>/<credential>"
   ```

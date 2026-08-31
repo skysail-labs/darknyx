@@ -60,6 +60,10 @@ require "$CVM" '/admin/metrics/settlement\?limit=100' \
   'authenticated settlement metrics query'
 require "$CVM" 'CVM_SETTLEMENT_METRICS' \
   'structured real-CVM timing evidence marker'
+require "$CVM" 'DARKNYX_APPROVED_COMPOSE_HASH' \
+  'control-plane-approved compose identity'
+require "$CVM" 'MEASURED_COMPOSE_HASH.*DARKNYX_APPROVED_COMPOSE_HASH' \
+  'attested-to-approved compose comparison'
 reject "$CVM" 'HELIUS_API_KEY|devnet\.helius-rpc\.com' \
   'provider-specific release credential'
 

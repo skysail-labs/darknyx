@@ -40,8 +40,14 @@ const FIXTURE_PATH = resolve(
   "programs/vault/tests/fixtures/match_batch_n16_proof.bin",
 );
 const RUN = process.env.RUN_SURFPOOL_QUALIFICATION === "1";
-const ready = RUN && existsSync(CONFIG_PATH) && existsSync(FIXTURE_PATH);
-const d = ready ? describe : describe.skip;
+if (RUN) {
+  for (const required of [CONFIG_PATH, FIXTURE_PATH]) {
+    if (!existsSync(required)) {
+      throw new Error(`surfpool qualification input missing: ${required}`);
+    }
+  }
+}
+const d = RUN ? describe : describe.skip;
 
 async function loadKeypair(path: string): Promise<Keypair> {
   return await Keypair.fromSecretKey(
