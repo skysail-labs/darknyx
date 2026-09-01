@@ -12,6 +12,12 @@ export {
   noteCommitmentFromBytes,
   noteUseTagFromBytes,
 } from "./utxo/note-identity.js";
+export {
+  readNoteCreated,
+  readNoteMerged,
+  type NoteCreatedLeaf,
+  type NoteMergedLeaf,
+} from "./utxo/leaf-index.js";
 export type {
   DepositInputs,
   Groth16ProofBytes,

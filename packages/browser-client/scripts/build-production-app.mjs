@@ -52,6 +52,7 @@ const application = await build({
   ...shared,
   entryPoints: {
     app: resolve(packageRoot, "src/app/main.tsx"),
+    "tradingview-frame": resolve(packageRoot, "src/app/tradingview-frame.ts"),
   },
   format: "esm",
   splitting: true,
@@ -66,6 +67,11 @@ const application = await build({
 });
 const appOutput = entryOutput(application.metafile, "src/app/main.tsx");
 const app = appOutput.path;
+const tradingViewFrameOutput = entryOutput(
+  application.metafile,
+  "src/app/tradingview-frame.ts",
+);
+const tradingViewFrame = tradingViewFrameOutput.path;
 const appMeta = application.metafile.outputs[appOutput.key];
 const css = appMeta?.cssBundle ? resolve(appMeta.cssBundle) : undefined;
 if (!css) throw new Error("production build did not emit application CSS");
@@ -99,6 +105,25 @@ await writeFile(resolve(outputRoot, "index.html"), html, {
   mode: 0o644,
 });
 
+const tradingViewHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Darknyx public price chart</title>
+    <script type="module" src="${webPath(tradingViewFrame)}" integrity="${await integrity(tradingViewFrame)}" crossorigin="anonymous"></script>
+  </head>
+  <body>
+    <div id="tradingview-frame" class="tradingview-widget-container" aria-label="Public TradingView price chart"></div>
+  </body>
+</html>
+`;
+await writeFile(resolve(outputRoot, "tradingview.html"), tradingViewHtml, {
+  encoding: "utf8",
+  mode: 0o644,
+});
+
 const outputs = [
   ...Object.keys(workers.metafile.outputs),
   ...Object.keys(application.metafile.outputs),
@@ -109,6 +134,7 @@ const manifest = {
   stylesheet: webPath(css),
   vault_worker: webPath(vaultWorker),
   prover_worker: webPath(proverWorker),
+  tradingview_frame: webPath(tradingViewFrame),
   files: await Promise.all(
     outputs
       .filter((path) => !path.endsWith(".map"))

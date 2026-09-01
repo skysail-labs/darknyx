@@ -108,4 +108,18 @@ describe("trader-host runtime configuration", () => {
       "must not be accessible",
     );
   });
+
+  it("requires verified HTTP and stream transports as one unit", async () => {
+    const { env } = await fixture();
+    await expect(
+      loadTraderHostRuntimeConfig(env, { cvmFetch: fetch }),
+    ).rejects.toThrow("must be supplied together");
+    await expect(
+      loadTraderHostRuntimeConfig(env, {
+        cvmWebSocketFactory: () => {
+          throw new Error("not opened during configuration");
+        },
+      }),
+    ).rejects.toThrow("must be supplied together");
+  });
 });

@@ -1,73 +1,36 @@
 import {
   Activity,
   AlertTriangle,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Check,
   ChevronDown,
   KeyRound,
-  Layers3,
+  LineChart,
   LoaderCircle,
   Lock,
   LogOut,
   RefreshCw,
   ShieldCheck,
+  Wallet,
   WalletCards,
-  X,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { AccountDialog, type AccountTab } from "./account-dialog.js";
 import { HorizonMark } from "./mark.js";
+import { OrderTicket } from "./order-ticket.js";
+import { lifecycleCopy, short, stateTone } from "./primitives.js";
 import type { OrderLifecycleKind, TraderShellProps } from "./types.js";
 
-const lifecycleCopy: Record<OrderLifecycleKind, string> = {
-  submitting: "Submitting",
-  open: "Open",
-  pending_settlement: "Pending settlement",
-  partially_filled: "Partially filled",
-  fully_filled: "Settled",
-  settlement_failed: "Settlement failed",
-  cancelled: "Cancelled",
-  expired: "Expired",
-  closed: "Closed while offline",
-  ambiguous: "Reconciling",
-  rejected: "Rejected",
-};
+type OrderFilter = "all" | "working" | "closed";
 
-function short(value: string, head = 5, tail = 4): string {
-  return value.length > head + tail + 1
-    ? `${value.slice(0, head)}…${value.slice(-tail)}`
-    : value;
-}
-
-function stateTone(kind: OrderLifecycleKind): string {
-  if (kind === "fully_filled") return "good";
-  if (
-    kind === "settlement_failed" ||
-    kind === "rejected" ||
-    kind === "cancelled" ||
-    kind === "expired" ||
-    kind === "closed"
-  )
-    return "bad";
-  if (kind === "open") return "neutral";
-  return "pending";
-}
+const WORKING: OrderLifecycleKind[] = [
+  "submitting",
+  "open",
+  "pending_settlement",
+  "partially_filled",
+  "ambiguous",
+];
 
 function VenueBadge({ venue }: Pick<TraderShellProps["snapshot"], "venue">) {
-  function closeOnEscape(event: KeyboardEvent<HTMLDetailsElement>) {
-    if (event.key !== "Escape") return;
-    event.currentTarget.removeAttribute("open");
-    event.currentTarget.querySelector("summary")?.focus();
-  }
-
   const icon =
     venue.state === "checking" ? (
       <LoaderCircle className="spin" />
@@ -77,32 +40,46 @@ function VenueBadge({ venue }: Pick<TraderShellProps["snapshot"], "venue">) {
       <AlertTriangle />
     );
   return (
-    <details className="trust-control" onKeyDown={closeOnEscape}>
+    <details
+      className="trust-control"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.currentTarget.removeAttribute("open");
+        event.currentTarget.querySelector("summary")?.focus();
+      }}
+    >
       <summary className={`trust-badge is-${venue.state}`}>
         <span className="trust-icon" aria-hidden="true">
           {icon}
         </span>
-        <span>
-          <b>{venue.state === "trusted" ? "Attested" : venue.state}</b>
-          <small>{venue.label}</small>
+        <span className="trust-copy">
+          <b>
+            {venue.state === "trusted"
+              ? "Attested"
+              : venue.state === "degraded"
+                ? "Partially available"
+                : venue.state === "checking"
+                  ? "Verifying"
+                  : "Unavailable"}
+          </b>
         </span>
         <ChevronDown aria-hidden="true" />
       </summary>
       <div className="trust-menu panel-popover">
         <p className="eyebrow">Venue identity</p>
         <div>
-          <span>Trust state</span>
-          <b>{venue.state}</b>
+          <span>Venue</span>
+          <b>{venue.label}</b>
         </div>
         <div>
-          <span>Finalized governance</span>
-          <b className="mono">{venue.governanceSlot ?? "—"}</b>
-        </div>
-        <div>
-          <span>Compose hash</span>
+          <span>Compose</span>
           <b className="mono">
-            {venue.composeHash ? short(venue.composeHash, 8, 8) : "—"}
+            {venue.composeHash ? short(venue.composeHash, 8, 6) : "Pending"}
           </b>
+        </div>
+        <div>
+          <span>Governance slot</span>
+          <b className="mono">{venue.governanceSlot ?? "Pending"}</b>
         </div>
         {venue.message && <p className="muted">{venue.message}</p>}
       </div>
@@ -148,7 +125,7 @@ function WalletControl({ snapshot, actions }: TraderShellProps) {
             id="darknyx-wallet-menu"
             aria-label="Connected wallet"
           >
-            <p className="eyebrow">External wallet</p>
+            <p className="eyebrow">Connected wallet</p>
             <strong>{wallet.walletName}</strong>
             <span className="mono muted">{wallet.address}</span>
             <button
@@ -162,76 +139,85 @@ function WalletControl({ snapshot, actions }: TraderShellProps) {
       </div>
     );
   }
+  const available = wallet.availableWallets[0];
+  const chooseWallet = wallet.availableWallets.length > 1;
   return (
     <div className="wallet-control">
       <button
         ref={trigger}
-        className="primary-button compact"
+        className="quiet-button"
         type="button"
-        disabled={wallet.state === "connecting"}
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-controls="darknyx-wallet-menu"
+        disabled={wallet.state === "connecting" || !available}
+        onClick={() => {
+          if (!available) return;
+          if (chooseWallet) setOpen(!open);
+          else void actions.connectWallet(available.name);
+        }}
+        aria-expanded={chooseWallet ? open : undefined}
+        aria-controls={chooseWallet ? "darknyx-wallet-menu" : undefined}
         aria-label={
           wallet.state === "connecting"
             ? "Connecting wallet"
-            : wallet.state === "failed"
-              ? "Retry wallet connection"
-              : "Connect wallet"
+            : !available
+              ? "No compatible wallet found"
+              : wallet.state === "failed"
+                ? "Retry wallet connection"
+                : `Connect ${available.name}`
         }
       >
         <WalletCards aria-hidden="true" />
         <span className="wallet-label">
           {wallet.state === "connecting"
             ? "Connecting"
-            : wallet.state === "failed"
-              ? "Retry wallet"
-              : "Connect wallet"}
+            : !available
+              ? "Install wallet"
+              : wallet.state === "failed"
+                ? "Retry wallet"
+                : "Connect wallet"}
         </span>
       </button>
-      {open && (
+      {open && chooseWallet && (
         <div
           className="wallet-menu panel-popover"
           id="darknyx-wallet-menu"
-          aria-label="Choose a wallet"
+          aria-label="Choose wallet"
         >
-          <p className="eyebrow">Choose a wallet</p>
-          {wallet.state === "failed" && wallet.error && (
-            <p className="wallet-error" role="alert">
-              {wallet.error}
-            </p>
-          )}
-          {wallet.availableWallets.length === 0 ? (
-            <p className="muted">No compatible Solana wallet detected.</p>
-          ) : (
-            wallet.availableWallets.map((candidate) => (
-              <button
-                type="button"
-                key={candidate.name}
-                onClick={() => void actions.connectWallet(candidate.name)}
-              >
-                <img src={candidate.icon} alt="" />
-                {candidate.name}
-              </button>
-            ))
-          )}
+          <p className="eyebrow">Choose wallet</p>
+          {wallet.availableWallets.map((candidate) => (
+            <button
+              key={candidate.name}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                void actions.connectWallet(candidate.name);
+              }}
+            >
+              <img src={candidate.icon} alt="" aria-hidden="true" />
+              <strong>{candidate.name}</strong>
+            </button>
+          ))}
         </div>
+      )}
+      {wallet.state === "failed" && wallet.error && (
+        <p className="wallet-error" role="alert">
+          {wallet.error}
+        </p>
       )}
     </div>
   );
 }
 
-function VaultControl({ snapshot, actions }: TraderShellProps) {
+function KeyringControl({ snapshot, actions }: TraderShellProps) {
   const { vault } = snapshot;
   const locked = vault.state !== "unlocked";
   const label =
     vault.state === "unprovisioned"
-      ? "Create private vault"
+      ? "Create access"
       : vault.state === "unlocked"
-        ? "Vault unlocked"
+        ? "Unlocked"
         : vault.state === "busy"
-          ? "Vault busy"
-          : "Unlock vault";
+          ? "Working"
+          : "Unlock";
   const action =
     vault.state === "unprovisioned"
       ? actions.provisionVault
@@ -239,134 +225,163 @@ function VaultControl({ snapshot, actions }: TraderShellProps) {
         ? actions.lockVault
         : actions.unlockVault;
   return (
-    <button
-      className={`vault-button ${locked ? "is-locked" : "is-live"}`}
-      type="button"
-      disabled={vault.state === "busy"}
-      onClick={() => void action()}
-    >
-      {vault.state === "busy" ? (
-        <LoaderCircle className="spin" />
-      ) : locked ? (
-        <Lock />
-      ) : (
-        <KeyRound />
-      )}
-      <span>{label}</span>
-      <small>{vault.state === "unlocked" ? "Lock" : "Device protected"}</small>
-    </button>
-  );
-}
-
-function MarketRail({ snapshot, actions }: TraderShellProps) {
-  return (
-    <aside className="market-rail" aria-label="Markets">
-      <div className="rail-heading">
-        <span className="eyebrow">Markets</span>
-      </div>
-      <div className="market-list">
-        {snapshot.venue.state === "checking" ? (
-          Array.from({ length: 3 }, (_, index) => (
-            <div
-              className="market-skeleton skeleton"
-              key={index}
-              aria-hidden="true"
-            />
-          ))
-        ) : snapshot.instruments.length === 0 ? (
-          <div className="empty-compact">
-            <Activity aria-hidden="true" />
-            <span>
-              {snapshot.venue.state === "trusted"
-                ? "No markets are configured"
-                : "Markets unavailable until venue verification"}
-            </span>
-          </div>
+    <div className="keyring-control">
+      <button
+        className={`vault-button ${locked ? "is-locked" : "is-live"}`}
+        type="button"
+        disabled={vault.state === "busy"}
+        onClick={() => void action()}
+        aria-label={
+          vault.state === "unprovisioned"
+            ? "Create Private Access"
+            : vault.state === "unlocked"
+              ? "Lock Private Access"
+              : vault.state === "busy"
+                ? "Private Access is working"
+                : "Unlock Private Access"
+        }
+      >
+        {vault.state === "busy" ? (
+          <LoaderCircle className="spin" />
+        ) : locked ? (
+          <Lock />
         ) : (
-          snapshot.instruments.map((instrument) => (
-            <button
-              key={instrument.symbol}
-              type="button"
-              className={
-                snapshot.selectedSymbol === instrument.symbol
-                  ? "is-selected"
-                  : ""
-              }
-              onClick={() => actions.selectInstrument(instrument.symbol)}
-            >
-              <span
-                className={`market-signal ${instrument.tradingEnabled ? "is-live" : ""}`}
-              />
-              <span>
-                <b>{instrument.baseSymbol}</b>
-                <small>/{instrument.quoteSymbol}</small>
-              </span>
-              <em>{instrument.tradingEnabled ? "Live" : "Paused"}</em>
-            </button>
-          ))
+          <KeyRound />
         )}
-      </div>
-      <div className="rail-footer">
-        <span className="eyebrow">Proof inventory</span>
-        <div>
-          <strong className="mono">{snapshot.proofReadiness.ready}</strong>
-          <span>ready</span>
-        </div>
-        <div>
-          <strong className="mono">{snapshot.proofReadiness.proving}</strong>
-          <span>building</span>
-        </div>
-        <div>
-          <strong className="mono">{snapshot.proofReadiness.stale}</strong>
-          <span>stale</span>
-        </div>
-      </div>
-    </aside>
+        <span>{label}</span>
+      </button>
+    </div>
   );
 }
 
-function BalanceStrip({ snapshot }: Pick<TraderShellProps, "snapshot">) {
+function MarketHeader({
+  snapshot,
+  actions,
+  onManageAccount,
+}: TraderShellProps & { onManageAccount(tab: AccountTab): void }) {
+  const selected = snapshot.instruments.find(
+    (instrument) => instrument.symbol === snapshot.selectedSymbol,
+  );
+  const working = snapshot.orders.filter((order) =>
+    WORKING.includes(order.kind),
+  ).length;
   return (
-    <section className="balance-strip" aria-label="Private balances">
-      <div>
-        <span className="eyebrow">Private balance</span>
-        <p>Aggregate note inventory on this device</p>
+    <section className="market-header" aria-label="Market summary">
+      <div className="market-identity">
+        <span
+          className={`market-signal ${selected?.tradingEnabled ? "is-live" : ""}`}
+        />
+        <div>
+          <h1>
+            {selected?.baseSymbol ?? "—"}
+            <small>/{selected?.quoteSymbol ?? "—"}</small>
+          </h1>
+          <span className="market-sub">
+            {selected?.tradingEnabled
+              ? "Attested private market · uniform clearing price"
+              : "Market paused"}
+          </span>
+        </div>
       </div>
-      {snapshot.vault.state === "busy" ? (
-        <div className="balance-loading" aria-label="Recovering balances">
-          <span className="balance-skeleton skeleton" aria-hidden="true" />
-          <span className="balance-skeleton skeleton" aria-hidden="true" />
+      <dl className="market-stats">
+        <div>
+          <dt>Minimum order</dt>
+          <dd className="mono">
+            {selected ? `${selected.minOrderSize} ${selected.baseSymbol}` : "—"}
+          </dd>
         </div>
-      ) : snapshot.balances.length === 0 ? (
-        <div className="balance-empty">
-          {snapshot.vault.state === "unlocked"
-            ? "No private balances yet"
-            : "Unlock and recover to view balances"}
+        <div>
+          <dt>Working orders</dt>
+          <dd className="mono">{working}</dd>
         </div>
-      ) : (
-        snapshot.balances.map((balance) => (
-          <div className="balance-cell" key={balance.mint}>
-            <span className="mono label-address">
-              {balance.symbol} · {short(balance.mint, 4, 4)}
-            </span>
-            <strong className="mono">{balance.spendable}</strong>
-            <small>
-              {balance.reserved} reserved · {balance.pendingSettlement} settling
-            </small>
-          </div>
-        ))
+        <div>
+          <dt>Price increment</dt>
+          <dd className="mono">
+            {selected ? `${selected.tickSize} ${selected.quoteSymbol}` : "—"}
+          </dd>
+        </div>
+      </dl>
+      <div className="market-actions">
+        <button
+          className="primary-button compact"
+          type="button"
+          onClick={() => onManageAccount("deposit")}
+        >
+          <Wallet aria-hidden="true" /> Manage balance
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Refresh client state"
+          onClick={() => void actions.refresh()}
+        >
+          <RefreshCw />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ChartPanel({ chartSlot }: Pick<TraderShellProps, "chartSlot">) {
+  return (
+    <section className="chart-panel" aria-label="Price chart">
+      {chartSlot ?? (
+        <div className="chart-placeholder">
+          <LineChart aria-hidden="true" />
+          <b>No price feed configured</b>
+          <p>
+            The host application supplies the chart. The portable trader UI does
+            not fetch market data itself.
+          </p>
+        </div>
       )}
     </section>
   );
 }
 
-function ActivityTable({ snapshot, actions }: TraderShellProps) {
+function ActivityPanel({ snapshot, actions }: TraderShellProps) {
+  const [filter, setFilter] = useState<OrderFilter>("all");
+  const orders = snapshot.orders.filter((order) =>
+    filter === "all"
+      ? true
+      : filter === "working"
+        ? WORKING.includes(order.kind)
+        : !WORKING.includes(order.kind),
+  );
+
   return (
     <section className="activity-panel" id="activity">
       <div className="section-heading">
-        <div>
-          <span className="eyebrow">Lifecycle</span>
-          <h2>Orders & settlement</h2>
+        <div className="tab-row" role="tablist" aria-label="Order filter">
+          {(
+            [
+              { value: "all", label: "All" },
+              { value: "working", label: "Working" },
+              { value: "closed", label: "Closed" },
+            ] as const
+          ).map((entry) => (
+            <button
+              key={entry.value}
+              type="button"
+              role="tab"
+              aria-selected={filter === entry.value}
+              className={filter === entry.value ? "active" : ""}
+              onClick={() => setFilter(entry.value)}
+            >
+              {entry.label}
+              <em>
+                {entry.value === "all"
+                  ? snapshot.orders.length
+                  : entry.value === "working"
+                    ? snapshot.orders.filter((order) =>
+                        WORKING.includes(order.kind),
+                      ).length
+                    : snapshot.orders.filter(
+                        (order) => !WORKING.includes(order.kind),
+                      ).length}
+              </em>
+            </button>
+          ))}
         </div>
         <button
           className="quiet-button"
@@ -376,15 +391,20 @@ function ActivityTable({ snapshot, actions }: TraderShellProps) {
           <RefreshCw /> Refresh
         </button>
       </div>
-      {snapshot.orders.length === 0 ? (
+      {orders.length === 0 ? (
         <div className="empty-state">
           <div className="empty-mark">
             <Activity aria-hidden="true" />
           </div>
-          <h3>No orders yet</h3>
+          <h3>
+            {snapshot.orders.length === 0
+              ? "No orders yet"
+              : "Nothing in this view"}
+          </h3>
           <p>
-            Submitted intents and their on-chain settlement outcomes appear
-            here.
+            {snapshot.orders.length === 0
+              ? "Private intents and finalized settlement outcomes appear here."
+              : "Switch filters to see the rest of the lifecycle."}
           </p>
         </div>
       ) : (
@@ -397,14 +417,14 @@ function ActivityTable({ snapshot, actions }: TraderShellProps) {
             <span role="columnheader">Status</span>
             <span role="columnheader" aria-label="Actions" />
           </div>
-          {snapshot.orders.map((order) => (
+          {orders.map((order) => (
             <div className="order-row" role="row" key={order.orderId}>
               <span role="cell">
                 <b>{order.symbol}</b>
                 <small className="mono">{short(order.orderId, 6, 4)}</small>
               </span>
               <span role="cell" className={`side-${order.side}`}>
-                {order.side}
+                {order.side === "bid" ? "Buy" : "Sell"}
               </span>
               <span role="cell" className="mono">
                 {order.amount}
@@ -440,427 +460,6 @@ function ActivityTable({ snapshot, actions }: TraderShellProps) {
   );
 }
 
-function AccountPanel({ snapshot, actions }: TraderShellProps) {
-  const selected = snapshot.instruments.find(
-    (instrument) => instrument.symbol === snapshot.selectedSymbol,
-  );
-  const [asset, setAsset] = useState<"base" | "quote">("base");
-  const [amount, setAmount] = useState("");
-  const [passphrase, setPassphrase] = useState("");
-  const [restoreFile, setRestoreFile] = useState<File | null>(null);
-  const [backupStatus, setBackupStatus] = useState<string | null>(null);
-  const [accountError, setAccountError] = useState<string | null>(null);
-  const [invoking, setInvoking] = useState(false);
-  const operation = snapshot.accountOperation;
-  const busy =
-    (operation !== undefined &&
-      operation.state !== "finalized" &&
-      operation.state !== "ambiguous" &&
-      operation.state !== "failed") ||
-    invoking;
-  const blocked =
-    snapshot.vault.state !== "unlocked" ||
-    snapshot.wallet.state !== "connected" ||
-    !selected;
-
-  async function run(kind: "deposit" | "withdraw") {
-    if (!selected || blocked || busy) return;
-    setInvoking(true);
-    setAccountError(null);
-    try {
-      await actions[kind]({
-        marketSymbol: selected.symbol,
-        asset,
-        amount,
-      });
-    } catch (error) {
-      setAccountError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setInvoking(false);
-    }
-  }
-
-  async function runMerge() {
-    if (!selected || blocked || busy) return;
-    setInvoking(true);
-    setAccountError(null);
-    try {
-      await actions.merge(selected.symbol, asset);
-    } catch (error) {
-      setAccountError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setInvoking(false);
-    }
-  }
-
-  async function downloadBackup() {
-    setBackupStatus("Encrypting backup…");
-    try {
-      const backup = await actions.exportBackup(passphrase);
-      const url = URL.createObjectURL(
-        new Blob([JSON.stringify(backup, null, 2)], {
-          type: "application/json",
-        }),
-      );
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "darknyx-seed-backup-v2.json";
-      anchor.hidden = true;
-      document.body.append(anchor);
-      anchor.click();
-      setTimeout(() => {
-        anchor.remove();
-        URL.revokeObjectURL(url);
-      }, 0);
-      setBackupStatus(
-        "Encrypted backup generated. Verify that the download completed, then keep it offline.",
-      );
-    } catch (error) {
-      setBackupStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function restoreBackup() {
-    if (!restoreFile) return;
-    setBackupStatus("Restoring encrypted backup…");
-    try {
-      const backup = JSON.parse(await restoreFile.text());
-      await actions.restoreBackup(backup, passphrase);
-      setBackupStatus("Backup restored. Finalized chain recovery is running.");
-    } catch (error) {
-      setBackupStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  return (
-    <section className="account-panel" id="account">
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">Private account</span>
-          <h2>Fund, withdraw & recover</h2>
-        </div>
-      </div>
-      <div className="account-grid">
-        <div className="account-card">
-          <h3>Move assets</h3>
-          <p>
-            Deposits are public SPL transfers into a private note. Withdrawals
-            consume one exact note; consolidate first to withdraw a combined
-            balance.
-          </p>
-          <div className="account-segment" role="group" aria-label="Asset">
-            <button
-              type="button"
-              className={asset === "base" ? "active" : ""}
-              onClick={() => setAsset("base")}
-            >
-              {selected?.baseSymbol ?? "Base"}
-            </button>
-            <button
-              type="button"
-              className={asset === "quote" ? "active" : ""}
-              onClick={() => setAsset("quote")}
-            >
-              {selected?.quoteSymbol ?? "Quote"}
-            </button>
-          </div>
-          <label htmlFor="darknyx-account-amount">
-            <span>Amount</span>
-            <input
-              id="darknyx-account-amount"
-              className="mono"
-              inputMode="decimal"
-              pattern="[0-9]+([.][0-9]+)?"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-              placeholder="0"
-              autoComplete="off"
-            />
-          </label>
-          <div className="account-actions">
-            <button
-              type="button"
-              disabled={blocked || busy || !amount}
-              onClick={() => void run("deposit")}
-            >
-              <ArrowDownToLine aria-hidden="true" /> Deposit
-            </button>
-            <button
-              type="button"
-              disabled={blocked || busy || !amount}
-              onClick={() => void run("withdraw")}
-            >
-              <ArrowUpFromLine aria-hidden="true" /> Withdraw
-            </button>
-            <button
-              type="button"
-              disabled={blocked || busy}
-              onClick={() => void runMerge()}
-            >
-              <Layers3 aria-hidden="true" /> Consolidate
-            </button>
-          </div>
-          {operation && (
-            <div
-              className={`account-result is-${operation.state}`}
-              role="status"
-            >
-              {busy && <LoaderCircle className="spin" aria-hidden="true" />}
-              <span>
-                <b>{operation.kind.replace("merge", "consolidation")}</b>
-                {operation.message}
-              </span>
-            </div>
-          )}
-          {accountError && <p role="alert">{accountError}</p>}
-        </div>
-        <div className="account-card backup-card">
-          <h3>Portable recovery</h3>
-          <p>
-            Export the encrypted version-2 seed backup and keep it offline. The
-            passphrase is never persisted; chain recovery rebuilds notes on a
-            new device.
-          </p>
-          <label htmlFor="darknyx-backup-passphrase">
-            <span>Backup passphrase</span>
-            <input
-              id="darknyx-backup-passphrase"
-              type="password"
-              value={passphrase}
-              onChange={(event) => setPassphrase(event.target.value)}
-              autoComplete="new-password"
-              minLength={12}
-            />
-          </label>
-          <button
-            type="button"
-            disabled={
-              snapshot.vault.state !== "unlocked" || passphrase.length < 12
-            }
-            onClick={() => void downloadBackup()}
-          >
-            Export encrypted backup
-          </button>
-          <div className="restore-row">
-            <input
-              type="file"
-              accept="application/json,.json"
-              aria-label="Choose encrypted Darknyx backup"
-              disabled={snapshot.vault.state !== "unprovisioned"}
-              onChange={(event) =>
-                setRestoreFile(event.target.files?.[0] ?? null)
-              }
-            />
-            <button
-              type="button"
-              disabled={
-                snapshot.vault.state !== "unprovisioned" ||
-                !restoreFile ||
-                passphrase.length < 12
-              }
-              onClick={() => void restoreBackup()}
-            >
-              Restore on this device
-            </button>
-          </div>
-          {backupStatus && <p role="status">{backupStatus}</p>}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function OrderTicket({ snapshot, actions }: TraderShellProps) {
-  const selected = snapshot.instruments.find(
-    (instrument) => instrument.symbol === snapshot.selectedSymbol,
-  );
-  const [side, setSide] = useState<"bid" | "ask">("bid");
-  const [amount, setAmount] = useState("");
-  const [price, setPrice] = useState("");
-  const [policy, setPolicy] = useState<"limit" | "ioc" | "fok">("limit");
-  const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-
-  const block = useMemo(() => {
-    if (snapshot.venue.state !== "trusted")
-      return "Venue trust is not established";
-    if (!snapshot.selectedSymbol || !selected)
-      return "Select an attested market";
-    if (!selected.tradingEnabled) return "This market is paused";
-    if (snapshot.vault.state !== "unlocked") return "Unlock the private vault";
-    if (snapshot.proofReadiness.ready < 1)
-      return "Waiting for an accepted-root proof";
-    return null;
-  }, [
-    selected,
-    snapshot.proofReadiness.ready,
-    snapshot.selectedSymbol,
-    snapshot.vault.state,
-    snapshot.venue.state,
-  ]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!selected || block || submitting) return;
-    setSubmitting(true);
-    setResult(null);
-    try {
-      const response = await actions.submitOrder({
-        marketSymbol: selected.symbol,
-        side,
-        amount,
-        limitPrice: price,
-        orderType: policy,
-      });
-      setResult(
-        response.status === "accepted"
-          ? `Order ${short(response.orderId)} accepted`
-          : response.status === "pending"
-            ? `Pending: ${response.reason.toLowerCase().replaceAll("_", " ")}`
-            : `Rejected: ${response.code.toLowerCase().replaceAll("_", " ")}`,
-      );
-    } catch {
-      setResult("Order state is ambiguous. Reconciliation is in progress.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <aside className="ticket-panel" aria-label="Order ticket">
-      <div className="ticket-heading">
-        <div>
-          <span className="eyebrow">Private intent</span>
-          <h2>Place order</h2>
-        </div>
-      </div>
-      <div className="side-switch" role="group" aria-label="Order side">
-        <button
-          type="button"
-          className={side === "bid" ? "active" : ""}
-          aria-pressed={side === "bid"}
-          onClick={() => setSide("bid")}
-        >
-          Buy
-        </button>
-        <button
-          type="button"
-          className={side === "ask" ? "active" : ""}
-          aria-pressed={side === "ask"}
-          onClick={() => setSide("ask")}
-        >
-          Sell
-        </button>
-      </div>
-      <form onSubmit={(event) => void submit(event)}>
-        <label>
-          <span>Market</span>
-          <div className="readonly-field">
-            <b>{selected?.symbol ?? "No market"}</b>
-            <small>
-              {selected?.tradingEnabled ? "Trading enabled" : "Unavailable"}
-            </small>
-          </div>
-        </label>
-        <label htmlFor="darknyx-order-amount">
-          <span>
-            Amount <small>{selected?.baseSymbol}</small>
-          </span>
-          <input
-            id="darknyx-order-amount"
-            type="text"
-            className="mono"
-            inputMode="decimal"
-            pattern="[0-9]+([.][0-9]+)?"
-            autoComplete="off"
-            spellCheck={false}
-            required
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <label htmlFor="darknyx-order-price">
-          <span>
-            Limit price <small>{selected?.quoteSymbol}</small>
-          </span>
-          <input
-            id="darknyx-order-price"
-            type="text"
-            className="mono"
-            inputMode="decimal"
-            pattern="[0-9]+([.][0-9]+)?"
-            autoComplete="off"
-            spellCheck={false}
-            required
-            value={price}
-            onChange={(event) => setPrice(event.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <fieldset role="group" aria-label="Execution">
-          <legend>Execution</legend>
-          {(["limit", "ioc", "fok"] as const).map((kind) => (
-            <button
-              type="button"
-              key={kind}
-              className={policy === kind ? "active" : ""}
-              aria-pressed={policy === kind}
-              onClick={() => setPolicy(kind)}
-            >
-              {kind.toUpperCase()}
-            </button>
-          ))}
-        </fieldset>
-        <div className="ticket-proof">
-          {snapshot.proofReadiness.ready > 0 ? (
-            <Check aria-hidden="true" />
-          ) : (
-            <LoaderCircle className="spin" aria-hidden="true" />
-          )}
-          <span>
-            <b>
-              {snapshot.proofReadiness.ready > 0
-                ? "Proof ready"
-                : "Proof unavailable"}
-            </b>
-            <small>Order submission never proves on demand</small>
-          </span>
-        </div>
-        {block && (
-          <div className="blocking-message">
-            <AlertTriangle aria-hidden="true" /> {block}
-          </div>
-        )}
-        {result && (
-          <div className="result-message" role="status">
-            {result}
-          </div>
-        )}
-        <button
-          className="primary-button submit-order"
-          type="submit"
-          disabled={Boolean(block) || submitting || !amount || !price}
-          aria-busy={submitting}
-        >
-          {submitting ? (
-            <LoaderCircle className="spin" aria-hidden="true" />
-          ) : (
-            <Lock aria-hidden="true" />
-          )}
-          {submitting
-            ? "Authorizing"
-            : `${side === "bid" ? "Buy" : "Sell"} privately`}
-        </button>
-        <p className="ticket-footnote">
-          Your limit and size enter the attested venue over the authenticated
-          session. Settlement remains verifiable on Solana.
-        </p>
-      </form>
-    </aside>
-  );
-}
-
 function TrustBanner({ snapshot, actions }: TraderShellProps) {
   if (snapshot.venue.state === "trusted") return null;
   const failed = snapshot.venue.state === "failed";
@@ -877,26 +476,33 @@ function TrustBanner({ snapshot, actions }: TraderShellProps) {
       <div>
         <b>
           {failed
-            ? "Venue verification failed"
+            ? "Venue trust is not established"
             : snapshot.venue.state === "degraded"
-              ? "Venue is degraded"
+              ? "Some markets are paused"
               : "Verifying venue"}
         </b>
         <span>
           {snapshot.venue.message ??
-            "Checking finalized governance, TDX quote, and market configuration."}
+            "Checking the attested enclave and finalized governance pins."}
         </span>
       </div>
       {failed && (
         <button type="button" onClick={() => void actions.retryVenue()}>
-          Retry verification
+          Retry
         </button>
       )}
     </div>
   );
 }
 
-export function TraderShell({ snapshot, actions }: TraderShellProps) {
+export function TraderShell({
+  snapshot,
+  actions,
+  chartSlot,
+}: TraderShellProps) {
+  const [accountTab, setAccountTab] = useState<AccountTab | null>(null);
+  const props = { snapshot, actions };
+
   return (
     <div className="darknyx-product" data-theme="dark">
       <header className="topbar">
@@ -904,44 +510,21 @@ export function TraderShell({ snapshot, actions }: TraderShellProps) {
           <HorizonMark />
           <span className="brand-wordmark">darknyx</span>
         </a>
-        <nav aria-label="Product">
-          <a className="active" href="#trade">
-            Trade
-          </a>
-          <a href="#activity">Activity</a>
-          <a href="#account">Account</a>
-        </nav>
+        <p className="brand-tagline">Settle in the dark. Prove in the light.</p>
         <div className="top-actions">
           <VenueBadge venue={snapshot.venue} />
-          <WalletControl snapshot={snapshot} actions={actions} />
+          <KeyringControl {...props} />
+          <WalletControl {...props} />
         </div>
       </header>
-      <TrustBanner snapshot={snapshot} actions={actions} />
+      <TrustBanner {...props} />
       <main className="workspace" id="trade">
-        <MarketRail snapshot={snapshot} actions={actions} />
         <div className="content-column">
-          <div className="context-bar">
-            <div>
-              <span className="eyebrow">Selected market</span>
-              <h1>{snapshot.selectedSymbol ?? "Private markets"}</h1>
-            </div>
-            <div className="context-actions">
-              <VaultControl snapshot={snapshot} actions={actions} />
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="Refresh client state"
-                onClick={() => void actions.refresh()}
-              >
-                <RefreshCw />
-              </button>
-            </div>
-          </div>
-          <BalanceStrip snapshot={snapshot} />
-          <ActivityTable snapshot={snapshot} actions={actions} />
-          <AccountPanel snapshot={snapshot} actions={actions} />
+          <MarketHeader {...props} onManageAccount={setAccountTab} />
+          <ChartPanel chartSlot={chartSlot} />
+          <ActivityPanel {...props} />
         </div>
-        <OrderTicket snapshot={snapshot} actions={actions} />
+        <OrderTicket {...props} onManageAccount={setAccountTab} />
       </main>
       <footer className="product-footer">
         <span>
@@ -951,15 +534,20 @@ export function TraderShell({ snapshot, actions }: TraderShellProps) {
           />
           {snapshot.venue.label}
         </span>
-        <span className="mono">
-          Finalized governance {snapshot.venue.governanceSlot ?? "—"}
-        </span>
+        <span className="mono">Attested execution · Solana settlement</span>
         <span>
           {snapshot.lastUpdated
             ? `Updated ${snapshot.lastUpdated}`
             : "Awaiting first sync"}
         </span>
       </footer>
+      <AccountDialog
+        {...props}
+        open={accountTab !== null}
+        tab={accountTab ?? "deposit"}
+        onTabChange={setAccountTab}
+        onClose={() => setAccountTab(null)}
+      />
     </div>
   );
 }

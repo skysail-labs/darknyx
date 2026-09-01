@@ -3,7 +3,10 @@ import {
   TOKEN_PROGRAM_ADDRESS,
 } from "@solana-program/token";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { pubkeyToFrPair } from "@darknyx/sdk/browser-inventory-crypto";
+import {
+  noteCommitmentV2,
+  pubkeyToFrPair,
+} from "@darknyx/sdk/browser-inventory-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // ATA derivation is async under `@solana-program/token` and returns a
@@ -174,6 +177,155 @@ async function withdrawalHarness(outcome: "finalized" | "ambiguous") {
 
 describe("browser account operations", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("records a deposit after confirmed commitment without waiting for finalization", async () => {
+    const programId = new PublicKey(
+      "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+    );
+    const mint = dummyAddress();
+    const wallet = dummyAddress();
+    const amount = 25n;
+    const ownerCommitment = 8n;
+    const innerHash = 9n;
+    const recoveryNonce = be32(1n);
+    const commitment = await noteCommitmentV2({
+      tokenMint: mint.toBytes(),
+      amount,
+      ownerCommitment,
+      innerHash,
+    });
+    const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
+    const vault = new BrowserVault({
+      workerFactory: () =>
+        new ReplyWorker({
+          witness: {
+            noteCommitment: BigInt(
+              `0x${Buffer.from(commitment).toString("hex")}`,
+            ),
+            tokenMint: [mintLo, mintHi],
+            amount,
+            recoveryNonce: 1n,
+            spendingKey: 12n,
+            noteSecret: 13n,
+          },
+          commitment,
+          recoveryNonce,
+          opening: {
+            tokenMint: mint.toBytes(),
+            amount,
+            ownerCommitment,
+            innerHash,
+          },
+        }) as unknown as Worker,
+    });
+    const recorded: unknown[] = [];
+    const confirmTransaction = vi.fn(async () => ({
+      context: { slot: 10 },
+      value: { err: null },
+    }));
+    const getSignatureStatuses = vi.fn(async () => ({
+      context: { slot: 10 },
+      value: [
+        {
+          slot: 10n,
+          confirmations: 1n,
+          err: null,
+          confirmationStatus: "confirmed" as const,
+        },
+      ],
+    }));
+    const event = new Uint8Array(17);
+    event.set([173, 155, 50, 250, 162, 108, 244, 218]);
+    new DataView(event.buffer).setBigUint64(9, 7n, true);
+
+    const operations = new BrowserAccountOperations({
+      release: {
+        venueId: "test",
+        gatewayUrl: "https://venue.test",
+        rpcUrl: "https://rpc.test",
+        vaultProgramId: programId.toBase58(),
+        expectedComposeHash: "test",
+        expectedOracleMode: "pyth-solana-push-v1",
+        recoveryStartSlot: 0,
+      },
+      venue: { numTrees: 1 } as never,
+      vault,
+      inventory: {
+        noteLayout: async () => ({
+          totalNotes: 0,
+          spendableNotes: 0,
+          mergeableNotes: 0,
+          shardCount: 0,
+        }),
+        recordConfirmedDeposit: async (note: unknown) =>
+          void recorded.push(note),
+      } as never,
+      prover: {
+        deposit: {
+          prove: async () => ({
+            piA: new Uint8Array(64),
+            piB: new Uint8Array(128),
+            piC: new Uint8Array(64),
+            publicInputs: [
+              commitment,
+              be32(mintLo),
+              be32(mintHi),
+              be32(amount),
+              recoveryNonce,
+            ],
+          }),
+        },
+      } as never,
+      wallet: {
+        current: () => ({ walletName: "Test", address: wallet.toBase58() }),
+        signAndSendTransaction: async () => new Uint8Array(64).fill(7),
+      } as never,
+      connection: {
+        getLatestBlockhash: async () => ({
+          blockhash: PublicKey.default.toBase58(),
+          lastValidBlockHeight: 99,
+        }),
+        confirmTransaction,
+        getSignatureStatuses,
+        getTransaction: async () => ({
+          slot: 10n,
+          meta: {
+            logMessages: [
+              `Program ${programId.toBase58()} invoke [1]`,
+              `Program data: ${Buffer.from(event).toString("base64")}`,
+              `Program ${programId.toBase58()} success`,
+            ],
+          },
+        }),
+      } as never,
+      requestTimeoutMs: 25,
+    });
+
+    await expect(
+      operations.deposit({ tokenMint: mint.toBase58(), amount }),
+    ).resolves.toMatchObject({ status: "confirmed" });
+    expect(confirmTransaction).not.toHaveBeenCalled();
+    expect(getSignatureStatuses).toHaveBeenCalledWith([expect.any(String)], {
+      searchTransactionHistory: true,
+    });
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        commitment: Buffer.from(commitment).toString("hex"),
+        treeId: 0,
+        leafIndex: 7n,
+      }),
+    ]);
+    getSignatureStatuses.mockImplementationOnce(
+      () => new Promise<never>(() => undefined),
+    );
+    await expect(
+      operations.deposit({ tokenMint: mint.toBase58(), amount }),
+    ).resolves.toMatchObject({
+      status: "ambiguous",
+      message: "confirmed transaction confirmation timed out",
+    });
+    vault.destroy();
+  });
 
   it("keeps an exact-note reservation when wallet broadcast is uncertain", async () => {
     const mint = dummyAddress();

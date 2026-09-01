@@ -317,7 +317,15 @@ async function supported() {
       token: async () => "test-token",
     },
     vault,
-    inventory: {},
+    inventory: {
+      noteLayout: async () => ({
+        totalNotes: 0,
+        spendableNotes: 0,
+        mergeableNotes: 0,
+        shardCount: 0,
+        preferredTreeId: undefined,
+      }),
+    },
     prover: {
       deposit: {
         prove: async (witness) => {

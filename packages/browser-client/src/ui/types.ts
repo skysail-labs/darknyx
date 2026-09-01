@@ -4,6 +4,7 @@ import type {
   SubmitIntentResult,
   VaultStatus,
 } from "@darknyx/client-core";
+import type { ReactNode } from "react";
 
 export interface InstrumentView {
   symbol: string;
@@ -30,6 +31,10 @@ export interface PrivateBalanceView {
   spendable: string;
   reserved: string;
   pendingSettlement: string;
+  noteCount?: number;
+  spendableNoteCount?: number;
+  mergeableNoteCount?: number;
+  shardCount?: number;
 }
 
 export interface TraderOrderDraft {
@@ -55,6 +60,7 @@ export interface AccountOperationView {
     | "proving"
     | "wallet_approval"
     | "finalizing"
+    | "confirmed"
     | "finalized"
     | "ambiguous"
     | "failed";
@@ -132,6 +138,11 @@ export interface TraderShellActions {
 export interface TraderShellProps {
   snapshot: TraderShellSnapshot;
   actions: TraderShellActions;
+  /**
+   * Sandboxed market-data region supplied by the application host. The
+   * portable UI never loads third-party scripts or fetches market data.
+   */
+  chartSlot?: ReactNode;
 }
 
 /** Narrow observable surface; privileged runtime objects never enter React. */

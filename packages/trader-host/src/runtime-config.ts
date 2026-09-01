@@ -4,13 +4,20 @@ import { open, readFile } from "node:fs/promises";
 import { createProvisioningCredentialResolver } from "./account-store.js";
 import { createCvmTokenIssuer } from "./cvm-issuer.js";
 import { parsePublicRelease } from "./release.js";
-import type { CvmAccountCredentials, ReleaseHostOptions } from "./types.js";
+import type {
+  CvmAccountCredentials,
+  CvmWebSocketFactory,
+  ReleaseHostOptions,
+} from "./types.js";
 
 const ENV = [
   "DARKNYX_TRADER_ORIGIN",
   "DARKNYX_TRADER_STATIC_ROOT",
   "DARKNYX_TRADER_RELEASE_FILE",
   "DARKNYX_TRADER_CVM_GATEWAY_UPSTREAM",
+  "DARKNYX_TRADER_CVM_TRANSPORT",
+  "DARKNYX_TRADER_EXPECT_COMPOSE_HASH",
+  "DARKNYX_TRADER_EXPECT_SIGNER_SET",
   "DARKNYX_TRADER_RPC_UPSTREAM_FILE",
   "DARKNYX_TRADER_COOKIE_KEY_FILE",
   "DARKNYX_TRADER_ACCOUNT_STORE_KEY_FILE",
@@ -155,6 +162,8 @@ export interface TraderHostRuntimeOptions {
    * Unset is the legacy gateway-terminated path.
    */
   cvmFetch?: typeof fetch;
+  /** Verified factory for the CVM stream's independent TLS connection. */
+  cvmWebSocketFactory?: CvmWebSocketFactory;
 }
 
 export async function loadTraderHostRuntimeConfig(
@@ -205,6 +214,12 @@ export async function loadTraderHostRuntimeConfig(
   // gateway-terminated path. Threading it in ONE place is deliberate: three
   // separate opt-ins is how one of them ends up unverified.
   const cvmFetch = options?.cvmFetch;
+  const cvmWebSocketFactory = options?.cvmWebSocketFactory;
+  if ((cvmFetch === undefined) !== (cvmWebSocketFactory === undefined)) {
+    throw new Error(
+      "verified CVM HTTP and WebSocket transports must be supplied together",
+    );
+  }
 
   const resolveCredentials = createProvisioningCredentialResolver({
     gatewayUrl: gateway,
@@ -238,6 +253,7 @@ export async function loadTraderHostRuntimeConfig(
       gatewayUpstreamUrl: gateway,
       rpcUpstreamUrl: rpc,
       ...(cvmFetch ? { cvmFetch } : {}),
+      ...(cvmWebSocketFactory ? { cvmWebSocketFactory } : {}),
       proxyTimeoutMs,
       maxProxyRequestsPerMinute: integer(
         env,

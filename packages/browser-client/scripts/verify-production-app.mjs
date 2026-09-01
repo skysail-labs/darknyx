@@ -12,7 +12,8 @@ const manifest = JSON.parse(
 if (
   manifest.schema_version !== 1 ||
   !Array.isArray(manifest.files) ||
-  manifest.files.length < 4
+  manifest.files.length < 5 ||
+  typeof manifest.tradingview_frame !== "string"
 ) {
   throw new Error("production application manifest is malformed");
 }
@@ -43,5 +44,18 @@ if (
   /<script(?![^>]*\bsrc=)/i.test(html)
 ) {
   throw new Error("production HTML does not pin external hashed assets");
+}
+const tradingViewHtml = await readFile(
+  resolve(root, "tradingview.html"),
+  "utf8",
+);
+if (
+  !tradingViewHtml.includes(`src="${manifest.tradingview_frame}"`) ||
+  /<script(?![^>]*\bsrc=)/i.test(tradingViewHtml) ||
+  /https:\/\/s3\.tradingview\.com/i.test(tradingViewHtml)
+) {
+  throw new Error(
+    "TradingView frame HTML does not pin its isolated hashed bootstrap",
+  );
 }
 console.log(`verified ${manifest.files.length} production assets`);

@@ -59,6 +59,7 @@ import type {
 
 /** The subset of a Node `ws` socket this module needs. */
 export interface NodeWebSocketLike {
+  readonly bufferedAmount?: number;
   on(event: "open", cb: () => void): void;
   on(event: "message", cb: (data: unknown) => void): void;
   on(event: "close", cb: (code: number, reason?: unknown) => void): void;
@@ -100,7 +101,9 @@ export function upgradeSocketSpki(socket: unknown): Uint8Array | null {
   if (typeof getCert !== "function") return null;
   const cert = getCert.call(tls);
   if (!cert) return null;
-  return sha256(new Uint8Array(cert.publicKey.export({ type: "spki", format: "der" })));
+  return sha256(
+    new Uint8Array(cert.publicKey.export({ type: "spki", format: "der" })),
+  );
 }
 
 /**
@@ -123,13 +126,15 @@ export function createVerifiedWebSocketFactory(
     let state: "pending" | "verified" | "rejected" | "closed" = "pending";
     /** Frames the caller tried to send before the check completed. */
     let pending: string[] = [];
+    let pendingBytes = 0;
     let sawUpgrade = false;
     // A server can accept the TCP connection and then emit neither `upgrade`
     // nor `open`. Without a bound, `state` stays "pending" for the life of the
     // process and the queued login frame — which carries a bearer token —
     // stays in memory on a socket that will never be verified.
     const handshakeTimer = setTimeout(() => {
-      if (state === "pending") reject("handshake did not complete in time", "malformed");
+      if (state === "pending")
+        reject("handshake did not complete in time", "malformed");
     }, HANDSHAKE_TIMEOUT_MS);
     // Never let this timer hold a Node process open on its own.
     (handshakeTimer as unknown as { unref?: () => void }).unref?.();
@@ -160,16 +165,21 @@ export function createVerifiedWebSocketFactory(
       // been writable then.
       for (const frame of pending) inner.send(frame);
       pending = [];
+      pendingBytes = 0;
       for (const cb of openCbs) cb();
     };
 
-    const reject = (detail: string, kind: TransportFailure = "spki_mismatch") => {
+    const reject = (
+      detail: string,
+      kind: TransportFailure = "spki_mismatch",
+    ) => {
       if (state === "rejected") return;
       state = "rejected";
       clearTimeout(handshakeTimer);
       // Discard unsent frames. A queued login frame must not be delivered
       // late on a connection that failed its check.
       pending = [];
+      pendingBytes = 0;
       const err = new TransportVerificationError(
         `websocket transport rejected: ${detail}`,
         kind,
@@ -209,7 +219,10 @@ export function createVerifiedWebSocketFactory(
       // compare and must not assume the connection is fine. Plain `ws://`
       // reaches here, which is exactly the case worth refusing.
       if (!sawUpgrade) {
-        reject("connection completed without a TLS upgrade to inspect", "malformed");
+        reject(
+          "connection completed without a TLS upgrade to inspect",
+          "malformed",
+        );
         return;
       }
       innerOpened = true;
@@ -230,6 +243,7 @@ export function createVerifiedWebSocketFactory(
       // with no error to the caller — and nothing ever released it.
       if (state !== "rejected") state = "closed";
       pending = [];
+      pendingBytes = 0;
       clearTimeout(handshakeTimer);
       for (const cb of closeCbs) {
         cb({ code, reason: typeof reason === "string" ? reason : undefined });
@@ -241,6 +255,15 @@ export function createVerifiedWebSocketFactory(
     });
 
     return {
+      get bufferedAmount(): number {
+        const innerBytes = inner.bufferedAmount;
+        return (
+          pendingBytes +
+          (typeof innerBytes === "number" && Number.isFinite(innerBytes)
+            ? Math.max(0, innerBytes)
+            : 0)
+        );
+      },
       addEventListener(type: string, cb: unknown): void {
         // Terminal states are REPLAYED to listeners that arrive late.
         //
@@ -279,6 +302,7 @@ export function createVerifiedWebSocketFactory(
         // login against a live CVM.
         if (state === "pending" || !innerOpened) {
           pending.push(data);
+          pendingBytes += new TextEncoder().encode(data).length;
           return;
         }
         inner.send(data);

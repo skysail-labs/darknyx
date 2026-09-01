@@ -11,6 +11,7 @@ import {
   releaseVenueConfig,
 } from "./release.js";
 import { createVenueRecovery } from "./recovery.js";
+import { TradingViewChart } from "./tradingview-chart.js";
 
 function rootElement(): HTMLElement {
   const root = document.getElementById("darknyx-trader-root");
@@ -72,7 +73,12 @@ async function start(): Promise<void> {
     },
     { once: true },
   );
-  createRoot(rootElement()).render(<TraderProduct controller={controller} />);
+  createRoot(rootElement()).render(
+    <TraderProduct
+      controller={controller}
+      chartSlot={<TradingViewChart marketSymbol="SOL-USDC" interval="D" />}
+    />,
+  );
 }
 
 void start().catch(fail);

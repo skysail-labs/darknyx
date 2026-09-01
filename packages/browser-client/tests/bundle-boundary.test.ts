@@ -119,7 +119,8 @@ describe("browser custody product boundary", () => {
     ]) {
       expect(ui, forbidden).not.toContain(forbidden);
     }
-    expect(css).toContain("@media (max-width: 1050px)");
+    expect(css).toContain("@media (max-width: 1180px)");
+    expect(css).toContain("@media (max-width: 980px)");
     expect(css).toContain("@media (max-width: 720px)");
     expect(css).toContain("prefers-reduced-motion");
     expect(css).not.toContain("@import");

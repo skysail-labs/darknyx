@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { AccountDialog } from "../src/ui/account-dialog.js";
 import { TraderShell } from "../src/ui/trader-shell.js";
 import type {
   TraderShellActions,
@@ -111,6 +112,48 @@ describe("trader workspace", () => {
     expect(html).not.toContain("This market is paused");
   });
 
+  it("does not tell a funded trader to deposit while an input proof is pending", () => {
+    const html = renderToStaticMarkup(
+      <TraderShell
+        actions={actions}
+        snapshot={snapshot({
+          venue: { state: "trusted", label: "Devnet · TDX" },
+          vault: { state: "unlocked" },
+          wallet: {
+            state: "connected",
+            address: "wallet",
+            walletName: "Phantom",
+            availableWallets: [],
+          },
+          selectedSymbol: "SOL-USDC",
+          instruments: [
+            {
+              symbol: "SOL-USDC",
+              baseSymbol: "SOL",
+              quoteSymbol: "USDC",
+              tradingEnabled: true,
+              minOrderSize: "0.01",
+              tickSize: "0.01",
+            },
+          ],
+          balances: [
+            {
+              mint: "quote",
+              symbol: "USDC",
+              spendable: "230",
+              reserved: "0",
+              pendingSettlement: "0",
+              spendableNoteCount: 3,
+            },
+          ],
+          proofReadiness: { ready: 0, proving: 1, stale: 0 },
+        })}
+      />,
+    );
+    expect(html).toContain("Preparing your private input proof");
+    expect(html).not.toContain("Deposit a private balance first");
+  });
+
   it("keeps ambiguous settlement visible as a durable lifecycle state", () => {
     const html = renderToStaticMarkup(
       <TraderShell
@@ -137,38 +180,63 @@ describe("trader workspace", () => {
   });
 
   it("explains exact-note withdrawal and keeps recovery actions state-gated", () => {
-    const html = renderToStaticMarkup(
-      <TraderShell
-        actions={actions}
-        snapshot={snapshot({
-          venue: { state: "trusted", label: "Devnet · TDX" },
-          vault: { state: "locked" },
-          wallet: { state: "disconnected", availableWallets: [] },
-          selectedSymbol: "SOL-USDC",
-          instruments: [
-            {
-              symbol: "SOL-USDC",
-              baseSymbol: "SOL",
-              quoteSymbol: "USDC",
-              tradingEnabled: true,
-              minOrderSize: "0.01",
-              tickSize: "0.01",
-            },
-          ],
-        })}
-      />,
+    const accountSnapshot = snapshot({
+      venue: { state: "trusted", label: "Devnet · TDX" },
+      vault: { state: "locked" },
+      wallet: { state: "disconnected", availableWallets: [] },
+      selectedSymbol: "SOL-USDC",
+      instruments: [
+        {
+          symbol: "SOL-USDC",
+          baseSymbol: "SOL",
+          quoteSymbol: "USDC",
+          tradingEnabled: true,
+          minOrderSize: "0.01",
+          tickSize: "0.01",
+        },
+      ],
+    });
+    const shell = renderToStaticMarkup(
+      <TraderShell actions={actions} snapshot={accountSnapshot} />,
     );
-    expect(html).toContain("Fund, withdraw &amp; recover");
-    expect(html).toContain("Withdrawals consume one exact note");
-    expect(html).toContain("Portable recovery");
-    expect(html).toContain('href="#account"');
-    const buttons = [...html.matchAll(/<button\b[^>]*>.*?<\/button>/g)].map(
-      ([markup]) => markup,
-    );
-    for (const label of ["Deposit", "Withdraw", "Consolidate"]) {
-      const button = buttons.find((markup) => markup.includes(label));
-      expect(button, `${label} action exists`).toBeDefined();
-      expect(button, `${label} action stays gated`).toContain('disabled=""');
-    }
+    expect(shell).toContain("Manage balance");
+    expect(shell).not.toContain('href="#account"');
+
+    const renderAccount = (tab: "withdraw" | "consolidate" | "recovery") =>
+      renderToStaticMarkup(
+        <AccountDialog
+          open
+          tab={tab}
+          snapshot={accountSnapshot}
+          actions={actions}
+          onTabChange={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+    const withdrawal = renderAccount("withdraw");
+    expect(withdrawal).toContain("Private account");
+    expect(withdrawal).toContain("Withdrawals consume an exact eligible note");
+    const withdrawButton = [
+      ...withdrawal.matchAll(/<button\b[^>]*>.*?<\/button>/g),
+    ]
+      .map(([markup]) => markup)
+      .find((markup) => markup.includes("Withdraw to wallet"));
+    expect(withdrawButton).toContain('disabled=""');
+
+    const consolidate = renderAccount("consolidate");
+    const consolidateButton = [
+      ...consolidate.matchAll(/<button\b[^>]*>.*?<\/button>/g),
+    ]
+      .map(([markup]) => markup)
+      .find((markup) => markup.includes("Consolidate SOL notes"));
+    expect(consolidateButton).toContain('disabled=""');
+
+    const recovery = renderAccount("recovery");
+    expect(recovery).toContain("Portable recovery");
+    const exportButton = [...recovery.matchAll(/<button\b[^>]*>.*?<\/button>/g)]
+      .map(([markup]) => markup)
+      .find((markup) => markup.includes("Export encrypted backup"));
+    expect(exportButton).toContain('disabled=""');
   });
 });

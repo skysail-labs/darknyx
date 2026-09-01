@@ -145,16 +145,18 @@ function rawBytes(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-function normalizeCommitments(value: unknown): void {
+function normalizeCommitments(value: unknown, allowConfirmed: boolean): void {
   if (!value || typeof value !== "object") return;
   if (Array.isArray(value)) {
-    for (const item of value) normalizeCommitments(item);
+    for (const item of value) normalizeCommitments(item, allowConfirmed);
     return;
   }
   const object = value as Record<string, unknown>;
   for (const [key, nested] of Object.entries(object)) {
-    if (key === "commitment") object[key] = "finalized";
-    else normalizeCommitments(nested);
+    if (key === "commitment") {
+      object[key] =
+        allowConfirmed && nested === "confirmed" ? "confirmed" : "finalized";
+    } else normalizeCommitments(nested, allowConfirmed);
   }
 }
 
@@ -184,7 +186,12 @@ function normalizeRpcPayload(
       return null;
     }
     const params = (object.params ?? []) as unknown[];
-    normalizeCommitments(params);
+    // A browser must read the NoteCreated / NoteMerged event from its own
+    // just-confirmed transaction to update local inventory without a reload.
+    // This exception is deliberately method-local: account/governance/root
+    // reads continue to be upgraded to finalized below.
+    const allowConfirmed = object.method === "getTransaction";
+    normalizeCommitments(params, allowConfirmed);
     const configIndex = RPC_CONFIG_INDEX.get(object.method);
     if (configIndex !== undefined) {
       while (params.length <= configIndex) params.push(undefined);
@@ -199,7 +206,12 @@ function normalizeRpcPayload(
       }
       params[configIndex] = {
         ...((existing as Record<string, unknown> | undefined) ?? {}),
-        commitment: "finalized",
+        commitment:
+          allowConfirmed &&
+          (existing as Record<string, unknown> | undefined)?.commitment ===
+            "confirmed"
+            ? "confirmed"
+            : "finalized",
       };
       object.params = params;
     }
@@ -304,10 +316,47 @@ function forwardClose(peer: WebSocket, code: number, reason: Buffer): void {
   else peer.close(code, reason);
 }
 
+function debugStreamFrame(
+  direction: "client" | "cvm",
+  bytes: Uint8Array,
+): void {
+  if (process.env.DARKNYX_DEBUG_WS !== "1") return;
+  try {
+    const frame = JSON.parse(new TextDecoder().decode(bytes)) as Record<
+      string,
+      unknown
+    >;
+    const result =
+      frame.result && typeof frame.result === "object"
+        ? (frame.result as Record<string, unknown>)
+        : undefined;
+    process.stderr.write(
+      `[trader-host ws] ${JSON.stringify({
+        direction,
+        op: frame.op,
+        requestId: frame.request_id,
+        channel: frame.channel,
+        orderId: frame.order_id ?? result?.order_id,
+        status: frame.kind ?? result?.status,
+        accountId: frame.account_id,
+        code: frame.code,
+        message: frame.message,
+      })}\n`,
+    );
+  } catch {
+    process.stderr.write(`[trader-host ws] ${direction} non-JSON frame\n`);
+  }
+}
+
 export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   if (!options.gatewayUpstreamUrl && !options.rpcUpstreamUrl) return null;
   if (!options.gatewayUpstreamUrl || !options.rpcUpstreamUrl) {
     throw new Error("live proxy requires both gateway and RPC upstreams");
+  }
+  if (Boolean(options.cvmFetch) !== Boolean(options.cvmWebSocketFactory)) {
+    throw new Error(
+      "verified CVM HTTP and WebSocket transports must be supplied together",
+    );
   }
   const gateway = gatewayBase(options.gatewayUpstreamUrl, {
     allowLoopbackHttp: true,
@@ -377,8 +426,122 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
     head: Buffer,
     target: URL,
     transform: (bytes: Uint8Array) => Uint8Array | null,
+    useVerifiedCvmStream: boolean,
   ) => {
     webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
+      if (useVerifiedCvmStream && options.cvmWebSocketFactory) {
+        const upstream = options.cvmWebSocketFactory(websocketUrl(target));
+        let upstreamOpened = false;
+        let pendingBytes = 0;
+        let downstreamAlive = true;
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          const current = activeRelays.get(session) ?? 0;
+          if (current <= 1) activeRelays.delete(session);
+          else activeRelays.set(session, current - 1);
+        };
+        const closeBoth = (code = 1011, reason = "proxy unavailable") => {
+          if (downstream.readyState < WebSocket.CLOSING) {
+            downstream.close(code, reason);
+          }
+          upstream.close();
+        };
+
+        downstream.on("message", (data, binary) => {
+          if (binary) return closeBoth(1003, "binary frames are not supported");
+          const normalized = transform(rawBytes(data));
+          if (!normalized) return closeBoth(1008, "message rejected");
+          debugStreamFrame("client", normalized);
+          if (!upstreamOpened) {
+            pendingBytes += normalized.length;
+            if (pendingBytes > MAX_WS_MESSAGE_BYTES) {
+              return closeBoth(1009, "pending data too large");
+            }
+          }
+          if (
+            upstream.bufferedAmount + normalized.length >
+            MAX_WS_BUFFERED_BYTES
+          ) {
+            return closeBoth(1009, "relay buffer exceeded");
+          }
+          // `/v1/stream` is a JSON text protocol. The verified SDK gate queues
+          // this frame until the upgrade socket's SPKI matches the attested
+          // boot, so a login token never crosses an unverified connection.
+          upstream.send(new TextDecoder().decode(normalized));
+        });
+        upstream.addEventListener("open", () => {
+          upstreamOpened = true;
+          pendingBytes = 0;
+        });
+        upstream.addEventListener("message", (event) => {
+          let bytes: Buffer;
+          try {
+            if (typeof event.data === "string") bytes = Buffer.from(event.data);
+            else if (event.data instanceof ArrayBuffer) {
+              bytes = Buffer.from(event.data);
+            } else if (ArrayBuffer.isView(event.data)) {
+              bytes = Buffer.from(
+                event.data.buffer,
+                event.data.byteOffset,
+                event.data.byteLength,
+              );
+            } else {
+              return closeBoth(1003, "upstream frame is not text");
+            }
+          } catch {
+            return closeBoth(1003, "upstream frame is malformed");
+          }
+          if (bytes.length > MAX_WS_MESSAGE_BYTES) {
+            return closeBoth(1009, "upstream message too large");
+          }
+          debugStreamFrame("cvm", bytes);
+          if (downstream.readyState === WebSocket.OPEN) {
+            if (
+              downstream.bufferedAmount + bytes.length >
+              MAX_WS_BUFFERED_BYTES
+            ) {
+              return closeBoth(1009, "relay buffer exceeded");
+            }
+            downstream.send(bytes.toString("utf8"));
+          }
+        });
+        downstream.on("close", () => {
+          clearInterval(keepalive);
+          release();
+          upstream.close();
+        });
+        upstream.addEventListener("close", (event) => {
+          clearInterval(keepalive);
+          release();
+          if (downstream.readyState < WebSocket.CLOSING) {
+            const code =
+              event.code === 1005 || event.code === 1006 ? 1011 : event.code;
+            downstream.close(code || 1011, event.reason ?? "upstream closed");
+          }
+        });
+        downstream.on("pong", () => (downstreamAlive = true));
+        downstream.on("error", () => closeBoth());
+        upstream.addEventListener("error", () => closeBoth());
+        // The CVM stream has its own application heartbeat. This transport
+        // keepalive covers the browser-facing socket without reaching through
+        // the SDK gate to the raw, deliberately encapsulated TLS socket.
+        const keepalive = setInterval(() => {
+          if (!downstreamAlive) {
+            downstream.terminate();
+            upstream.close();
+            release();
+            clearInterval(keepalive);
+            return;
+          }
+          downstreamAlive = false;
+          if (downstream.readyState === WebSocket.OPEN) downstream.ping();
+        }, WS_KEEPALIVE_MS);
+        keepalive.unref();
+        return;
+      }
+
       const upstream = new WebSocket(websocketUrl(target), {
         headers: { origin: options.origin },
         perMessageDeflate: false,
@@ -407,6 +570,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         const bytes = rawBytes(data);
         const normalized = transform(bytes);
         if (!normalized) return closeBoth(1008, "message rejected");
+        debugStreamFrame("client", normalized);
         if (upstream.readyState === WebSocket.OPEN) {
           if (
             upstream.bufferedAmount + normalized.length >
@@ -437,6 +601,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         pendingBytes = 0;
       });
       upstream.on("message", (data, binary) => {
+        debugStreamFrame("cvm", rawBytes(data));
         if (downstream.readyState === WebSocket.OPEN) {
           if (
             downstream.bufferedAmount + rawBytes(data).length >
@@ -448,11 +613,21 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         }
       });
       downstream.on("close", (code, reason) => {
+        if (process.env.DARKNYX_DEBUG_WS === "1") {
+          process.stderr.write(
+            `[trader-host ws] downstream close ${code} ${reason.toString()}\n`,
+          );
+        }
         clearInterval(keepalive);
         release();
         forwardClose(upstream, code, reason);
       });
       upstream.on("close", (code, reason) => {
+        if (process.env.DARKNYX_DEBUG_WS === "1") {
+          process.stderr.write(
+            `[trader-host ws] upstream close ${code} ${reason.toString()}\n`,
+          );
+        }
         clearInterval(keepalive);
         forwardClose(downstream, code, reason);
       });
@@ -567,17 +742,28 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
         const beginRelay = (
           target: URL,
           transform: (bytes: Uint8Array) => Uint8Array | null,
+          useVerifiedCvmStream = false,
         ) => {
           try {
-            relay(session, request, socket, head, target, transform);
+            relay(
+              session,
+              request,
+              socket,
+              head,
+              target,
+              transform,
+              useVerifiedCvmStream,
+            );
           } catch {
             releaseAdmission();
             socket.destroy();
           }
         };
         if (url.pathname === `${VENUE_PREFIX}/v1/stream`) {
-          return beginRelay(new URL("v1/stream", gateway), (bytes) =>
-            bytes.length <= MAX_WS_MESSAGE_BYTES ? bytes : null,
+          return beginRelay(
+            new URL("v1/stream", gateway),
+            (bytes) => (bytes.length <= MAX_WS_MESSAGE_BYTES ? bytes : null),
+            true,
           );
         }
         if (url.pathname === RPC_PATH) {

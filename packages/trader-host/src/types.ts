@@ -1,5 +1,25 @@
 import type { IncomingMessage } from "node:http";
 
+/** Minimal verified WebSocket surface supplied by the Node transport layer. */
+export interface CvmStreamSocket {
+  /** Bytes queued by the verification gate and underlying transport. */
+  readonly bufferedAmount: number;
+  addEventListener(type: "open", cb: () => void): void;
+  addEventListener(
+    type: "message",
+    cb: (event: { data: unknown }) => void,
+  ): void;
+  addEventListener(
+    type: "close",
+    cb: (event: { code: number; reason?: string }) => void,
+  ): void;
+  addEventListener(type: "error", cb: (event: unknown) => void): void;
+  send(data: string): void;
+  close(): void;
+}
+
+export type CvmWebSocketFactory = (url: string) => CvmStreamSocket;
+
 export interface PublicRelease {
   schema_version: 1;
   release_id: string;
@@ -84,6 +104,13 @@ export interface ReleaseHostOptions {
    * no reason to present.
    */
   cvmFetch?: typeof fetch;
+  /**
+   * Quote-bound WebSocket transport for the CVM `/v1/stream` hop.
+   *
+   * This must accompany `cvmFetch` in RA-TLS mode. HTTP verification does not
+   * authenticate the separate TLS connection opened by a WebSocket upgrade.
+   */
+  cvmWebSocketFactory?: CvmWebSocketFactory;
   rpcUpstreamUrl?: string;
   proxyTimeoutMs?: number;
   maxProxyRequestsPerMinute?: number;

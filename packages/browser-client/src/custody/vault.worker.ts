@@ -573,7 +573,7 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       keypair.secretKey.fill(0);
     }
   },
-  async prepareDeposit({ tokenMint, amount }) {
+  async prepareDeposit({ tokenMint, amount, treeId, numTrees }) {
     const mint = fromHex(tokenMint, 32, "deposit mint");
     const depositAmount = canonicalU64(amount, "deposit amount");
     if (depositAmount === 0n)
@@ -581,7 +581,26 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
     const currentSeed = requireSeed();
     const spendingKey = deriveSpendingKey(currentSeed);
     const owner = await ownerCommitment(spendingKey);
-    const nonceBytes = generateRecoveryNonce();
+    if (
+      !Number.isInteger(treeId) ||
+      !Number.isInteger(numTrees) ||
+      (treeId as number) < 0 ||
+      (numTrees as number) <= 0 ||
+      (treeId as number) >= (numTrees as number) ||
+      (numTrees as number) > 256
+    ) {
+      throw new Error("deposit shard selection is invalid");
+    }
+    let nonceBytes: ReturnType<typeof generateRecoveryNonce> | undefined;
+    for (let attempt = 0; attempt < 1_024; attempt += 1) {
+      const candidate = generateRecoveryNonce();
+      if (candidate[31] % (numTrees as number) === treeId) {
+        nonceBytes = candidate;
+        break;
+      }
+    }
+    if (!nonceBytes)
+      throw new Error("could not derive the selected deposit shard");
     const recoveryNonce = be32ToBigInt(nonceBytes);
     const noteSecret = deriveNoteSecret(currentSeed, nonceBytes);
     const innerBytes = await deriveDepositInnerHash(
@@ -607,6 +626,12 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       } satisfies DepositInputs,
       commitment,
       recoveryNonce: nonceBytes,
+      opening: {
+        tokenMint: mint,
+        amount: depositAmount,
+        ownerCommitment: owner,
+        innerHash,
+      },
     };
   },
   async prepareSpend({ note, merkleRoot, siblings, pathIndices, destination }) {
@@ -790,6 +815,12 @@ const handlers: Readonly<Record<string, Handler>> = Object.freeze({
       } satisfies MergeInputs,
       inputUseTags: tags,
       outputCommitment,
+      outputOpening: {
+        tokenMint: Uint8Array.from(tokenMint),
+        amount: total,
+        ownerCommitment: expectedOwner,
+        innerHash: outputInnerHash,
+      },
       tokenMint,
       merkleRoot: root,
       k,

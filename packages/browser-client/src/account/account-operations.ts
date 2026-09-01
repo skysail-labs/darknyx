@@ -34,6 +34,8 @@ import {
   buildWithdrawInstruction,
   noteCommitmentFromBytes,
   noteUseTagFromBytes,
+  readNoteCreated,
+  readNoteMerged,
   type DepositInputs,
   type MergeInputs,
   type SpendInputs,
@@ -73,6 +75,12 @@ interface PreparedDeposit {
   witness: DepositInputs;
   commitment: Uint8Array;
   recoveryNonce: Uint8Array;
+  opening: {
+    tokenMint: Uint8Array;
+    amount: bigint;
+    ownerCommitment: bigint;
+    innerHash: bigint;
+  };
 }
 
 interface PreparedSpend {
@@ -85,6 +93,12 @@ interface PreparedMerge {
   witness: MergeInputs;
   inputUseTags: Uint8Array[];
   outputCommitment: Uint8Array;
+  outputOpening: {
+    tokenMint: Uint8Array;
+    amount: bigint;
+    ownerCommitment: bigint;
+    innerHash: bigint;
+  };
   tokenMint: Uint8Array;
   merkleRoot: Uint8Array;
   k: 2 | 4;
@@ -97,6 +111,7 @@ export type AccountOperationProgressStage =
   | "wallet_approval"
   | "finalizing";
 export type AccountOperationResult =
+  | { status: "confirmed"; signature: string }
   | { status: "finalized"; signature: string }
   | { status: "ambiguous"; signature: string; message: string };
 
@@ -120,7 +135,13 @@ export interface BrowserAccountOperationsOptions {
   wallet: ExternalWalletController;
   fetchImpl?: typeof fetch;
   /** Test/integration seam; production defaults to the release-pinned RPC. */
-  connection?: Pick<Connection, "getLatestBlockhash" | "confirmTransaction">;
+  connection?: Pick<
+    Connection,
+    | "getLatestBlockhash"
+    | "confirmTransaction"
+    | "getSignatureStatuses"
+    | "getTransaction"
+  >;
   onProgress?(
     operation: AccountOperationKind,
     stage: AccountOperationProgressStage,
@@ -133,7 +154,10 @@ export class BrowserAccountOperations {
   readonly #options: BrowserAccountOperationsOptions;
   readonly #connection: Pick<
     Connection,
-    "getLatestBlockhash" | "confirmTransaction"
+    | "getLatestBlockhash"
+    | "confirmTransaction"
+    | "getSignatureStatuses"
+    | "getTransaction"
   >;
   readonly #programId: PublicKey;
   readonly #requestTimeoutMs: number;
@@ -171,6 +195,46 @@ export class BrowserAccountOperations {
     const wallet = this.#options.wallet.current();
     if (!wallet) throw new Error("connect an external wallet first");
     return new PublicKey(wallet.address);
+  }
+
+  async #waitForConfirmed(signature: string): Promise<void> {
+    const deadline = Date.now() + this.#requestTimeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("confirmed transaction confirmation timed out");
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error("confirmed transaction confirmation timed out")),
+          remaining,
+        );
+      });
+      const statuses = await Promise.race([
+        this.#connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: true,
+        }),
+        timeout,
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+      const status = statuses.value[0];
+      if (status?.err) throw new Error(JSON.stringify(status.err));
+      if (
+        status?.confirmationStatus === "confirmed" ||
+        status?.confirmationStatus === "finalized"
+      ) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("confirmed transaction confirmation timed out");
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(400, Math.max(0, deadline - Date.now()))),
+      );
+    }
   }
 
   async #inclusion(note: InventoryNote): Promise<Inclusion> {
@@ -227,14 +291,15 @@ export class BrowserAccountOperations {
     };
   }
 
-  async #sendFinalized(
+  async #send(
     operation: AccountOperationKind,
     instruction: TransactionInstruction,
+    commitment: "confirmed" | "finalized",
   ): Promise<AccountOperationResult> {
     const payer = this.#walletAddress();
     const latest = await this.#bounded(
       "latest blockhash",
-      this.#connection.getLatestBlockhash("finalized"),
+      this.#connection.getLatestBlockhash(commitment),
     );
     const message = new TransactionMessage({
       payerKey: payer,
@@ -257,17 +322,26 @@ export class BrowserAccountOperations {
     const signature = bs58.encode(signatureBytes);
     this.#options.onProgress?.(operation, "finalizing");
     try {
-      const confirmation = await this.#bounded(
-        "finalized transaction confirmation",
-        this.#connection.confirmTransaction(
-          { signature, ...latest },
-          "finalized",
-        ),
-      );
-      if (confirmation.value.err) {
-        throw new Error(JSON.stringify(confirmation.value.err));
+      if (commitment === "confirmed") {
+        // Wallet Standard returns the signature immediately, while web3.js'
+        // `confirmTransaction` prefers a signature-subscription WebSocket.
+        // The standalone trader host intentionally exposes a narrow RPC relay,
+        // so use the allowlisted HTTP status method for deterministic browser
+        // confirmation instead of depending on a second transport.
+        await this.#waitForConfirmed(signature);
+      } else {
+        const confirmation = await this.#bounded(
+          "finalized transaction confirmation",
+          this.#connection.confirmTransaction(
+            { signature, ...latest },
+            "finalized",
+          ),
+        );
+        if (confirmation.value.err) {
+          throw new Error(JSON.stringify(confirmation.value.err));
+        }
       }
-      return { status: "finalized", signature };
+      return { status: commitment, signature };
     } catch (error) {
       return {
         status: "ambiguous",
@@ -275,6 +349,13 @@ export class BrowserAccountOperations {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  #sendFinalized(
+    operation: AccountOperationKind,
+    instruction: TransactionInstruction,
+  ): Promise<AccountOperationResult> {
+    return this.#send(operation, instruction, "finalized");
   }
 
   async deposit(params: {
@@ -291,16 +372,27 @@ export class BrowserAccountOperations {
     const mint = new PublicKey(params.tokenMint);
     const depositor = this.#walletAddress();
     const tokenAccount = await associatedTokenAddress(mint, depositor);
+    const mintHex = hex(mint.toBytes());
+    const layout = await this.#options.inventory.noteLayout(mintHex);
+    const preferredTreeId =
+      layout.preferredTreeId ??
+      (depositor.toBytes()[0] ^ mint.toBytes()[0]) %
+        this.#options.venue.numTrees;
     this.#options.onProgress?.(operation, "preparing");
     const prepared = await requestVaultInternal<PreparedDeposit>(
       this.#options.vault,
       "prepareDeposit",
       {
-        tokenMint: hex(mint.toBytes()),
+        tokenMint: mintHex,
         amount: params.amount.toString(),
+        treeId: preferredTreeId,
+        numTrees: this.#options.venue.numTrees,
       },
     );
     const treeId = prepared.recoveryNonce[31] % this.#options.venue.numTrees;
+    if (treeId !== preferredTreeId) {
+      throw new Error("custody Worker returned a deposit for the wrong shard");
+    }
     this.#options.onProgress?.(operation, "proving");
     const proof = await this.#options.prover.deposit.prove(prepared.witness);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
@@ -323,7 +415,28 @@ export class BrowserAccountOperations {
       recoveryNonce: prepared.recoveryNonce,
       proof,
     });
-    return this.#sendFinalized(operation, instruction);
+    const result = await this.#send(operation, instruction, "confirmed");
+    if (result.status === "confirmed") {
+      const created = await this.#bounded(
+        "confirmed deposit event",
+        readNoteCreated(this.#connection, result.signature, this.#programId),
+      );
+      if (created.treeId !== treeId) {
+        throw new Error(
+          "confirmed deposit event reported the wrong tree shard",
+        );
+      }
+      await this.#options.inventory.recordConfirmedDeposit({
+        commitment: hex(prepared.commitment),
+        tokenMint: prepared.opening.tokenMint,
+        amount: prepared.opening.amount,
+        ownerCommitment: prepared.opening.ownerCommitment,
+        innerHash: prepared.opening.innerHash,
+        treeId: created.treeId,
+        leafIndex: created.leafIndex,
+      });
+    }
+    return result;
   }
 
   async withdraw(params: {
@@ -422,12 +535,13 @@ export class BrowserAccountOperations {
       );
     }
     let result: AccountOperationResult;
+    let prepared: PreparedMerge;
     try {
       this.#options.onProgress?.(operation, "preparing");
       const inclusions = await Promise.all(
         held.map(({ note }) => this.#inclusion(note)),
       );
-      const prepared = await requestVaultInternal<PreparedMerge>(
+      prepared = await requestVaultInternal<PreparedMerge>(
         this.#options.vault,
         "prepareMerge",
         { inputs: held.map(({ note }) => note), inclusions },
@@ -453,7 +567,7 @@ export class BrowserAccountOperations {
         k: prepared.k,
         proof,
       });
-      result = await this.#sendFinalized(operation, instruction);
+      result = await this.#send(operation, instruction, "confirmed");
     } catch (error) {
       if (
         !(error instanceof AccountOperationError) ||
@@ -467,11 +581,32 @@ export class BrowserAccountOperations {
       }
       throw error;
     }
-    if (result.status === "finalized") {
-      await Promise.all(
-        held.map(({ note }) =>
-          this.#options.inventory.markConsumed(note.commitment),
-        ),
+    if (result.status === "confirmed") {
+      const merged = await this.#bounded(
+        "confirmed merge event",
+        readNoteMerged(this.#connection, result.signature, this.#programId),
+      );
+      if (
+        merged.treeId !== held[0].note.treeId ||
+        merged.k !== prepared.k ||
+        hex(merged.outputCommitment) !== hex(prepared.outputCommitment) ||
+        hex(merged.tokenMint) !== hex(prepared.tokenMint)
+      ) {
+        throw new Error(
+          "confirmed merge event does not match the proved merge",
+        );
+      }
+      await this.#options.inventory.recordConfirmedMerge(
+        held.map(({ note }) => note.commitment),
+        {
+          commitment: hex(prepared.outputCommitment),
+          tokenMint: prepared.outputOpening.tokenMint,
+          amount: prepared.outputOpening.amount,
+          ownerCommitment: prepared.outputOpening.ownerCommitment,
+          innerHash: prepared.outputOpening.innerHash,
+          treeId: merged.treeId,
+          leafIndex: merged.leafIndex,
+        },
       );
     }
     return result;

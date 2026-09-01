@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createReleaseHost } from "./host.js";
 import { loadTraderHostRuntimeConfig } from "./runtime-config.js";
-import { buildCvmFetch } from "./cvm-transport.js";
+import { buildCvmTransport } from "./cvm-transport.js";
 
 async function main(): Promise<void> {
   const checkOnly = process.argv.slice(2).includes("--check-config");
@@ -14,15 +14,12 @@ async function main(): Promise<void> {
   //
   // This is here rather than in runtime-config because building it needs a
   // DCAP verifier and governance pins — deployment inputs, not env strings.
-  const cvmFetch = await buildCvmFetch(process.env);
-  const config = await loadTraderHostRuntimeConfig(
-    process.env,
-    cvmFetch ? { cvmFetch } : undefined,
-  );
-  if (cvmFetch) {
+  const cvmTransport = await buildCvmTransport(process.env);
+  const config = await loadTraderHostRuntimeConfig(process.env, cvmTransport);
+  if (cvmTransport) {
     process.stdout.write(
-      "trader-host transport: ra-tls — CVM-bound requests are bound to a " +
-        "quote-verified certificate on their own socket\n",
+      "trader-host transport: ra-tls — CVM HTTP and stream connections are " +
+        "bound to the quote-verified boot certificate\n",
     );
   } else {
     process.stderr.write(

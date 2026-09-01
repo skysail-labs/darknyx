@@ -139,6 +139,7 @@ export async function createBrowserPrivateRuntime(
   const reasons: string[] = [];
   const runRefresh = async (reason: string): Promise<void> => {
     options.onReconcile?.(reason);
+    const snapshotStartedAtMs = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const work = (async () => {
       const treeIds = Array.from(
@@ -160,7 +161,13 @@ export async function createBrowserPrivateRuntime(
         (tag, treeId) => rootSource.isConsumed(tag, treeId),
         (tag, treeId) => rootSource.isLocked(tag, treeId),
       );
-      await inventory.reconcileVenueOpenOrders(openOrderIds);
+      await inventory.reconcileVenueOpenOrders(openOrderIds, {
+        snapshotStartedAtMs,
+        // During boot no placement can be in flight because this runtime has
+        // not been returned to the controller yet. Every later refresh can
+        // overlap authorization or POST /orders and must preserve that state.
+        preserveSubmitting: reason !== "startup",
+      });
       options.onChange?.();
       // Proving is deliberately background work. A submit action only consumes
       // a ready cache entry and never blocks the UI on witness generation.

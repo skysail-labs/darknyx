@@ -415,6 +415,171 @@ export class BrowserInventory implements InventoryIntentPort {
     });
   }
 
+  /**
+   * Record the note produced by this browser's own confirmed deposit.
+   *
+   * The opening was constructed in the custody Worker and the exact shard /
+   * leaf position comes from the confirmed transaction's NoteCreated event.
+   * Persisting it here makes the balance responsive without waiting for the
+   * slower finalized-history recovery pass. Accepted-root checks still gate
+   * proof creation independently.
+   */
+  async recordConfirmedDeposit(
+    note: StoredNote & { treeId: number; leafIndex: bigint },
+  ): Promise<void> {
+    const commitment = await noteCommitmentV2(note);
+    const commitmentHex = hex(commitment);
+    if (commitmentHex !== note.commitment) {
+      throw new Error(
+        "confirmed deposit opening does not match its commitment",
+      );
+    }
+    const noteUseTag = hex(
+      await deriveNoteUseTag(commitment, bn254ToBE32(note.innerHash)),
+    );
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const existing = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === note.commitment,
+        );
+        if (existing) return;
+        this.#snapshot.notes.push({
+          ...structuredClone(note),
+          noteUseTag,
+          state: "spendable",
+        });
+      }),
+    );
+  }
+
+  /**
+   * Atomically replace this browser's reserved merge inputs with the confirmed
+   * output note. A merge is one chain transition, so persisting input
+   * consumption separately from output creation can temporarily hide the
+   * user's entire balance and can make that bad view durable after a crash.
+   */
+  async recordConfirmedMerge(
+    inputCommitments: readonly string[],
+    output: StoredNote & { treeId: number; leafIndex: bigint },
+  ): Promise<void> {
+    if (inputCommitments.length < 2 || inputCommitments.length > 4) {
+      throw new Error("confirmed merge must consume 2..4 notes");
+    }
+    const distinctInputs = new Set(inputCommitments);
+    if (distinctInputs.size !== inputCommitments.length) {
+      throw new Error("confirmed merge inputs must be distinct");
+    }
+    for (const commitment of inputCommitments) {
+      fromHex32(commitment, "confirmed merge input");
+    }
+    const commitment = await noteCommitmentV2(output);
+    const commitmentHex = hex(commitment);
+    if (commitmentHex !== output.commitment) {
+      throw new Error("confirmed merge opening does not match its commitment");
+    }
+    if (distinctInputs.has(output.commitment)) {
+      throw new Error("confirmed merge output cannot equal an input");
+    }
+    const noteUseTag = hex(
+      await deriveNoteUseTag(commitment, bn254ToBE32(output.innerHash)),
+    );
+
+    await this.#serialized(() =>
+      this.#mutate(async () => {
+        const inputs = inputCommitments.map((input) => {
+          const note = this.#snapshot.notes.find(
+            (candidate) => candidate.commitment === input,
+          );
+          if (!note)
+            throw new Error("confirmed merge input is not in inventory");
+          if (note.state !== "reserved" && note.state !== "consumed") {
+            throw new Error("confirmed merge input is not reserved");
+          }
+          return note;
+        });
+        if (inputs.some((note) => !same(note.tokenMint, output.tokenMint))) {
+          throw new Error("confirmed merge must use one mint");
+        }
+        const inputTotal = inputs.reduce(
+          (total, note) => total + note.amount,
+          0n,
+        );
+        if (inputTotal !== output.amount) {
+          throw new Error("confirmed merge output does not conserve value");
+        }
+        const existing = this.#snapshot.notes.find(
+          (candidate) => candidate.commitment === output.commitment,
+        );
+        if (existing) {
+          if (
+            !same(existing.tokenMint, output.tokenMint) ||
+            existing.amount !== output.amount ||
+            existing.ownerCommitment !== output.ownerCommitment ||
+            existing.innerHash !== output.innerHash ||
+            existing.treeId !== output.treeId ||
+            existing.leafIndex !== output.leafIndex
+          ) {
+            throw new Error("confirmed merge output conflicts with inventory");
+          }
+        } else {
+          this.#snapshot.notes.push({
+            ...structuredClone(output),
+            noteUseTag,
+            state: "spendable",
+          });
+        }
+        for (const note of inputs) {
+          note.state = "consumed";
+          delete note.reservationId;
+          this.#snapshot.reservations = this.#snapshot.reservations.filter(
+            (reservation) => reservation.noteCommitment !== note.commitment,
+          );
+          for (const proof of this.#snapshot.proofs) {
+            if (proof.noteCommitment === note.commitment) {
+              proof.state = "stale";
+              proof.invalidationReason = "note_consumed";
+            }
+          }
+          this.#pruneProofs(note.commitment);
+        }
+      }),
+    );
+  }
+
+  async noteLayout(mint: string): Promise<{
+    totalNotes: number;
+    spendableNotes: number;
+    mergeableNotes: number;
+    shardCount: number;
+    preferredTreeId?: number;
+  }> {
+    fromHex32(mint, "note-layout mint");
+    return this.#serialized(async () => {
+      const notes = this.#snapshot.notes.filter(
+        (note) => note.state !== "consumed" && hex(note.tokenMint) === mint,
+      );
+      const spendable = notes.filter(
+        (note) => note.state === "spendable" && note.leafIndex !== undefined,
+      );
+      const perShard = new Map<number, number>();
+      for (const note of spendable) {
+        perShard.set(note.treeId, (perShard.get(note.treeId) ?? 0) + 1);
+      }
+      const orderedShards = [...perShard.entries()].sort(
+        ([leftTree], [rightTree]) => leftTree - rightTree,
+      );
+      const preferred =
+        orderedShards.find(([, count]) => count >= 2) ?? orderedShards[0];
+      return {
+        totalNotes: notes.length,
+        spendableNotes: spendable.length,
+        mergeableNotes: preferred?.[1] ?? 0,
+        shardCount: perShard.size,
+        preferredTreeId: preferred?.[0],
+      };
+    });
+  }
+
   async listBalances(): Promise<readonly BalanceView[]> {
     return this.#serialized(async () => {
       const totals = new Map<
@@ -622,7 +787,25 @@ export class BrowserInventory implements InventoryIntentPort {
    */
   async reconcileVenueOpenOrders(
     openOrderIds: readonly string[],
+    options: {
+      /**
+       * Wall-clock time immediately before the venue snapshot request began.
+       * A response cannot authoritatively classify an order updated at or
+       * after this cutoff because that order may not have existed remotely
+       * when the snapshot was taken.
+       */
+      snapshotStartedAtMs?: number;
+      /** Preserve an in-flight local submission during live reconciliation. */
+      preserveSubmitting?: boolean;
+    } = {},
   ): Promise<void> {
+    if (
+      options.snapshotStartedAtMs !== undefined &&
+      (!Number.isSafeInteger(options.snapshotStartedAtMs) ||
+        options.snapshotStartedAtMs < 0)
+    ) {
+      throw new Error("venue snapshot start time is invalid");
+    }
     const active = new Set<string>();
     for (const orderId of openOrderIds) {
       if (!/^[0-9a-f]{32}$/.test(orderId)) {
@@ -636,6 +819,42 @@ export class BrowserInventory implements InventoryIntentPort {
     await this.#serialized(() =>
       this.#mutate(async () => {
         for (const order of this.#snapshot.orders) {
+          if (active.has(order.orderId)) {
+            // Repair the inverse of the stale-snapshot race as well. An older
+            // release may already have marked a genuinely live venue order as
+            // `closed` and released its local reservation. The authenticated
+            // current snapshot is positive evidence that it is still live.
+            if (
+              order.kind === "closed" &&
+              !(
+                options.snapshotStartedAtMs !== undefined &&
+                order.updatedAtMs >= options.snapshotStartedAtMs
+              )
+            ) {
+              const note = this.#snapshot.notes.find(
+                (candidate) => candidate.commitment === order.noteCommitment,
+              );
+              const alreadyReserved = this.#snapshot.reservations.some(
+                (candidate) =>
+                  candidate.noteCommitment === order.noteCommitment ||
+                  candidate.reservationId === order.reservationId,
+              );
+              if (note?.state === "spendable" && !alreadyReserved) {
+                note.state = "reserved";
+                note.reservationId = order.reservationId;
+                this.#snapshot.reservations.push({
+                  reservationId: order.reservationId,
+                  noteCommitment: order.noteCommitment,
+                  proofHandle: `reconciled-open-${order.orderId}`,
+                  createdAtMs: this.#now(),
+                });
+                order.kind = "open";
+                delete order.reason;
+                order.updatedAtMs = this.#now();
+              }
+            }
+            continue;
+          }
           if (
             ![
               "submitting",
@@ -643,8 +862,14 @@ export class BrowserInventory implements InventoryIntentPort {
               "pending_settlement",
               "partially_filled",
               "ambiguous",
-            ].includes(order.kind) ||
-            active.has(order.orderId)
+            ].includes(order.kind)
+          ) {
+            continue;
+          }
+          if (
+            (options.snapshotStartedAtMs !== undefined &&
+              order.updatedAtMs >= options.snapshotStartedAtMs) ||
+            (options.preserveSubmitting && order.kind === "submitting")
           ) {
             continue;
           }

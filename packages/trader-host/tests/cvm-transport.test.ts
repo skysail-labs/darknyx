@@ -40,16 +40,22 @@ function hostOptions(
 }
 
 describe("live proxy — CVM-bound requests honour the supplied transport", () => {
-  it("constructs with a cvmFetch without disturbing the endpoint contract", () => {
-    // The proxy hard-fails if the public release endpoints do not match, so a
-    // successful construction also proves cvmFetch did not perturb them.
+  it("requires verified HTTP and stream transports as one unit", () => {
     const cvmFetch = vi.fn();
-    const proxy = createLiveProxy(
-      hostOptions({ cvmFetch: cvmFetch as unknown as typeof fetch }),
-    );
-    expect(proxy).not.toBeNull();
-    expect(proxy?.handles("/api/darknyx/venue/orders")).toBe(true);
-    expect(proxy?.handles("/api/darknyx/rpc")).toBe(true);
+    expect(() =>
+      createLiveProxy(
+        hostOptions({ cvmFetch: cvmFetch as unknown as typeof fetch }),
+      ),
+    ).toThrow(/must be supplied together/);
+    expect(() =>
+      createLiveProxy(
+        hostOptions({
+          cvmWebSocketFactory: () => {
+            throw new Error("not opened during configuration");
+          },
+        }),
+      ),
+    ).toThrow(/must be supplied together/);
   });
 
   it("still constructs without one — the legacy path stays available", () => {

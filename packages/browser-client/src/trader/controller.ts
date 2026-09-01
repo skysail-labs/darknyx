@@ -157,6 +157,7 @@ export class BrowserTraderController {
   readonly #options: BrowserTraderControllerOptions;
   readonly #vault: BrowserVault;
   readonly #wallet: ExternalWalletController;
+  readonly #offWallet: () => void;
   readonly #listeners = new Set<Listener>();
   #venue: TrustedVenueSession | null = null;
   #runtime: BrowserPrivateRuntime | null = null;
@@ -178,6 +179,11 @@ export class BrowserTraderController {
     this.#vault = options.vault ?? new BrowserVault();
     this.#wallet = options.wallet ?? new ExternalWalletController();
     this.#snapshot = this.#emptySnapshot({ state: "locked" });
+    // Extensions can inject after the application has booted. Refresh the
+    // observable snapshot on both late registration and unregistration so the
+    // Connect button does not remain stuck on "Install wallet" until an
+    // unrelated venue or vault update happens.
+    this.#offWallet = this.#wallet.subscribe(() => void this.#update());
   }
 
   #emptySnapshot(vault: VaultStatus): TraderShellSnapshot {
@@ -331,13 +337,6 @@ export class BrowserTraderController {
       this.#emit();
       return;
     }
-    const [balances, proofs, orders] = this.#runtime
-      ? await Promise.all([
-          this.#runtime.trader.balances(),
-          this.#runtime.trader.proofReadiness(),
-          this.#runtime.inventory.listOrders(),
-        ])
-      : [[], { ready: 0, proving: 0, stale: 0 }, []];
     const byMint = new Map<string, { symbol: string; decimals: number }>();
     for (const market of this.#venue.instruments) {
       byMint.set(mintHex(market.baseMint), {
@@ -349,6 +348,23 @@ export class BrowserTraderController {
         decimals: market.quoteDecimals,
       });
     }
+    const [balances, proofs, orders, noteLayouts] = this.#runtime
+      ? await Promise.all([
+          this.#runtime.trader.balances(),
+          this.#runtime.trader.proofReadiness(),
+          this.#runtime.inventory.listOrders(),
+          Promise.all(
+            [...byMint.keys()].map(
+              async (mint) =>
+                [
+                  mint,
+                  await this.#runtime!.inventory.noteLayout(mint),
+                ] as const,
+            ),
+          ),
+        ])
+      : [[], { ready: 0, proving: 0, stale: 0 }, [], []];
+    const noteLayoutByMint = new Map(noteLayouts);
     const marketBySymbol = new Map(
       this.#venue.instruments.map((market) => [market.symbol, market]),
     );
@@ -384,6 +400,7 @@ export class BrowserTraderController {
       selectedSymbol: this.#selectedSymbol,
       balances: balances.map((balance) => {
         const metadata = byMint.get(balance.mint);
+        const noteLayout = noteLayoutByMint.get(balance.mint);
         if (!metadata) {
           throw new Error(
             `inventory contains unsupported mint ${balance.mint}`,
@@ -398,6 +415,10 @@ export class BrowserTraderController {
             balance.pendingSettlementAtoms,
             metadata.decimals,
           ),
+          noteCount: noteLayout?.totalNotes,
+          spendableNoteCount: noteLayout?.spendableNotes,
+          mergeableNoteCount: noteLayout?.mergeableNotes,
+          shardCount: noteLayout?.shardCount,
         };
       }),
       proofReadiness: proofs,
@@ -566,11 +587,26 @@ export class BrowserTraderController {
         state: result.status,
         signature: result.signature,
         message:
-          result.status === "finalized"
-            ? `${kind} finalized on Solana`
-            : "transaction submitted; finalized reconciliation is still pending",
+          result.status === "confirmed"
+            ? `${kind} confirmed on Solana`
+            : result.status === "finalized"
+              ? `${kind} finalized on Solana`
+              : "transaction submitted; finalized reconciliation is still pending",
       };
-      await runtime.refresh(`${kind} ${result.status}`);
+      if (kind === "deposit" && result.status === "confirmed") {
+        // The confirmed note is already in the encrypted local inventory.
+        // Reconcile finalized roots/proof readiness in the background rather
+        // than making the visible balance wait for the slower commitment.
+        void runtime
+          .refresh(`${kind} ${result.status}`)
+          .catch((error) =>
+            this.#options.onError?.(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+      } else {
+        await runtime.refresh(`${kind} ${result.status}`);
+      }
     } catch (error) {
       this.#accountOperation = {
         kind,
@@ -602,7 +638,17 @@ export class BrowserTraderController {
             ? "note consolidation finalized on Solana"
             : "merge submitted; finalized reconciliation is still pending",
       };
-      await runtime.refresh(`merge ${result.status}`);
+      if (result.status === "confirmed") {
+        void runtime
+          .refresh(`merge ${result.status}`)
+          .catch((error) =>
+            this.#options.onError?.(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+      } else {
+        await runtime.refresh(`merge ${result.status}`);
+      }
     } catch (error) {
       this.#accountOperation = {
         kind: "merge",
@@ -670,6 +716,8 @@ export class BrowserTraderController {
     this.#runtime?.close();
     this.#runtime = null;
     this.#account = null;
+    this.#offWallet();
+    this.#wallet.destroy();
     this.#vault.destroy();
     this.#listeners.clear();
   }
