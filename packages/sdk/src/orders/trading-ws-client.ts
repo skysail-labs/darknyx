@@ -20,6 +20,8 @@ import type { PlaceOrderRequest } from "./build-order.js";
 
 /** Minimal bidirectional WebSocket surface (send + lifecycle). */
 export interface SendableWebSocketLike {
+  /** Queued outbound bytes when exposed by the underlying transport. */
+  readonly bufferedAmount?: number;
   addEventListener(type: "open", cb: () => void): void;
   addEventListener(type: "message", cb: (ev: { data: unknown }) => void): void;
   addEventListener(

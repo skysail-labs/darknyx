@@ -10,6 +10,11 @@
 > ~10 s settle phase, so the kill must be triggered off the journal itself), the
 > reset trap (a tree reset does NOT empty the Merkle mirror without a fresh
 > `DARKNYX_TEE_SYNC_FROM_SLOT`), and the pass criteria.
+>
+> Switching between free local Surfpool validation and this paid real-CVM gate
+> is documented in
+> [`rpc-environment-switching.md`](rpc-environment-switching.md). The two modes
+> share code, never keys, mints, configuration, or ledger state.
 
 A billable CVM matches AND settles a real crossing pair on devnet. The CVM
 binary IS the in-TEE matcher+settler, so any change under `crates/darknyx-tee/`,
@@ -20,7 +25,8 @@ image** — deploying the old tag runs stale code.
 
 ## 0. Gotchas that have each burned a deploy — internalise these first
 
-1. **Secrets live in `packages/sdk/.env`, NOT `/tmp`.** The Helius RPC key goes
+1. **Secrets live in `packages/sdk/.env`, NOT `/tmp`.** The credentialed
+   devnet RPC URL goes
    in the gitignored `packages/sdk/.env` (`SOLANA_RPC_URL=…`, see
    `packages/sdk/.env.example`); the SDK tests load it via `tests/setup-env.ts`.
    For the deploy `-e` file (§3) build it from that env var under the gitignored
@@ -106,8 +112,8 @@ enough.
 ## 2. Foundation: load secrets + (re)build the devnet config
 
 ```sh
-# One-time: drop the Helius key into the gitignored env (NOT /tmp):
-cp packages/sdk/.env.example packages/sdk/.env   # then edit SOLANA_RPC_URL=<helius>
+# One-time: put the dedicated devnet RPC URL in the gitignored env (NOT /tmp):
+cp packages/sdk/.env.example packages/sdk/.env   # then edit SOLANA_RPC_URL=<credentialed-devnet-rpc-url>
 set -a; . packages/sdk/.env; set +a               # export SOLANA_RPC_URL for the scripts below
 ```
 
@@ -253,7 +259,8 @@ SOLANA_RPC_URL="$SOLANA_RPC_URL" FUNDER_KEYPAIR=~/.config/solana/id.json \
 ```
 
 > **gTFA 100 cap:** the Merkle sync paginates `getTransactionsForAddress` at
-> `GTFA_PAGE_LIMIT = 100` (Helius caps `transactionDetails: full` at 100/call).
+> `GTFA_PAGE_LIMIT = 100` (the currently qualified real-devnet provider caps
+> `transactionDetails: full` at 100/call).
 > A clean cold-boot logs `merkle cold-boot complete applied=… shards=K` with no
 > "Invalid limit" error.
 
@@ -533,7 +540,7 @@ cargo test -p darknyx-tee-loadgen --release --lib \
   native_client_proofs_sustain_full_fixture -- --ignored
 
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
-  --real-settle --endpoint "$GW" --rpc-url "$HELIUS" \
+  --real-settle --endpoint "$GW" --rpc-url "$SOLANA_RPC_URL" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
   --traders 16 --real-mix partial-fill:100 --real-partial-fill-asks 9 \

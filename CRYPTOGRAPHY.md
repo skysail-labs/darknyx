@@ -2413,7 +2413,7 @@ RUN_DEVNET_E2E=1 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
 RUN_DEVNET_DW=1 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts )
 
 # the flagship: a live CVM matches AND settles (see CLAUDE.md §3)
-RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$DEVNET_RPC" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
 ```

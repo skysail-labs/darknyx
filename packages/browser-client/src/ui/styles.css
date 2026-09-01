@@ -390,10 +390,10 @@
   height: 15px;
   color: var(--darknyx-amber);
 }
-.trust-badge.is-ready .trust-icon > svg {
+.trust-badge.is-trusted .trust-icon > svg {
   color: var(--darknyx-green);
 }
-.trust-badge.is-unavailable .trust-icon > svg {
+.trust-badge.is-failed .trust-icon > svg {
   color: var(--darknyx-red);
 }
 .trust-badge > svg:last-child {

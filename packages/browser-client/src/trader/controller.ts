@@ -638,7 +638,17 @@ export class BrowserTraderController {
             ? "note consolidation finalized on Solana"
             : "merge submitted; finalized reconciliation is still pending",
       };
-      await runtime.refresh(`merge ${result.status}`);
+      if (result.status === "confirmed") {
+        void runtime
+          .refresh(`merge ${result.status}`)
+          .catch((error) =>
+            this.#options.onError?.(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+      } else {
+        await runtime.refresh(`merge ${result.status}`);
+      }
     } catch (error) {
       this.#accountOperation = {
         kind: "merge",

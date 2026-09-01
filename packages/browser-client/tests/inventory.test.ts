@@ -144,6 +144,19 @@ describe("browser inventory plane", () => {
       treeId: 0,
       leafIndex: 7n,
     });
+    await inventory.recordConfirmedDeposit({
+      ...deposited,
+      treeId: 0,
+      leafIndex: 7n,
+    });
+    await expect(
+      inventory.recordConfirmedDeposit({
+        ...deposited,
+        amount: deposited.amount + 1n,
+        treeId: 0,
+        leafIndex: 7n,
+      }),
+    ).rejects.toThrow(/does not match its commitment/);
 
     await expect(inventory.listBalances()).resolves.toEqual([
       {
@@ -208,6 +221,66 @@ describe("browser inventory plane", () => {
     await expect(reloaded.listBalances()).resolves.toEqual(
       await inventory.listBalances(),
     );
+  });
+
+  it("rejects a confirmed merge that changes mint or value", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("merge-a", "merge-b"),
+    });
+    const first = await note(mint(0x9e), 70n, 71n, 20n);
+    const second = await note(mint(0x9e), 30n, 72n, 21n);
+    await inventory.recover(report([first, second]), async () => false);
+    const held = await inventory.reserveAccountMerge(market.quoteMintHex);
+    const inputs = held.map(({ note: heldNote }) => heldNote.commitment);
+    const wrongValue = await note(mint(0x9e), 101n, 73n, 22n);
+    await expect(
+      inventory.recordConfirmedMerge(inputs, {
+        ...wrongValue,
+        treeId: 0,
+        leafIndex: 22n,
+      }),
+    ).rejects.toThrow(/does not conserve value/);
+
+    const wrongMint = await note(mint(0xb1), 100n, 74n, 23n);
+    await expect(
+      inventory.recordConfirmedMerge(inputs, {
+        ...wrongMint,
+        treeId: 0,
+        leafIndex: 23n,
+      }),
+    ).rejects.toThrow(/must use one mint/);
+  });
+
+  it("reports the same lowest mergeable shard that consolidation selects", async () => {
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+    });
+    const notes = await Promise.all([
+      note(mint(0x9e), 10n, 81n, 30n),
+      note(mint(0x9e), 11n, 82n, 31n),
+      note(mint(0x9e), 12n, 83n, 32n),
+      note(mint(0x9e), 13n, 84n, 33n),
+      note(mint(0x9e), 14n, 85n, 34n),
+      note(mint(0x9e), 15n, 86n, 35n),
+    ]);
+    notes[0]!.treeId = 0;
+    notes[1]!.treeId = 0;
+    for (const candidate of notes.slice(2)) candidate.treeId = 3;
+    await inventory.recover(report(notes), async () => false);
+
+    await expect(
+      inventory.noteLayout(market.quoteMintHex),
+    ).resolves.toMatchObject({ mergeableNotes: 2, preferredTreeId: 0 });
+    const selected = await inventory.reserveAccountMerge(market.quoteMintHex);
+    expect(selected).toHaveLength(2);
+    expect(selected.every(({ note: held }) => held.treeId === 0)).toBe(true);
   });
 
   it("rolls back the entire merge transition when durable storage fails", async () => {
@@ -606,6 +679,71 @@ describe("browser inventory plane", () => {
         mint: market.quoteMintHex,
         spendableAtoms: "0",
         reservedAtoms: "2000",
+        pendingSettlementAtoms: "0",
+      },
+    ]);
+  });
+
+  it("does not let an older venue snapshot revive a newer closed order", async () => {
+    let now = 500;
+    const inventory = await BrowserInventory.create({
+      store: new InMemoryInventoryStore(),
+      markets: [market],
+      circuitVersion: "valid-input-v3",
+      provingKeyVersion: "pk-1",
+      randomId: ids("proof-revival-race", "reservation-revival-race"),
+      now: () => now,
+    });
+    const collateral = await note(mint(0x9e), 2_000n, 91n, 40n);
+    await inventory.recover(report([collateral]), async () => false);
+    await inventory.synchronizeFinalizedRoots([ring(root(1))]);
+    await inventory.cacheReadyProof(collateral.commitment, root(1), proof());
+    const reserved = await inventory.reserveReadyIntent({
+      protocolVersion: 1,
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      attributes: {},
+    });
+    if (reserved.status !== "ready") throw new Error("expected reservation");
+    await inventory.allocateOrderIndex();
+    const orderId = "fa".repeat(16);
+    await inventory.bindReservationToOrder({
+      orderId,
+      reservationId: reserved.reservation.reservationId,
+      noteCommitment: collateral.commitment,
+      tradingIndex: 0,
+      nextCancelNonce: "1",
+      marketSymbol: "SOL-USDC",
+      side: "bid",
+      baseAmountAtoms: "100",
+      limitPriceTicks: "100",
+      kind: "open",
+      createdAtMs: now,
+      updatedAtMs: now,
+    });
+    await inventory.reconcileVenueOpenOrders([]);
+    const snapshotStartedAtMs = 550;
+    now = 600;
+    await inventory.updateOrder(orderId, {
+      kind: "closed",
+      reason: "cancel confirmed",
+    });
+
+    await inventory.reconcileVenueOpenOrders([orderId], {
+      snapshotStartedAtMs,
+    });
+    await expect(inventory.order(orderId)).resolves.toMatchObject({
+      kind: "closed",
+      reason: "cancel confirmed",
+      updatedAtMs: 600,
+    });
+    await expect(inventory.listBalances()).resolves.toEqual([
+      {
+        mint: market.quoteMintHex,
+        spendableAtoms: "2000",
+        reservedAtoms: "0",
         pendingSettlementAtoms: "0",
       },
     ]);

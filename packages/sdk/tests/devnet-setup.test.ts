@@ -34,7 +34,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { config as dotenvConfig } from "dotenv";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -81,7 +81,10 @@ const RUN = process.env.RUN_DEVNET_E2E === "1";
 const maybeDescribe = RUN ? describe : describe.skip;
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 
 const L1_RPC_URL =
   process.env.SOLANA_RPC_URL ??
@@ -101,10 +104,8 @@ const PRICE_SCALE = BigInt(process.env.DARKNYX_PRICE_SCALE ?? "100000000");
  *  `VaultConfig` is an operator error worth refusing (see `tryReadVaultConfig`).
  *  An UNPINNED one carries no intent, so refusing on it turns an unrelated
  *  re-foundation into a permanent failure of every caller that never set the
- *  variable — which is exactly what happened: devnet was re-founded with K=4,
- *  `nightly-devnet.yml` sets no `DARKNYX_NUM_TREES`, and the nightly failed
- *  every night from then on with "existing VaultConfig has 4 trees/signers but
- *  DARKNYX_NUM_TREES=1". */
+ *  variable. A former scheduled real-devnet caller exposed this when devnet
+ *  was re-founded with K=4 but its implicit fallback remained K=1. */
 const NUM_TREES_PINNED = (process.env.DARKNYX_NUM_TREES ?? "").trim() !== "";
 
 /** Number of Merkle-tree shards to provision. The CVM settle worker
@@ -238,7 +239,7 @@ export interface E2EConfig {
 }
 
 function saveConfig(cfg: E2EConfig) {
-  mkdirSync(resolve(REPO_ROOT, ".devnet"), { recursive: true });
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
 }
 
@@ -631,7 +632,7 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
       }
 
       // ────────────────────────────────────────────────────────────────────
-      step(5, "Persist config to .devnet/e2e-config.json");
+      step(5, `Persist config to ${CONFIG_PATH}`);
       // ────────────────────────────────────────────────────────────────────
       const cfg: E2EConfig = {
         l1RpcUrl: L1_RPC_URL,

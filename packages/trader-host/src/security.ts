@@ -30,7 +30,7 @@ export function securityHeaders(
     "style-src 'self'",
     "font-src 'self'",
     "img-src 'self' data:",
-    "frame-src 'self' http://127.0.0.1:8080",
+    "frame-src 'self'",
     "manifest-src 'self'",
     "form-action 'none'",
     "base-uri 'none'",
@@ -63,9 +63,9 @@ export function securityHeaders(
  * `/tradingview.html`, which the parent loads with `sandbox=allow-scripts`,
  * receives this policy and may execute the external widget bootstrap.
  */
-export function tradingViewFrameSecurityHeaders(): Readonly<
-  Record<string, string>
-> {
+export function tradingViewFrameSecurityHeaders(
+  origin: URL,
+): Readonly<Record<string, string>> {
   const csp = [
     "default-src 'none'",
     "script-src 'self' https://s3.tradingview.com",
@@ -77,16 +77,13 @@ export function tradingViewFrameSecurityHeaders(): Readonly<
     "form-action 'none'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors http://localhost:8080",
+    `frame-ancestors ${origin.origin}`,
   ].join("; ");
   return Object.freeze({
     "Content-Security-Policy": csp,
     "Cross-Origin-Opener-Policy": "unsafe-none",
     "Cross-Origin-Embedder-Policy": "unsafe-none",
-    // The local recording build deliberately serves this frame from
-    // 127.0.0.1 while the custody app uses localhost. The sandboxed document
-    // carries no credentials or private state.
-    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy":

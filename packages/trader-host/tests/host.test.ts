@@ -326,7 +326,8 @@ describe("release host", () => {
     expect(csp).toContain("require-trusted-types-for 'script'");
     expect(csp).toContain("https://artifacts.example");
     expect(csp).toContain("https://pccs.phala.network");
-    expect(csp).toContain("frame-src 'self' http://127.0.0.1:8080");
+    expect(csp).toContain("frame-src 'self'");
+    expect(csp).not.toContain("127.0.0.1");
     expect(csp).not.toContain("s3.tradingview.com");
     expect(csp).not.toContain("unsafe-inline");
     expect(csp).not.toContain("preload");
@@ -343,7 +344,7 @@ describe("release host", () => {
     const chartCsp = String(chart.headers.get("content-security-policy"));
     expect(chartCsp).toContain("https://s3.tradingview.com");
     expect(chartCsp).toContain("https://www.tradingview-widget.com");
-    expect(chartCsp).toContain("frame-ancestors http://localhost:8080");
+    expect(chartCsp).toContain(`frame-ancestors ${canonicalOrigin}`);
     expect(chartCsp).not.toContain("https://gateway.example");
     expect(chartCsp).not.toContain("https://rpc.example");
     const etag = page.headers.get("etag");

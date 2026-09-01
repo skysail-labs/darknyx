@@ -353,6 +353,11 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
   if (!options.gatewayUpstreamUrl || !options.rpcUpstreamUrl) {
     throw new Error("live proxy requires both gateway and RPC upstreams");
   }
+  if (Boolean(options.cvmFetch) !== Boolean(options.cvmWebSocketFactory)) {
+    throw new Error(
+      "verified CVM HTTP and WebSocket transports must be supplied together",
+    );
+  }
   const gateway = gatewayBase(options.gatewayUpstreamUrl, {
     allowLoopbackHttp: true,
   });
@@ -378,7 +383,7 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
     throw new Error("public release endpoints do not match the live proxy");
   }
   // T-03P: CVM-bound requests may use a verified transport; the RPC upstream
-  // must not (it is Helius, not the enclave — see `cvmFetch` in types.ts).
+  // must not (it is the chain RPC, not the enclave — see `cvmFetch` in types.ts).
   const cvmFetch = options.cvmFetch ?? fetch;
   const timeoutMs = options.proxyTimeoutMs ?? 20_000;
   const rateLimit = options.maxProxyRequestsPerMinute ?? 600;
@@ -454,6 +459,12 @@ export function createLiveProxy(options: ReleaseHostOptions): LiveProxy | null {
             if (pendingBytes > MAX_WS_MESSAGE_BYTES) {
               return closeBoth(1009, "pending data too large");
             }
+          }
+          if (
+            upstream.bufferedAmount + normalized.length >
+            MAX_WS_BUFFERED_BYTES
+          ) {
+            return closeBoth(1009, "relay buffer exceeded");
           }
           // `/v1/stream` is a JSON text protocol. The verified SDK gate queues
           // this frame until the upgrade socket's SPKI matches the attested

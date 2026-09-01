@@ -200,10 +200,26 @@ export class BrowserAccountOperations {
   async #waitForConfirmed(signature: string): Promise<void> {
     const deadline = Date.now() + this.#requestTimeoutMs;
     for (;;) {
-      const statuses = await this.#connection.getSignatureStatuses(
-        [signature],
-        { searchTransactionHistory: true },
-      );
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("confirmed transaction confirmation timed out");
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error("confirmed transaction confirmation timed out")),
+          remaining,
+        );
+      });
+      const statuses = await Promise.race([
+        this.#connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: true,
+        }),
+        timeout,
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
       const status = statuses.value[0];
       if (status?.err) throw new Error(JSON.stringify(status.err));
       if (
@@ -215,7 +231,9 @@ export class BrowserAccountOperations {
       if (Date.now() >= deadline) {
         throw new Error("confirmed transaction confirmation timed out");
       }
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(400, Math.max(0, deadline - Date.now()))),
+      );
     }
   }
 

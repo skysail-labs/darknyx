@@ -71,7 +71,10 @@ import {
 } from "../src/tee/vault-config.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH ?? ".devnet/e2e-config.json",
+);
 const SPEND_WASM = resolve(
   REPO_ROOT,
   "circuits/build/valid_spend/circuit_js/circuit.wasm",
@@ -131,7 +134,9 @@ d("devnet v2 deposit → lock lifecycle → withdraw", () => {
     // mints/config, and the runbook explicitly supplies this override.
     const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
     const conn = new Connection(rpcUrl, "confirmed");
-    const admin = await loadKp(".devnet/keypairs/admin.json");
+    const admin = await loadKp(
+      process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json",
+    );
 
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const AMOUNT = 7_000_000n; // 7 tokens @ 6 decimals

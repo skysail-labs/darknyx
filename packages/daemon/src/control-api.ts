@@ -247,7 +247,7 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
       }
       // Closed-set label, detail to the log (SW-20, and the same defect class
       // as SW-01 server-side). The daemon holds DARKNYX_DAEMON_RPC_URL, whose
-      // Helius key rides in the query string, and a Solana transport error
+      // An RPC credential may ride in the query string, and a transport error
       // typically embeds the request URL in its message. That must not be
       // echoed to an HTTP caller.
       console.error("[control] request failed:", err);

@@ -497,6 +497,16 @@ export class BrowserInventory implements InventoryIntentPort {
           }
           return note;
         });
+        if (inputs.some((note) => !same(note.tokenMint, output.tokenMint))) {
+          throw new Error("confirmed merge must use one mint");
+        }
+        const inputTotal = inputs.reduce(
+          (total, note) => total + note.amount,
+          0n,
+        );
+        if (inputTotal !== output.amount) {
+          throw new Error("confirmed merge output does not conserve value");
+        }
         const existing = this.#snapshot.notes.find(
           (candidate) => candidate.commitment === output.commitment,
         );
@@ -555,10 +565,11 @@ export class BrowserInventory implements InventoryIntentPort {
       for (const note of spendable) {
         perShard.set(note.treeId, (perShard.get(note.treeId) ?? 0) + 1);
       }
-      const preferred = [...perShard.entries()].sort(
-        ([leftTree, leftCount], [rightTree, rightCount]) =>
-          rightCount - leftCount || leftTree - rightTree,
-      )[0];
+      const orderedShards = [...perShard.entries()].sort(
+        ([leftTree], [rightTree]) => leftTree - rightTree,
+      );
+      const preferred =
+        orderedShards.find(([, count]) => count >= 2) ?? orderedShards[0];
       return {
         totalNotes: notes.length,
         spendableNotes: spendable.length,
@@ -813,7 +824,13 @@ export class BrowserInventory implements InventoryIntentPort {
             // release may already have marked a genuinely live venue order as
             // `closed` and released its local reservation. The authenticated
             // current snapshot is positive evidence that it is still live.
-            if (order.kind === "closed") {
+            if (
+              order.kind === "closed" &&
+              !(
+                options.snapshotStartedAtMs !== undefined &&
+                order.updatedAtMs >= options.snapshotStartedAtMs
+              )
+            ) {
               const note = this.#snapshot.notes.find(
                 (candidate) => candidate.commitment === order.noteCommitment,
               );

@@ -8,9 +8,9 @@
  *    issuer and account provisioning all talk to the enclave. Threading it
  *    into two of the three would leave a verified-looking deployment with one
  *    unverified path.
- * 2. **The Solana RPC path does NOT.** That upstream is Helius, not the
+ * 2. **The Solana RPC path does NOT.** That upstream is the chain provider, not the
  *    enclave. Routing it through an enclave-pinned transport would fail
- *    verification against a certificate Helius has no reason to present — so
+ *    verification against a certificate that provider has no reason to present — so
  *    the bug would look like an outage, not a security hole, and would be
  *    "fixed" by widening the transport.
  */
@@ -22,7 +22,9 @@ import type { ReleaseHostOptions } from "../src/types.js";
 
 const ORIGIN = "https://trade.example";
 
-function hostOptions(over: Partial<ReleaseHostOptions> = {}): ReleaseHostOptions {
+function hostOptions(
+  over: Partial<ReleaseHostOptions> = {},
+): ReleaseHostOptions {
   return {
     origin: ORIGIN,
     staticRoot: "/tmp",
@@ -38,16 +40,22 @@ function hostOptions(over: Partial<ReleaseHostOptions> = {}): ReleaseHostOptions
 }
 
 describe("live proxy — CVM-bound requests honour the supplied transport", () => {
-  it("constructs with a cvmFetch without disturbing the endpoint contract", () => {
-    // The proxy hard-fails if the public release endpoints do not match, so a
-    // successful construction also proves cvmFetch did not perturb them.
+  it("requires verified HTTP and stream transports as one unit", () => {
     const cvmFetch = vi.fn();
-    const proxy = createLiveProxy(
-      hostOptions({ cvmFetch: cvmFetch as unknown as typeof fetch }),
-    );
-    expect(proxy).not.toBeNull();
-    expect(proxy?.handles("/api/darknyx/venue/orders")).toBe(true);
-    expect(proxy?.handles("/api/darknyx/rpc")).toBe(true);
+    expect(() =>
+      createLiveProxy(
+        hostOptions({ cvmFetch: cvmFetch as unknown as typeof fetch }),
+      ),
+    ).toThrow(/must be supplied together/);
+    expect(() =>
+      createLiveProxy(
+        hostOptions({
+          cvmWebSocketFactory: () => {
+            throw new Error("not opened during configuration");
+          },
+        }),
+      ),
+    ).toThrow(/must be supplied together/);
   });
 
   it("still constructs without one — the legacy path stays available", () => {

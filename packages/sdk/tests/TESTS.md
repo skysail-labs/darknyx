@@ -6,7 +6,7 @@ human-readable mirror). Run a bucket with:
 
 ```sh
 npm run -w packages/sdk test:local    # no infra, no env — the default gate
-npm run -w packages/sdk test:devnet   # needs Helius RPC + .devnet/ foundation
+npm run -w packages/sdk test:devnet   # needs dedicated RPC + .devnet/ foundation
 npm run -w packages/sdk test:cvm       # needs a RUNNING Phala CVM + devnet
 # bare `vitest run` runs all three; devnet/cvm files self-skip without their RUN_* flag
 
@@ -15,7 +15,7 @@ npm run -w packages/sdk typecheck:tests  # type-checks the WHOLE suite (tsconfig
                                           #   which can only RUN against a live enclave.
 ```
 
-Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
+Secrets/config (RPC credential, CVM gateway, RUN\_\* flags) load from a gitignored
 `packages/sdk/.env` via `tests/setup-env.ts` — see `.env.example`.
 
 ## local — pure unit / parity / prover / wire-format (no network, no env gate)
@@ -46,7 +46,7 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `helpers/merkle-shadow.test.ts`  | in-memory Merkle shadow witness                          |
 | `helpers/snarkjs-prover.test.ts` | snarkjs prover helper                                    |
 
-## devnet — needs a devnet RPC (Helius) + `.devnet/` foundation
+## devnet — needs a dedicated devnet RPC + `.devnet/` foundation
 
 | File                              | Gate                 | Asserts                                                          |
 | --------------------------------- | -------------------- | ---------------------------------------------------------------- |

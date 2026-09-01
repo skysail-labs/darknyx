@@ -43,9 +43,9 @@ export interface TradingViewChartProps {
 /**
  * Host-owned external market context.
  *
- * TradingView never runs in this document. For the local recording build the
- * widget bootstrap is served from the 127.0.0.1 sibling origin while the
- * custody app stays on localhost, so it cannot read the custody document.
+ * TradingView never runs in this document. The host serves a dedicated child
+ * document, and the iframe's opaque sandbox origin prevents its external
+ * widget script from reading the custody application.
  */
 export function TradingViewChart({
   marketSymbol,
@@ -65,7 +65,7 @@ export function TradingViewChart({
   const src = useMemo(() => {
     if (!tvSymbol) return undefined;
     const params = new URLSearchParams({ symbol: tvSymbol, interval });
-    return `http://127.0.0.1:8080/tradingview.html#${params.toString()}`;
+    return `/tradingview.html#${params.toString()}`;
   }, [interval, tvSymbol]);
 
   useEffect(() => {
@@ -74,11 +74,7 @@ export function TradingViewChart({
     loadTimeout.current = window.setTimeout(() => setStatus("failed"), 12_000);
     const receive = (event: MessageEvent<unknown>) => {
       if (event.source !== iframe.current?.contentWindow) return;
-      if (
-        event.origin !== "http://127.0.0.1:8080" ||
-        !isChartMessage(event.data)
-      )
-        return;
+      if (event.origin !== "null" || !isChartMessage(event.data)) return;
       if (event.data.symbol !== tvSymbol || event.data.interval !== interval)
         return;
       if (loadTimeout.current !== undefined)
@@ -134,7 +130,7 @@ export function TradingViewChart({
                 ref={iframe}
                 src={src}
                 title={`${marketSymbol} public price chart`}
-                sandbox="allow-scripts allow-same-origin"
+                sandbox="allow-scripts"
                 referrerPolicy="no-referrer"
                 onError={() => setStatus("failed")}
               />

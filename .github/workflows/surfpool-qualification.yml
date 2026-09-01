@@ -1,0 +1,304 @@
+name: surfpool-integration (qualification + TEE smoke)
+
+on:
+  schedule:
+    # Routine protocol integration is hermetic and consumes no Solana-provider
+    # credential or billable CVM. Cron is UTC.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/surfpool-qualification.yml'
+      - '.github/workflows/cvm-e2e.yml'
+      - '.github/workflows/cvm-sweeper.yml'
+      - 'scripts/check-surfpool-workflow-boundaries.sh'
+      - 'scripts/dstack-simulator-start.sh'
+      - 'scripts/surfpool/**'
+      - 'crates/darknyx-tee/**'
+      - 'packages/sdk/tests/devnet-setup.test.ts'
+      - 'packages/sdk/tests/devnet-deposit-withdraw.test.ts'
+      - 'packages/sdk/tests/surfpool-qualification.test.ts'
+      - 'packages/sdk/tests/surfpool-local-tee.test.ts'
+      - 'packages/sdk/tests/cvm-settle-e2e.test.ts'
+      - 'crates/darknyx-tee/tests/surfpool_merkle_sync.rs'
+      - 'crates/darknyx-tee/tests/surfpool_oracle_fixture.rs'
+      - 'programs/vault/**'
+      - 'Cargo.lock'
+      - 'package-lock.json'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SURFPOOL_RPC_URL: http://127.0.0.1:18899
+  SOLANA_RPC_URL: http://127.0.0.1:18899
+  DARKNYX_E2E_CONFIG_PATH: ${{ github.workspace }}/.surfpool/foundation/current/e2e-config.json
+  ADMIN_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/admin.json
+  TEE_AUTHORITY_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/tee_authority.json
+  TEE_AUTHORITY_1_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/tee_authority_1.json
+  ROOT_KEY_KEYPAIR: ${{ github.workspace }}/.surfpool/foundation/current/keypairs/root_key.json
+  DARKNYX_NUM_TREES: '2'
+  DARKNYX_TEE_FEE_EPOCH_KEY: '0008080808080808080808080808080808080808080808080808080808080808'
+  RUN_SURFPOOL_QUALIFICATION: '1'
+  RUN_SURFPOOL_ORACLE_FIXTURE: '1'
+  SOLANA_CLI_VERSION: v3.1.12
+  DSTACK_REPO: ${{ github.workspace }}/.surfpool/dstack
+
+jobs:
+  qualify:
+    name: Linux amd64 foundation and production-TEE smoke
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+          # The prover keys are Git LFS objects. A pointer file passes `-f` but
+          # Ark reports only `Invalid argument` much later during TEE boot.
+          lfs: true
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Enforce hermetic-schedule and manual-CVM boundaries
+        run: bash scripts/check-surfpool-workflow-boundaries.sh
+
+      - name: Restore source-hashed circuit artefacts
+        id: cache-circuit-build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            circuits/build
+            !circuits/build/*/circuit_final.zkey
+          key: circuit-build-v2-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
+
+      - name: Restore circom 2.2.2
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        id: cache-circom
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/circom
+          key: circom-${{ runner.os }}-v2.2.2
+
+      - name: Install circom 2.2.2
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true' && steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v2.2.2 \
+            https://github.com/iden3/circom.git /tmp/circom
+          cargo install --path /tmp/circom/circom --locked
+
+      - name: Build circuit WASM on cache miss
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        run: bash scripts/ci-build-circuits.sh
+
+      - name: Save source-hashed circuit artefacts
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            circuits/build
+            !circuits/build/*/circuit_final.zkey
+          key: ${{ steps.cache-circuit-build.outputs.cache-primary-key }}
+
+      - name: Require proof-generation artefacts
+        run: |
+          set -euo pipefail
+          for name in valid_deposit valid_input valid_spend match_batch_n16; do
+            wasm="circuits/build/$name/circuit_js/circuit.wasm"
+            zkey="circuits/build/$name/circuit_final.zkey"
+            test -f "$wasm"
+            test -f "$zkey"
+            size=$(wc -c < "$zkey")
+            test "$size" -gt 100000 || {
+              echo "$zkey is only $size bytes; Git LFS object was not hydrated" >&2
+              exit 1
+            }
+          done
+
+      - name: Install Surfpool Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev libclang-dev pkg-config libudev-dev
+          echo 'LIBCLANG_PATH=/usr/lib/llvm-14/lib' >> "$GITHUB_ENV"
+
+      - name: Cache Solana CLI install
+        id: cache-solana
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.local/share/solana/install
+          key: solana-${{ runner.os }}-${{ env.SOLANA_CLI_VERSION }}
+
+      - name: Install Solana CLI
+        if: steps.cache-solana.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL https://release.anza.xyz/${SOLANA_CLI_VERSION}/install)"
+
+      - name: Put Solana CLI on PATH
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Restore pinned Surfpool release build
+        id: cache-surfpool
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/source/target
+          key: surfpool-source-${{ runner.os }}-rust-1.95.0-${{ hashFiles('scripts/surfpool/pin.json') }}
+
+      - name: Build checksum-pinned Surfpool revision
+        run: |
+          set -euo pipefail
+          mkdir -p .surfpool/bin .surfpool/source
+          repo=$(jq -r .repository scripts/surfpool/pin.json)
+          commit=$(jq -r .commit scripts/surfpool/pin.json)
+          git -C .surfpool/source init
+          git -C .surfpool/source remote add origin "https://github.com/${repo}.git"
+          git -C .surfpool/source fetch --depth 1 origin "$commit"
+          git -C .surfpool/source checkout --detach FETCH_HEAD
+          test "$(git -C .surfpool/source rev-parse HEAD)" = "$commit"
+          studio_url=$(jq -r .studioUi.url scripts/surfpool/pin.json)
+          studio_sha=$(jq -r .studioUi.sha256 scripts/surfpool/pin.json)
+          curl --fail --silent --show-error --location "$studio_url" \
+            --output .surfpool/studio-dist.zip
+          echo "$studio_sha  .surfpool/studio-dist.zip" \
+            | sha256sum --check --strict
+          export STUDIO_UI_DIST="$GITHUB_WORKSPACE/.surfpool/studio-dist.zip"
+          (
+            cd .surfpool/source
+            cargo +1.95.0 build --release --locked \
+              --target x86_64-unknown-linux-gnu \
+              --features supervisor_ui --features version_check
+          )
+          cp .surfpool/source/target/x86_64-unknown-linux-gnu/release/surfpool \
+            .surfpool/bin/surfpool
+          echo "source-built Linux SHA-256: $(sha256sum .surfpool/bin/surfpool | cut -d' ' -f1)"
+          echo "upstream artifact SHA-256:  $(jq -r '.artifacts["linux-x64"].binarySha256' scripts/surfpool/pin.json)"
+          file .surfpool/bin/surfpool | grep -q 'ELF 64-bit.*x86-64'
+          chmod 0755 .surfpool/bin/surfpool
+          version=$(.surfpool/bin/surfpool --version)
+          echo "$version"
+          test "$version" = "$(jq -r .reportedVersion scripts/surfpool/pin.json)"
+
+      - name: Save pinned Surfpool release build
+        if: steps.cache-surfpool.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/source/target
+          key: ${{ steps.cache-surfpool.outputs.cache-primary-key }}
+
+      - name: Reclaim Surfpool compiler intermediates after cache save
+        run: rm -rf .surfpool/source/target
+
+      - name: Reuse the fingerprinted vault SBF cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: pr-checks-sbf
+          key: pr-checks-sbf-${{ hashFiles('programs/**/*.rs', 'crates/**/*.rs', 'Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Build fingerprinted vault SBF
+        run: |
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          bash scripts/build-vault-sbf.sh devnet-admin
+
+      - name: Build optimized production TEE
+        run: cargo build --release --locked -p darknyx-tee
+
+      - name: Check out pinned dstack v0.5.9 guest simulator
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSTACK_REPO"
+          git -C "$DSTACK_REPO" init
+          git -C "$DSTACK_REPO" remote add origin https://github.com/Dstack-TEE/dstack.git
+          git -C "$DSTACK_REPO" fetch --depth 1 origin 282eeb27d22d8f091ad0fa5a90e638f85cf68751
+          git -C "$DSTACK_REPO" checkout --detach FETCH_HEAD
+          test "$(git -C "$DSTACK_REPO" rev-parse HEAD)" = \
+            282eeb27d22d8f091ad0fa5a90e638f85cf68751
+
+      - name: Restore pinned dstack simulator build
+        id: cache-dstack-simulator
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/dstack/target
+          key: dstack-simulator-${{ runner.os }}-rust-1.92-282eeb27d22d8f091ad0fa5a90e638f85cf68751
+
+      - name: Build pinned dstack simulator
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.92 --profile minimal
+          (
+            cd "$DSTACK_REPO/sdk/simulator"
+            cargo +1.92 build --release --locked -p dstack-guest-agent-simulator
+            cp ../../target/release/dstack-simulator .
+          )
+          test -x "$DSTACK_REPO/sdk/simulator/dstack-simulator"
+
+      - name: Save pinned dstack simulator build
+        if: steps.cache-dstack-simulator.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .surfpool/dstack/target
+          key: ${{ steps.cache-dstack-simulator.outputs.cache-primary-key }}
+
+      - name: Run first qualification and foundation cycle
+        run: |
+          set -euo pipefail
+          cleanup() {
+            bash scripts/surfpool/foundation.sh down || true
+          }
+          trap cleanup EXIT HUP INT TERM
+          bash scripts/surfpool/foundation.sh up hosted-cycle-1
+          node scripts/surfpool/qualify-rpc.mjs
+          bash scripts/surfpool/foundation.sh verify
+          (
+            cd packages/sdk
+            ../../node_modules/.bin/vitest run tests/surfpool-qualification.test.ts
+            RUN_DEVNET_DW=1 ../../node_modules/.bin/vitest run \
+              tests/devnet-deposit-withdraw.test.ts
+          )
+          cargo test -p darknyx-tee --test surfpool_merkle_sync -- --nocapture
+          cargo test -p vault --test tee_forced_settle_batched \
+            cu_profile_worst_case_settle -- --nocapture
+          cargo test -p darknyx-tee \
+            settle::pipeline::tests::settle_v0_tx_compiles_and_fits_under_cap \
+            -- --nocapture
+          bash scripts/surfpool/foundation.sh down
+          trap - EXIT HUP INT TERM
+
+      - name: Repeat foundation from an empty process and ledger
+        run: bash scripts/surfpool/foundation.sh cycle hosted-cycle-2
+
+      - name: Run non-vacuous production-TEE smoke
+        run: bash scripts/surfpool/hosted-smoke.sh
+
+      - name: Stop local processes and prove teardown
+        if: always()
+        env:
+          PRIOR_JOB_STATUS: ${{ job.status }}
+        run: |
+          cleanup_status=0
+          set +e
+          bash scripts/surfpool/local-tee.sh down || cleanup_status=1
+          bash scripts/surfpool/foundation.sh down || cleanup_status=1
+          node scripts/surfpool/ports-closed.mjs \
+            127.0.0.1 18080 18899 18900 19488 || cleanup_status=1
+          if [[ "$PRIOR_JOB_STATUS" != success || "$cleanup_status" -ne 0 ]]; then
+            echo "Earlier execution or teardown failed; dumping diagnostic logs"
+            find .surfpool/foundation/evidence -maxdepth 3 -name '*.log' \
+              -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+            find .surfpool/local-tee/evidence -maxdepth 3 -name '*.log' \
+              -exec sh -c 'echo "==> $1"; tail -100 "$1"' sh {} \; 2>/dev/null || true
+          else
+            echo "Teardown clean; successful-run evidence logs are not dumped"
+          fi
+          exit "$cleanup_status"

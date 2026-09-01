@@ -193,7 +193,7 @@ export function createReleaseHost(options: ReleaseHostOptions): Server {
         return response.end();
       }
       if (url.pathname === "/tradingview.html") {
-        apply(response, tradingViewFrameSecurityHeaders());
+        apply(response, tradingViewFrameSecurityHeaders(origin));
         // The default custody document is deliberately unframeable. This one
         // isolated chart document is the narrow exception; setting a looser
         // CSP cannot override an inherited X-Frame-Options: DENY header.

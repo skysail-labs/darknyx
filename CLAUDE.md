@@ -268,7 +268,7 @@ after a few runs they drift and every `VALID_SPEND` withdraw fails with
 `StaleMerkleRoot (6004)`. Cure — a tree-only reset (keeps mints/ALT/config):
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/reset-merkle-tree.mjs
 ```
 
@@ -499,8 +499,8 @@ content.
 
 `deploy/docker-compose.yaml` references secrets as `${VAR}`; `phala deploy
 -e <file>` injects them as encrypted env (the value never enters the
-`compose_hash`). Build the file fresh each deploy — the Helius key is a
-secret: write it `umask 077` under the gitignored `.devnet/` directory,
+`compose_hash`). Build the file fresh each deploy — the credentialed RPC URL is
+a secret: write it `umask 077` under the gitignored `.devnet/` directory,
 **securely delete it after deploy, never commit it.**
 
 > **⚠️ The two CVM regimes are mutually exclusive — this is the loadgen
@@ -520,7 +520,7 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 ```sh
 set -euo pipefail
 umask 077
-HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
+DEVNET_RPC="https://<your-devnet-rpc-provider>/<credential>"
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
@@ -550,14 +550,14 @@ source .devnet/fee-key-deploy.env
 test -n "${DARKNYX_TEE_FEE_EPOCH_KEY:-}" \
   || { echo "fee-key deployment fragment is empty" >&2; exit 1; }
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
-FLOOR=$(solana slot --url "$HELIUS")
+FLOOR=$(solana slot --url "$DEVNET_RPC")
 cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
 DARKNYX_TEE_DEPLOYMENT_TIER=development
 DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
-DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
@@ -625,9 +625,9 @@ ALL K in shard order (`keys[j]` settles shard j) + fund each
 (one-time per CVM — they're deterministic per `app_id`):
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/rotate-tee-pubkey.mjs <key0> <key1> <key2> <key3>   # set the whole tee_pubkeys Vec
-SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
+SOLANA_RPC_URL="$DEVNET_RPC" FUNDER_KEYPAIR=~/.config/solana/id.json \
   node scripts/fund-tee-keys.mjs <key0> <key1> <key2> <key3>       # tops each to FUND_TARGET_SOL (default 2)
 # settle path needs SOL per shard for lock/verify/ALT/settle/close
 ```
@@ -641,7 +641,7 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # Run ONE leaf-count cvm test per fresh tree — see the note below.
 (
   cd packages/sdk
-  RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+  RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$DEVNET_RPC" \
     FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
     ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
     ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts
@@ -649,9 +649,9 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 
 # loadgen: intake throughput + matcher paging (≤16/batch). Needs the
 # PLACEHOLDER-MINT regime. Synthetic orders carry stub proofs, so their
-# settles fail gracefully (and under a flood you'll see Helius 429s — an RPC
+# settles fail gracefully (and under a flood you may see provider 429s — an RPC
 # capacity limit, not a code bug). Validates intake + paging, NOT settle.
-RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+RAW=$(SOLANA_RPC_URL="$DEVNET_RPC" node scripts/read-pyth-push-price.mjs \
   ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --fee-rate-bps 30 --traders 10 --duration-secs 25
@@ -720,7 +720,7 @@ export DARKNYX_TEE_API_KEY=... DARKNYX_TEE_API_SECRET=... DARKNYX_TEE_PASSPHRASE
 
 # any cvm-* suite (ONE leaf-count test per reset + cold boot — see §3.4)
 ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_CVM_TRANSPORT=ra-tls \
-    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$DEVNET_RPC" \
     ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts )
 
 # attestation (own gate) and the daemon (own gate + its own env)
@@ -728,7 +728,7 @@ export DARKNYX_TEE_API_KEY=... DARKNYX_TEE_API_SECRET=... DARKNYX_TEE_PASSPHRASE
     DARKNYX_TEE_GATEWAY="$GW" ../../node_modules/.bin/vitest run --project cvm \
     tests/cvm-attestation-e2e.test.ts )
 ( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 DARKNYX_CVM_TRANSPORT=ra-tls \
-    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+    DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$DEVNET_RPC" \
     ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
 ```
 
@@ -1044,7 +1044,7 @@ this — only the integration tests do, with `AccountNotFound` /
 | Upgraded a running CVM across the journal v1→v2 bump without draining | Boot reports the journal `Damaged` and demands an operator | `POST /admin/drain`, confirm `safe_to_stop`, THEN redeploy |
 | Forgot the tree reset after a wipe/migration | `StaleMerkleRoot (6004)` on first withdraw | §2.4 |
 | Loadgen run is 100% 4xx | CVM is in the wrong mint regime | match the regime: real mints for `cvm-settle-e2e`, omit mints for loadgen (§3.2) |
-| Probed the RPC with `getHealth`, got 200, then every call 401s | **`getHealth` is UNAUTHENTICATED on Helius** — it answers 200 for a revoked or wrong key, so it is worthless as a key check | probe with a real method (`getSlot`/`getVersion`); a dead key returns `-32401 "Invalid API key"` |
+| Probed the RPC with `getHealth`, got 200, then every authenticated call fails | A health endpoint may be unauthenticated, so it does not validate the configured credential | probe a real method (`getSlot`/`getVersion`) and require the expected cluster response |
 | A devnet test passes once, then fails with `Allocate: account ... already in use` | The note commitment is derived from a FIXED seed, so the re-run re-deposits it and the `DepositedNoteEntry` deposit-once guard correctly rejects it | salt the master seed per run (`runSalt = BigInt(Date.now())`) as `devnet-deposit-withdraw` and `devnet-leaf-index` do |
 | `phala cvms start` on a code change | CVM runs stale code | bump the tag + `phala deploy` re-pulls (§3.1) |
 | Closed `BatchValidityMarker` in the settle | `test_two_matches_share_one_marker` fails | §8.2 |
@@ -1150,7 +1150,7 @@ constraint, prior incident, tradeoff), not the what. List the validation
 commands you ran. Bullet concrete files/lines.
 
 **Never commit:** `.devnet/keypairs/*.json`, `.devnet/e2e-config.json`, the
-`-e` env / Helius key, anything under `target/` / `node_modules/` /
+`-e` env / credentialed RPC URL, anything under `target/` / `node_modules/` /
 `circuits/build/` except `circuit_final.zkey`, or `verification_key.json`
 (the canonical form is `vk_*.rs`). All gitignored — keep it that way.
 

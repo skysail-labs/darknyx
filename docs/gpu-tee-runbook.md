@@ -109,8 +109,9 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
 1. **GPU type:** H200, **1 GPU**.
 2. **OS image:** `dstack-nvidia-dev-*` (the **nvidia** image = GPU passthrough; the **dev** suffix =
    SSH access — required for the CC-mode check + the 2b spike).
-3. **Template:** Custom Configuration. Paste the compose below (devnet values inlined; the **only**
-   `${...}` reference is the Helius RPC, supplied as an encrypted secret). Refresh
+3. **Template:** Custom Configuration. Paste the compose below (devnet values inlined; the API
+   key, API secret, passphrase, and dedicated RPC `${...}` references are all supplied as
+   encrypted secrets). Refresh
    `DARKNYX_TEE_SYNC_FROM_SLOT` to the slot printed above.
 
 ```yaml
@@ -157,7 +158,7 @@ volumes:
   darknyx_state:
 ```
 
-4. **Advanced → Encrypted Secrets:** add the Helius URL plus fresh
+4. **Advanced → Encrypted Secrets:** add the dedicated RPC URL plus fresh
    `DARKNYX_TEE_API_KEY`, `DARKNYX_TEE_API_SECRET`, and `DARKNYX_TEE_PASSPHRASE` values.
    These are E2E-encrypted in the browser and never enter the compose hash. The
    public `darknyx-test-*` fixtures are rejected outside explicit simulator mode.
@@ -176,7 +177,8 @@ QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$RPC")
-cat > .env.deploy <<EOF      # .env.deploy matches gitignored .env.* — never commit
+mkdir -p .devnet
+cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
@@ -192,9 +194,14 @@ DARKNYX_TEE_NUM_TREES=4
 DARKNYX_TEE_PROVER=icicle
 DARKNYX_TEE_ICICLE_DEVICE=CUDA
 EOF
-"$PHALA" deploy -n darknyx-gpu -c deploy/docker-compose.gpu.yaml -e .env.deploy \
+"$PHALA" deploy -n darknyx-gpu -c deploy/docker-compose.gpu.yaml -e .devnet/darknyx-deploy.env \
   -t h200.small --kms phala --dev-os --ssh-pubkey ~/.ssh/id_ed25519.pub --wait
-rm -P .env.deploy            # shred the Helius key off disk (macOS has no `shred`)
+if command -v shred >/dev/null 2>&1; then
+  shred -u .devnet/darknyx-deploy.env
+else
+  rm -P .devnet/darknyx-deploy.env
+fi
+test ! -e .devnet/darknyx-deploy.env
 ```
 
 > **Image must be public:** Phala pulls `ghcr.io/skysail-labs/darknyx-tee` anonymously. It was public

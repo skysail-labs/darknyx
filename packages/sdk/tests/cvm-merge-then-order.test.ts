@@ -19,11 +19,11 @@
  * ask's fee-inclusive collateral for qty Q (intake's `orders.rs` derivation).
  *
  * Gate: RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY + the VALID_MERGE artifacts. Run:
- *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$DEVNET_RPC \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-merge-then-order.test.ts )
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
@@ -89,16 +89,21 @@ import { deriveLegacyMergeInner } from "./helpers/privacy-observer.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
+const CONFIG_PATH = resolve(
+  REPO_ROOT,
+  process.env.DARKNYX_E2E_CONFIG_PATH?.trim() || ".devnet/e2e-config.json",
+);
 const MERGE_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_merge_k2/circuit_final.zkey",
 );
 const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
-  process.env.RUN_CVM_E2E === "1" &&
+  (process.env.RUN_CVM_E2E === "1" ||
+    process.env.RUN_SURFPOOL_TEE_E2E === "1") &&
   GATEWAY !== "" &&
   existsSync(CONFIG_PATH) &&
+  statSync(CONFIG_PATH).isFile() &&
   existsSync(MERGE_ZKEY);
 const maybeDescribe = READY ? describe : describe.skip;
 

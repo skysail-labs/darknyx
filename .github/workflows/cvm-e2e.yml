@@ -1,4 +1,4 @@
-# Twice-weekly CVM + devnet end-to-end.
+# Manually dispatched CVM + devnet release gate.
 # (Historical note: the concurrency group `cvm-e2e-nightly`, the repo var
 # `DARKNYX_NIGHTLY_CVM_ID`, and the CVM name `nightly-test-cvm` keep their original
 # "nightly" names — they are stable identifiers, not the cadence.)
@@ -11,13 +11,11 @@
 # TDX quote (the one thing offline mocks can't do) — report_data K-shard
 # set-binding + event-log RTMR3 replay + the on-chain tee_pubkeys cross-check.
 #
-# WHY NIGHTLY, NOT PER-PUSH: this spins a BILLABLE CVM and spends devnet SOL on
-# every run (deploy + K-shard settles). Per-push would bill on every commit and
-# race concurrent deploys against one devnet program. A nightly on `main` (plus
-# manual `workflow_dispatch`) is the right cadence — it catches regressions in
-# the deployed-system contract without burning money on every push. The fast,
-# free, per-PR signal stays in pr-checks.yml (unit + litesvm + the SDK vitest
-# suite, whose CVM/devnet tests auto-skip without RUN_CVM_E2E/RUN_DEVNET_*).
+# WHY MANUAL: this spins a BILLABLE CVM and spends devnet SOL on every run
+# (deploy + K-shard settles). Routine protocol integration now runs against the
+# pinned Surfpool plus the production TEE under the dstack simulator. Dispatch
+# this workflow explicitly for a release, protocol change, or showcase that
+# needs real TDX, Phala KMS/gateway, RA-TLS, and real-cluster evidence.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ⚠️  TEARDOWN IS THE LOAD-BEARING PART. A CVM bills while running. The final
@@ -28,7 +26,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # ONE-TIME SETUP (out of band — NOT done by this workflow, because signer
-# rotation/funding and mint creation are not things you want to re-run nightly):
+# rotation/funding and mint creation are not things to re-run per release test):
 #   1. Provision a dedicated CVM named `darknyx-nightly-ci` (phala cvms create …) and
 #      record its app_id → repo variable `DARKNYX_NIGHTLY_CVM_ID` (e.g. app_xxxx).
 #   2. Run devnet-setup ONCE to mint the stable base/quote mints + settle ALT +
@@ -39,20 +37,16 @@
 #      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
-#   4. Add secrets `PHALA_CLOUD_API_KEY`, `HELIUS_API_KEY`, and
+#   4. Add secrets `PHALA_CLOUD_API_KEY`, `DEVNET_RPC_URL`, and
 #      `DARKNYX_NIGHTLY_FEE_EPOCH_KEY`. The fee key must be the 32-byte hex
 #      secret whose Poseidon binding is recorded in DEVNET_E2E_CONFIG_B64.
 # The K shard signers are deterministic per app_id; this workflow re-rotates +
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
 
-name: cvm-e2e (twice-weekly)
+name: cvm-e2e (manual release gate)
 
 on:
-  schedule:
-    # Twice a week: 07:00 UTC on Monday and Thursday. Fewer runs than nightly →
-    # less Actions-minutes + less build-from-main signer/tag churn.
-    - cron: "0 7 * * 1,4"
   workflow_dispatch:
     inputs:
       image_tag:
@@ -63,7 +57,7 @@ on:
 # Never let a second run cancel a first mid-deploy — that could skip teardown and
 # leak a billable CVM. Queue instead.
 concurrency:
-  group: cvm-e2e-nightly
+  group: cvm-e2e-nightly # Stable identifier retained for mutual exclusion.
   cancel-in-progress: false
 
 permissions:
@@ -93,7 +87,7 @@ jobs:
     # this just bounds a hung job so it can't run forever before teardown).
     timeout-minutes: 50
     env:
-      HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
+      DEVNET_RPC_URL: ${{ secrets.DEVNET_RPC_URL }}
       CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
       DARKNYX_NIGHTLY_FEE_EPOCH_KEY: ${{ secrets.DARKNYX_NIGHTLY_FEE_EPOCH_KEY }}
     steps:
@@ -143,6 +137,20 @@ jobs:
           bash scripts/download-ptau.sh
           bash scripts/build-circuits.sh
 
+      # `actions/cache` normally saves in its post-job hook. A later CVM test
+      # failure skips that hook, throwing away the seven-minute deterministic
+      # build and making the diagnostic rerun rebuild the same artifacts.
+      # Persist immediately once the artifacts are complete; a settlement or
+      # transport failure later in the job must not invalidate this cache.
+      - name: Save circuit artifacts immediately (cache miss only)
+        if: steps.cache-circuits.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            circuits/build
+            scripts/ptau
+          key: circuits-${{ hashFiles('circuits/**/*.circom', 'circuits/templates/*.circom', 'scripts/build-circuits.sh') }}
+
       # ── restore devnet secrets to the paths the tests + scripts expect ──
       # `umask 077` + never echo; these are keypairs/API keys.
       - name: Restore devnet keypairs + e2e-config (from secrets)
@@ -152,12 +160,14 @@ jobs:
           echo "${{ secrets.DEVNET_ADMIN_KEYPAIR_B64 }}"  | base64 -d > .devnet/keypairs/admin.json
           echo "${{ secrets.DEVNET_FUNDER_KEYPAIR_B64 }}" | base64 -d > .devnet/keypairs/funder.json
           echo "${{ secrets.DEVNET_E2E_CONFIG_B64 }}"     | base64 -d > .devnet/e2e-config.json
-          # The SDK harness loads the Helius key from packages/sdk/.env (gitignored).
-          printf 'SOLANA_RPC_URL=%s\n' "$HELIUS_RPC" > packages/sdk/.env
+          # The SDK harness loads the dedicated RPC URL from packages/sdk/.env
+          # (gitignored). The provider credential, if any, stays in this secret.
+          printf 'SOLANA_RPC_URL=%s\n' "$DEVNET_RPC_URL" > packages/sdk/.env
 
       - name: Preflight — CVM id + config present
         run: |
           test -n "$CVM" || { echo "::error::repo variable DARKNYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
+          test -n "$DEVNET_RPC_URL" || { echo "::error::DEVNET_RPC_URL secret is unset"; exit 1; }
           jq -e .baseMint.pubkey .devnet/e2e-config.json > /dev/null
           [[ "$DARKNYX_NIGHTLY_FEE_EPOCH_KEY" =~ ^[0-9a-fA-F]{64}$ ]] \
             || { echo "::error::DARKNYX_NIGHTLY_FEE_EPOCH_KEY must be a nonzero 32-byte hex secret"; exit 1; }
@@ -168,7 +178,7 @@ jobs:
       #    our deposits land at leaf 0.. (cvm tests assert startCount == 0) ──
       - name: Reset the Merkle tree (devnet)
         run: |
-          SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             node scripts/reset-merkle-tree.mjs
 
       # ── build the encrypted env (-e) file: real-mint regime (cvm-settle-e2e).
@@ -177,7 +187,7 @@ jobs:
         id: envfile
         run: |
           umask 077
-          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
 
           # Per-window CVM credentials.
           #
@@ -201,7 +211,7 @@ jobs:
             echo "DARKNYX_TEE_API_KEY=$API_KEY"
             echo "DARKNYX_TEE_API_SECRET=$API_SECRET"
             echo "DARKNYX_TEE_PASSPHRASE=$PASSPHRASE"
-            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
             echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -244,7 +254,7 @@ jobs:
           # below only accepts that. Both are valid OCI references and the
           # digest is what pins content either way, so the disagreement was
           # purely a shape mismatch between two workflows — but it failed the
-          # nightly at this step every run, after the job had already built the
+          # workflow at this step every run, after the job had already built the
           # image and reset the devnet tree.
           #
           # Strip only the tag: `%%@*` takes the repository part, `%:*` drops a
@@ -270,7 +280,7 @@ jobs:
       # NOTE: `phala cvms start` is async; issuing `phala deploy` while it is
       # still in flight fails with "Another operation is already in progress".
       # So: start → WAIT until status=running → deploy (with a busy-retry).
-      - name: Deploy to the nightly CVM
+      - name: Deploy to the dedicated release CVM
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
@@ -300,15 +310,21 @@ jobs:
           BASE=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
                  | jq -r '.. | objects | .base_domain // empty' 2>/dev/null | grep . | head -1)
           [ -n "$BASE" ] || { echo "::error::could not resolve gateway base_domain for $CVM"; exit 1; }
+          APPROVED_COMPOSE_HASH=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
+                 | jq -r '.compose_hash // empty')
+          printf '%s' "$APPROVED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "::error::control plane returned no approved compose hash"; exit 1; }
           GW="https://${APP_ID}-8443s.${BASE}"
           echo "gateway: $GW"
+          echo "approved compose_hash: $APPROVED_COMPOSE_HASH"
           echo "GATEWAY=$GW" >> "$GITHUB_ENV"
+          echo "DARKNYX_APPROVED_COMPOSE_HASH=$APPROVED_COMPOSE_HASH" >> "$GITHUB_ENV"
 
       - name: Wait for the CVM to be healthy
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          # First cold boot includes a full ~GB image pull. The nightly builds a
+          # First cold boot includes a full ~GB image pull. This workflow builds a
           # NEW image every run, so the host has never cached it — this is
           # always the slow path, never the warm one.
           #
@@ -348,12 +364,11 @@ jobs:
             fi
           done
 
-      # T-03P: every cvm-* suite runs over the VERIFIED transport, which needs
-      # the two governance pins. They are read from the live enclave rather than
-      # stored, because a compose edit of ANY kind moves compose_hash — a stored
-      # value would go stale silently and the suites would fail closed with a
-      # pin error that looks like an attack.
-      - name: Read the RA-TLS governance pins from the enclave
+      # T-03P: every cvm-* suite runs over the verified transport. The measured
+      # compose hash must equal the independently selected deployment identity
+      # returned by the control plane after the digest-pinned deploy; accepting
+      # the enclave's own measurement as its expected value would be circular.
+      - name: Verify the RA-TLS governance pins
         run: |
           set -euo pipefail
           NONCE=$(openssl rand -hex 32)
@@ -366,6 +381,10 @@ jobs:
           # Fail closed: an empty pin would disable the very check it configures.
           printf '%s' "$COMPOSE" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad compose hash from /transport-attestation: $COMPOSE"; exit 1; }
+          [ "$COMPOSE" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+            echo "::error::attested compose hash does not match approved deployment identity"
+            exit 1
+          }
           printf '%s' "$SIGNERS" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad signer set from /transport-attestation: $SIGNERS"; exit 1; }
           [ "$MODE" = "ra-tls" ] \
@@ -375,7 +394,7 @@ jobs:
           echo "signer_set     : $SIGNERS"
           {
             echo "DARKNYX_CVM_TRANSPORT=ra-tls"
-            echo "DARKNYX_EXPECT_COMPOSE_HASH=$COMPOSE"
+            echo "DARKNYX_EXPECT_COMPOSE_HASH=$DARKNYX_APPROVED_COMPOSE_HASH"
             echo "DARKNYX_EXPECT_SIGNER_SET=$SIGNERS"
             echo "DARKNYX_TEE_RATLS_URL=$GATEWAY"
           } >> "$GITHUB_ENV"
@@ -394,12 +413,12 @@ jobs:
           # Fall back to the /info primary if the log grep came up empty.
           [ -z "$KEYS" ] && KEYS=$(jq -r '.tee_pubkey' /tmp/info.json)
           echo "shard signers: $KEYS"
-          SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             node scripts/rotate-tee-pubkey.mjs $KEYS
           # 0.5 SOL/signer — a night of tests spends well under that, and it keeps
           # the funder from draining (and limits stranded SOL when build-from-main
           # rotates to new signers). Override with FUND_TARGET_SOL.
-          SOLANA_RPC_URL="$HELIUS_RPC" FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             FUND_TARGET_SOL="${FUND_TARGET_SOL:-0.5}" \
             node scripts/fund-tee-keys.mjs $KEYS
 
@@ -411,7 +430,7 @@ jobs:
       - name: Devnet round-trip (deposit → withdraw; no CVM needed)
         run: |
           cd packages/sdk
-          RUN_DEVNET_DW=1 SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_DEVNET_DW=1 SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts
@@ -421,7 +440,7 @@ jobs:
       - name: CVM API-surface e2e
         run: |
           cd packages/sdk
-          RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             ../../node_modules/.bin/vitest run tests/cvm-api-surface.test.ts
@@ -434,8 +453,8 @@ jobs:
       # multi-key (K-shard) report_data binding end-to-end; at numTrees=1 it
       # T-03P: the transport itself. This is the only suite that drives the
       # production adapter against a real TDX quote and a real passthrough
-      # route, and it was NOT previously in the nightly — the transport had no
-      # scheduled coverage at all. NODE_OPTIONS=--expose-gc is required: the RSS
+      # route, and it was NOT previously in this gate — the transport had no
+      # live-CVM coverage at all. NODE_OPTIONS=--expose-gc is required: the RSS
       # retention test refuses to run without it rather than silently measuring
       # uncollected garbage.
       - name: RA-TLS transport against the live CVM
@@ -448,7 +467,7 @@ jobs:
       - name: CVM attestation e2e (real DCAP)
         run: |
           cd packages/sdk
-          RUN_CVM_ATTEST=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_ATTEST=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
             ../../node_modules/.bin/vitest run tests/cvm-attestation-e2e.test.ts
 
       # Each of these asserts startCount==0 then deposits+settles, so they CANNOT
@@ -462,10 +481,17 @@ jobs:
         run: |
           set -uo pipefail
           redeploy_fresh() {
-            SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            # A reset is not sufficient on its own: the mirror only forgets
+            # the prior tree after a genuine cold boot from the new floor.
+            # Remember the current boot identity so the readiness probe below
+            # cannot accidentally accept the still-running old process while
+            # an update is pending.
+            PREVIOUS_BOOT=$(curl -fsSk --max-time 20 "$GATEWAY/info" 2>/dev/null \
+              | jq -r '.boot_session_id // empty' || true)
+            SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
               node scripts/reset-merkle-tree.mjs
             umask 077
-            FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+            FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
             {
               # The SAME per-window credentials the initial deploy used.
               #
@@ -478,7 +504,7 @@ jobs:
               echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
               echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
               echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
-              echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
               echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
               echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -490,16 +516,29 @@ jobs:
               echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
             } > /tmp/darknyx.env
-            for d in $(seq 1 6); do
-              OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env --wait 2>&1)
-              echo "$OUT" | grep -q "already in progress" || break
-              echo "deploy busy — retry $d in 20s"; sleep 20
+            # The CLI defaults to a 60-second request timeout. A prod9 update
+            # routinely takes longer than that, so the old command returned 1
+            # even though it had submitted an update; its captured output was
+            # then discarded and the harness waited against an unverified
+            # deployment. Give the operation its real budget, keep diagnostics
+            # visible, and never proceed unless the deploy command succeeds.
+            DEPLOYED=0
+            for d in $(seq 1 3); do
+              if phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml \
+                   -e /tmp/darknyx.env --timeout 240 --wait; then
+                DEPLOYED=1
+                break
+              fi
+              echo "::warning::redeploy attempt $d failed; retrying in 20s"
+              sleep 20
             done
             # Same secure-erase as the initial deploy — this file carries the
-            # Helius and Pyth credentials, and this helper rewrites it once per
+            # RPC and Pyth credentials, and this helper rewrites it once per
             # tree-consuming test, so a plain rm would leave the most-written
             # secret file on the runner as recoverable blocks.
             shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
+            [ "$DEPLOYED" = 1 ] \
+              || { echo "::error::CVM redeploy failed for $T"; exit 1; }
             # -k, like the first health wait: the enclave serves its OWN
             # boot-scoped certificate, so there is no CA chain to validate.
             # This is the SECOND health wait in this workflow and it was missed
@@ -512,10 +551,18 @@ jobs:
             # test failure several minutes later.
             READY=0
             for i in $(seq 1 40); do
-              curl -fsSk "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && { READY=1; break; }
+              if curl -fsSk "$GATEWAY/info" -o /tmp/info.json 2>/dev/null; then
+                CURRENT_BOOT=$(jq -r '.boot_session_id // empty' /tmp/info.json)
+                if [ -n "$CURRENT_BOOT" ] && [ "$CURRENT_BOOT" != "$PREVIOUS_BOOT" ]; then
+                  READY=1
+                  echo "cold boot confirmed for $T"
+                  break
+                fi
+              fi
               sleep 6
             done
-            [ "$READY" = 1 ] || { echo "::error::CVM did not come back after redeploy for $T"; exit 1; }
+            [ "$READY" = 1 ] \
+              || { echo "::error::CVM did not expose a new boot session after redeploy for $T"; exit 1; }
 
             # RE-READ the governance pins after EVERY redeploy.
             #
@@ -532,23 +579,112 @@ jobs:
             NONCE=$(openssl rand -hex 32)
             curl -fsSk --max-time 40 \
               "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta.json
-            DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+            MEASURED_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
                               | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta.json)
             DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta.json)
+            DARKNYX_EXPECT_COMPOSE_HASH="$DARKNYX_APPROVED_COMPOSE_HASH"
             export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
-            printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+            printf '%s' "$MEASURED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
               || { echo "::error::bad compose hash after redeploy for $T"; exit 1; }
+            [ "$MEASURED_COMPOSE_HASH" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+              echo "::error::redeployed $T enclave does not match approved compose hash"
+              exit 1
+            }
             printf '%s' "$DARKNYX_EXPECT_SIGNER_SET" | grep -qE '^[0-9a-f]{64}$' \
               || { echo "::error::bad signer set after redeploy for $T"; exit 1; }
             echo "re-pinned: compose=$DARKNYX_EXPECT_COMPOSE_HASH"
+          }
+          capture_settlement_metrics() {
+            local label="$1"
+            local token metrics_file
+            # Metrics live in the scheduler process and are intentionally reset
+            # on every cold redeploy. Capture them immediately after the test,
+            # before the next loop iteration replaces that process. This is an
+            # authenticated, privacy-reviewed surface: the response excludes
+            # prices, amounts, note identities, and raw provider errors.
+            token=$(curl -fsSk --max-time 40 \
+              -H 'content-type: application/json' \
+              --data "$(jq -nc \
+                --arg api_key "$DARKNYX_TEE_API_KEY" \
+                --arg api_secret "$DARKNYX_TEE_API_SECRET" \
+                --arg passphrase "$DARKNYX_TEE_PASSPHRASE" \
+                '{api_key:$api_key,api_secret:$api_secret,passphrase:$passphrase}')" \
+              "$GATEWAY/auth/token" | jq -er '.access_token')
+            metrics_file="/tmp/${label}-settlement-metrics.json"
+            curl -fsSk --max-time 40 \
+              -H "authorization: Bearer $token" \
+              "$GATEWAY/admin/metrics/settlement?limit=100" \
+              -o "$metrics_file"
+
+            # A green protocol test without a complete timing record is not
+            # release evidence. Require one confirmed batch and every field
+            # needed to compare witness/prover time with the transaction-bound
+            # stages on the real CVM and validator.
+            jq -e '
+              (.schema_version | type) == "number" and
+              (.boot_session_id | type) == "string" and
+              (.compose_hash | type) == "string" and
+              any(.recent_batches[];
+                .outcomes.confirmed > 0 and
+                ([.timings.lock_ms,
+                  .timings.witness_ms,
+                  .timings.prove_step_ms,
+                  .timings.prove_ms,
+                  .timings.verify_ms,
+                  .timings.alt_tx_ms,
+                  .timings.alt_wait_ms,
+                  .timings.parallel_ms,
+                  .timings.settle_ms,
+                  .timings.close_ms,
+                  .timings.total_ms]
+                 | all(type == "number")))
+            ' "$metrics_file" >/dev/null || {
+              echo "::error::$label completed without a full settlement timing record"
+              jq '{schema_version,boot_session_id,compose_hash,counters,recent_batches}' \
+                "$metrics_file" || true
+              return 1
+            }
+
+            # Deliberately omit match IDs. This compact record is sufficient
+            # for release evidence and remains safe to retain in Actions logs.
+            jq -c --arg test "$label" '{
+              event: "CVM_SETTLEMENT_METRICS",
+              test: $test,
+              boot_session_id,
+              compose_hash,
+              counters,
+              batches: [.recent_batches[] | {
+                seq,
+                market_id,
+                active_matches,
+                padded_slots,
+                prover_backend,
+                witness_backend,
+                prover_device,
+                settle_concurrency,
+                settle_send_concurrency,
+                timings,
+                outcomes,
+                confirmed_slots,
+                distinct_confirmed_slots,
+                rebroadcasts,
+                pipeline_failure
+              }]
+            }' "$metrics_file"
           }
           FAILED=""
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
             echo "::group::$T"
             redeploy_fresh
-            ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+            TEST_PASSED=1
+            ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
                 FUNDER_KEYPAIR=.devnet/keypairs/funder.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-                ../../node_modules/.bin/vitest run tests/$T.test.ts ) || FAILED="$FAILED $T"
+                ../../node_modules/.bin/vitest run tests/$T.test.ts ) || TEST_PASSED=0
+            if [ "$TEST_PASSED" = 1 ]; then
+              capture_settlement_metrics "$T" || FAILED="$FAILED $T-metrics"
+            else
+              FAILED="$FAILED $T"
+            fi
             echo "::endgroup::"
           done
           [ -z "$FAILED" ] || { echo "::error::CVM tests failed:$FAILED"; exit 1; }
@@ -576,15 +712,20 @@ jobs:
           NONCE=$(openssl rand -hex 32)
           curl -fsSk --max-time 40 \
             "$GATEWAY/transport-attestation?nonce=$NONCE" -o /tmp/ta-daemon.json
-          DARKNYX_EXPECT_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
+          MEASURED_COMPOSE_HASH=$(jq -r '(.event_log | if type=="string" then fromjson else . end)
                             | map(select(.event=="compose-hash")) | .[0].event_payload' /tmp/ta-daemon.json)
           DARKNYX_EXPECT_SIGNER_SET=$(jq -r '.manifest.signer_set_sha256' /tmp/ta-daemon.json)
+          DARKNYX_EXPECT_COMPOSE_HASH="$DARKNYX_APPROVED_COMPOSE_HASH"
           export DARKNYX_EXPECT_COMPOSE_HASH DARKNYX_EXPECT_SIGNER_SET
-          printf '%s' "$DARKNYX_EXPECT_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
+          printf '%s' "$MEASURED_COMPOSE_HASH" | grep -qE '^[0-9a-f]{64}$' \
             || { echo "::error::bad compose hash before the daemon run"; exit 1; }
+          [ "$MEASURED_COMPOSE_HASH" = "$DARKNYX_APPROVED_COMPOSE_HASH" ] || {
+            echo "::error::daemon target does not match approved compose hash"
+            exit 1
+          }
           ( cd packages/daemon && RUN_CVM_DAEMON_LIFECYCLE=1 \
               DARKNYX_CVM_TRANSPORT=ra-tls \
-              DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+              DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$DEVNET_RPC_URL" \
               ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
               FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
               ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
@@ -598,7 +739,7 @@ jobs:
       # `cvm-daemon-lifecycle` was structurally unrunnable for weeks in
       # exactly that way while CI stayed green.
       #
-      # So the revert gets exercised once per nightly. That is what makes the
+      # So the revert gets exercised once per release run. That is what makes the
       # keep-decision durable rather than nominal.
       #
       # Runs LAST: it deploys a different compose, and every step above must
@@ -631,14 +772,23 @@ jobs:
             || { echo "::error::legacy transform did not publish :8080"; exit 1; }
 
           umask 077
-          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+          # This redeploy cold-starts another Merkle mirror. The suites above
+          # have consumed the initially empty tree, so taking a current sync
+          # floor without resetting would skip those historical leaves and
+          # correctly leave the venue paused for MerkleReadiness forever. The
+          # legacy API-surface check owns no state from the RA-TLS run; give it
+          # the same empty-tree/post-reset-floor boundary as every other cold
+          # CVM test.
+          SOLANA_RPC_URL="$DEVNET_RPC_URL" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            node scripts/reset-merkle-tree.mjs
+          FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.DEVNET_RPC_URL).getSlot('confirmed')))})()")
           echo "checkpoint: sync floor = $FLOOR"
           set +x
           {
             echo "DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY"
             echo "DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET"
             echo "DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE"
-            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$DEVNET_RPC_URL"
             echo "DARKNYX_TEE_DEPLOYMENT_TIER=development"
             echo "DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
@@ -679,6 +829,35 @@ jobs:
           done
           [ "$READY" = 1 ] || { echo "::error::legacy route never came up at $LEGACY_GW"; exit 1; }
 
+          # `/info` proves only that the process and gateway route are live.
+          # A cold boot still has to populate the Pyth cache and open the
+          # market-local trading gate. Running the order-error contract before
+          # that happens returns the correct readiness response (503), not the
+          # handler-level 4xx this API-surface test is meant to inspect.
+          MARKET_READY=0
+          for i in $(seq 1 120); do
+            INSTRUMENTS=$(curl -fsS "$LEGACY_GW/instruments" 2>/dev/null || true)
+            if jq -e '
+              if type == "array" then
+                any(.[]; .symbol == "SOL-USDC" and .trading_enabled == true)
+              elif (.instruments | type) == "array" then
+                any(.instruments[]; .symbol == "SOL-USDC" and .trading_enabled == true)
+              else
+                false
+              end
+            ' >/dev/null 2>&1 <<<"$INSTRUMENTS"; then
+              MARKET_READY=1
+              break
+            fi
+            sleep 2
+          done
+          [ "$MARKET_READY" = 1 ] || {
+            echo "::error::legacy SOL-USDC market did not become trading-enabled"
+            printf '%s\n' "$INSTRUMENTS"
+            curl -fsS "$LEGACY_GW/system/status" || true
+            exit 1
+          }
+
           # The INVERSE assertion. Without it this step would pass on a
           # deployment that never left ra-tls at all.
           RATLS_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "$GATEWAY/info" || true)
@@ -690,7 +869,7 @@ jobs:
           # deliberately UNSET so the harness selects plain fetch — the code
           # path a revert would actually take.
           ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$LEGACY_GW" \
-              SOLANA_RPC_URL="$HELIUS_RPC" \
+              SOLANA_RPC_URL="$DEVNET_RPC_URL" \
               env -u DARKNYX_CVM_TRANSPORT -u DARKNYX_EXPECT_COMPOSE_HASH -u DARKNYX_EXPECT_SIGNER_SET \
               ../../node_modules/.bin/vitest run --project cvm tests/cvm-api-surface.test.ts )
       # ═══════════════════════════════════════════════════════════════════════
@@ -711,7 +890,7 @@ jobs:
 
 # Belt-and-suspenders teardown lives in cvm-sweeper.yml: it unconditionally stops
 # this CVM a few times a day, in the SAME concurrency group as this workflow so it
-# can never race a live nightly — covering the force-cancel edge where a hard
+# can never race a live release run — covering the force-cancel edge where a hard
 # cancel skips even the `if: always()` teardown above.
 #
 # Build-from-main honesty is handled by the `build-image` job (reuses

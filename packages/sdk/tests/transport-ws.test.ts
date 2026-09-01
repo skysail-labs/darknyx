@@ -92,6 +92,9 @@ describe("createVerifiedWebSocketFactory — send gating", () => {
     // The caller sends its login frame immediately, as the real client does.
     ws.send('{"login":"bearer-token"}');
     expect(f.sent).toEqual([]); // still queued — nothing on the wire yet
+    expect(ws.bufferedAmount).toBe(
+      new TextEncoder().encode('{"login":"bearer-token"}').length,
+    );
 
     // `ws` emits `upgrade` while the socket is still CONNECTING, so passing
     // the certificate check is NOT yet permission to write — `inner.send()`
@@ -101,6 +104,7 @@ describe("createVerifiedWebSocketFactory — send gating", () => {
 
     f.emit("open");
     expect(f.sent).toEqual(['{"login":"bearer-token"}']); // flushed, in order
+    expect(ws.bufferedAmount).toBe(0);
   });
 
   it("never sends a queued frame when the check fails", async () => {

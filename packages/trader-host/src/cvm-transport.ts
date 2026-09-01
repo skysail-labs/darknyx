@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import WebSocket from "ws";
 
-import type { CvmWebSocketFactory } from "./types.js";
+import type { CvmStreamSocket, CvmWebSocketFactory } from "./types.js";
 
 interface CvmTransportConfig {
   gateway: string;
@@ -153,8 +153,20 @@ export async function buildCvmTransport(
   if (!transport.webSocketFactory) {
     throw new Error("verified CVM transport did not provide a WebSocket gate");
   }
+  const verifiedWebSocketFactory = transport.webSocketFactory;
   return {
     cvmFetch: transport.fetch,
-    cvmWebSocketFactory: transport.webSocketFactory,
+    cvmWebSocketFactory: (url) => {
+      const socket = verifiedWebSocketFactory(url);
+      const socketWithBackpressure = socket as typeof socket & {
+        readonly bufferedAmount?: unknown;
+      };
+      if (typeof socketWithBackpressure.bufferedAmount !== "number") {
+        throw new Error(
+          "verified CVM WebSocket transport does not expose backpressure",
+        );
+      }
+      return socketWithBackpressure as CvmStreamSocket;
+    },
   };
 }

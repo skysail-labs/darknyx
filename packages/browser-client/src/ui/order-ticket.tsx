@@ -6,7 +6,7 @@ import {
   Plus,
   ShieldCheck,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { short } from "./primitives.js";
 import type { TraderShellProps } from "./types.js";
@@ -34,6 +34,12 @@ export function OrderTicket({
   const [policy, setPolicy] = useState<"limit" | "ioc" | "fok">("limit");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAmount("");
+    setPrice("");
+    setResult(null);
+  }, [snapshot.selectedSymbol]);
 
   const unlocked = snapshot.vault.state === "unlocked";
   const spendSymbol =

@@ -232,7 +232,7 @@ for a `from_boot` CVM, or the `.devnet/e2e-config.json` mints for a real-mint CV
 Example (placeholder-mint CVM, partial-fill stress, 20 traders):
 
 ```sh
-RAW=$(SOLANA_RPC_URL="$HELIUS" node scripts/read-pyth-push-price.mjs \
+RAW=$(SOLANA_RPC_URL="$DEVNET_RPC" node scripts/read-pyth-push-price.mjs \
   ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d)
 cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --scenario partial-fill --fee-rate-bps 30 --traders 20 --duration-secs 25 --poll-orders 0.1
@@ -280,7 +280,7 @@ orders, and watches the settle land.
 
 ```sh
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
-  --endpoint "$GW" --real-settle --rpc-url "$HELIUS" \
+  --endpoint "$GW" --real-settle --rpc-url "$DEVNET_RPC" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint <hex32> --quote-mint <hex32> \
   --oracle-twap "$ORACLE_RAW" --real-qty 2000 --fee-rate-bps 30 --real-num-trees 4
@@ -323,7 +323,7 @@ ark-groth16 in `spawn_blocking`) → submit all concurrently → drain the settl
 
 ```sh
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
-  --endpoint "$GW" --real-settle --rpc-url "$HELIUS" \
+  --endpoint "$GW" --real-settle --rpc-url "$DEVNET_RPC" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint <hex32> --quote-mint <hex32> --oracle-twap "$ORACLE_RAW" \
   --fee-rate-bps 30 --real-num-trees 4 \

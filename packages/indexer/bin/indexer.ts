@@ -3,11 +3,11 @@
  * Darknyx indexer entrypoint. Watches the vault's settle txs (finalized) and serves
  * fills by order_id. Account-agnostic; the chain is the durable record.
  *
- *   INDEXER_RPC_URL=$HELIUS INDEXER_DB=/tmp/darknyx-idx.sqlite node dist/bin/indexer.js
+ *   INDEXER_RPC_URL=$SOLANA_RPC_URL INDEXER_DB=/tmp/darknyx-idx.sqlite node dist/bin/indexer.js
  *
- * The watcher scans via Helius `getTransactionsForAddress` (gTFA), so
- * INDEXER_RPC_URL MUST be a Helius endpoint — gTFA is not a standard Solana RPC
- * method and a public RPC will reject it.
+ * The watcher scans via `getTransactionsForAddress` (gTFA), so
+ * INDEXER_RPC_URL must name a provider that implements it; gTFA is not a
+ * standard Solana RPC method.
  *
  * See scripts/run-indexer-local.sh for the local-testing one-liner.
  */

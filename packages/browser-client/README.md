@@ -30,7 +30,7 @@ that differ from governance. The SDK attestation core uses environment-neutral
 noble SHA-256/SHA-384 primitives; this is a real browser path, not a Node crypto
 polyfill.
 
-The browser never receives a CVM endpoint, Helius key, CVM API secret, or
+The browser never receives a CVM endpoint, RPC credential, CVM API secret, or
 passphrase. Relative same-origin venue/RPC proxies expose only allowlisted user
 reads and streams. After trust checks pass, `/api/darknyx/session` maps the
 release's opaque `venue_id` to server-held credentials and returns only a

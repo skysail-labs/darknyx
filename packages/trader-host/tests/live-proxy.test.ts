@@ -50,7 +50,9 @@ async function listen(
   return address.port;
 }
 
-async function setup(options: { verifiedStream?: boolean } = {}) {
+async function setup(
+  options: { verifiedStream?: boolean; verifiedBufferedAmount?: number } = {},
+) {
   const upstreamRequests: Array<{
     path: string;
     body: string;
@@ -119,6 +121,9 @@ async function setup(options: { verifiedStream?: boolean } = {}) {
               for (const frame of pending.splice(0)) socket.send(frame);
             });
             return {
+              get bufferedAmount() {
+                return options.verifiedBufferedAmount ?? socket.bufferedAmount;
+              },
               addEventListener: (type, callback) =>
                 socket.addEventListener(type, callback as never),
               send: (frame) => {
@@ -197,7 +202,7 @@ function closeSocket(socket: WebSocket): Promise<void> {
 }
 
 describe("same-origin live proxy", () => {
-  it("keeps the upstreams and Helius key server-side", async () => {
+  it("keeps the upstreams and RPC credential server-side", async () => {
     const { base, cookie, upstreamRequests, tokenRequests } = await setup();
     expect(tokenRequests()).toBe(0);
     const info = await fetch(`${base}/api/darknyx/venue/info`, {
@@ -395,6 +400,22 @@ describe("same-origin live proxy", () => {
     await expect(echoed).resolves.toContain('"op":"login"');
     expect(verifiedStreamConnections()).toBe(1);
     await closeSocket(venue);
+  });
+
+  it("closes a verified relay before its upstream buffer exceeds the cap", async () => {
+    const { base, cookie } = await setup({
+      verifiedStream: true,
+      verifiedBufferedAmount: 2 * 1024 * 1024,
+    });
+    const venue = await openSocket(
+      `${base.replace("http://", "ws://")}/api/darknyx/venue/v1/stream`,
+      cookie,
+    );
+    const closed = new Promise<number>((resolve) =>
+      venue.once("close", (code) => resolve(code)),
+    );
+    venue.send(JSON.stringify({ op: "login", token: "t".repeat(64) }));
+    await expect(closed).resolves.toBe(1009);
   });
 
   it("caps live relays per authenticated browser session", async () => {

@@ -323,7 +323,7 @@ async function supported() {
         spendableNotes: 0,
         mergeableNotes: 0,
         shardCount: 0,
-        preferredTreeId: 0,
+        preferredTreeId: undefined,
       }),
     },
     prover: {

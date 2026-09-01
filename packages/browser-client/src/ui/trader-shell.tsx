@@ -158,22 +158,22 @@ function WalletControl({ snapshot, actions }: TraderShellProps) {
         aria-label={
           wallet.state === "connecting"
             ? "Connecting wallet"
-            : wallet.state === "failed"
-              ? "Retry wallet connection"
-              : available
-                ? `Connect ${available.name}`
-                : "No compatible wallet found"
+            : !available
+              ? "No compatible wallet found"
+              : wallet.state === "failed"
+                ? "Retry wallet connection"
+                : `Connect ${available.name}`
         }
       >
         <WalletCards aria-hidden="true" />
         <span className="wallet-label">
           {wallet.state === "connecting"
             ? "Connecting"
-            : wallet.state === "failed"
-              ? "Retry wallet"
-              : available
-                ? "Connect wallet"
-                : "Install wallet"}
+            : !available
+              ? "Install wallet"
+              : wallet.state === "failed"
+                ? "Retry wallet"
+                : "Connect wallet"}
         </span>
       </button>
       {open && chooseWallet && (

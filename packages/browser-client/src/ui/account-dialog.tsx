@@ -21,6 +21,12 @@ const TABS: Array<{ value: AccountTab; label: string }> = [
   { value: "recovery", label: "Recovery" },
 ];
 
+function isPositiveAmount(value: string | undefined): boolean {
+  if (!value) return false;
+  const parsed = Number(value.replaceAll(",", ""));
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
 export interface AccountDialogProps extends TraderShellProps {
   open: boolean;
   tab: AccountTab;
@@ -82,7 +88,7 @@ export function AccountDialog({
   const available = tab === "withdraw" ? privateBalance?.spendable : undefined;
 
   async function run(kind: "deposit" | "withdraw") {
-    if (!selected || blocker || busy) return;
+    if (!selected || blocker || busy || !isPositiveAmount(amount)) return;
     setInvoking(true);
     setAccountError(null);
     try {
@@ -130,7 +136,7 @@ export function AccountDialog({
       setTimeout(() => {
         anchor.remove();
         URL.revokeObjectURL(url);
-      }, 0);
+      }, 2_000);
       setBackupStatus(
         "Encrypted backup generated. Verify that the download completed, then keep it offline.",
       );
@@ -250,7 +256,7 @@ export function AccountDialog({
                   <button
                     type="button"
                     className="affix-button"
-                    disabled={Boolean(blocker) || !available}
+                    disabled={Boolean(blocker) || !isPositiveAmount(available)}
                     onClick={() =>
                       setAmount((available ?? "").replaceAll(",", ""))
                     }
@@ -268,7 +274,7 @@ export function AccountDialog({
             <button
               className="primary-button block"
               type="button"
-              disabled={Boolean(blocker) || busy || !amount}
+              disabled={Boolean(blocker) || busy || !isPositiveAmount(amount)}
               onClick={() => void run(tab)}
             >
               {busy ? (

@@ -14,7 +14,7 @@ session plus live-data boundary.
 The public release points the browser at same-origin `/api/darknyx/venue/` and
 `/api/darknyx/rpc` URLs. The host proxies only an explicit allowlist of user CVM
 routes, finalized/read-only Solana JSON-RPC methods, the shared `/v1/stream`
-WebSocket, and signature-status subscriptions. The private Helius query key and
+WebSocket, and signature-status subscriptions. The private RPC query credential and
 the assigned CVM endpoint remain server-side; admin CVM routes and transaction
 submission through the RPC proxy are rejected. Configure both upstreams or
 neither—there is no partial proxy mode.
@@ -76,7 +76,7 @@ and a live venue recovery drill.
 The production executable is `darknyx-trader-host` (`npm -w
 @darknyx/trader-host run start`). It loads one strict public release, the static
 root, the CVM upstream, and bounded runtime limits from `DARKNYX_TRADER_*`
-configuration. The Helius URL, two independent 32-byte host keys, and CVM admin
+configuration. The RPC URL, two independent 32-byte host keys, and CVM admin
 credentials are accepted only through owner-only regular files; unknown
 trader-host variables fail startup so a misspelling cannot silently select a
 default. `--check-config` performs the same release, key, endpoint, static-root,

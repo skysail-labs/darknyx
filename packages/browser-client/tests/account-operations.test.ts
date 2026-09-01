@@ -298,6 +298,7 @@ describe("browser account operations", () => {
           },
         }),
       } as never,
+      requestTimeoutMs: 25,
     });
 
     await expect(
@@ -314,6 +315,15 @@ describe("browser account operations", () => {
         leafIndex: 7n,
       }),
     ]);
+    getSignatureStatuses.mockImplementationOnce(
+      () => new Promise<never>(() => undefined),
+    );
+    await expect(
+      operations.deposit({ tokenMint: mint.toBase58(), amount }),
+    ).resolves.toMatchObject({
+      status: "ambiguous",
+      message: "confirmed transaction confirmation timed out",
+    });
     vault.destroy();
   });
 

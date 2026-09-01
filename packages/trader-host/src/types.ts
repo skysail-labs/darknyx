@@ -2,6 +2,8 @@ import type { IncomingMessage } from "node:http";
 
 /** Minimal verified WebSocket surface supplied by the Node transport layer. */
 export interface CvmStreamSocket {
+  /** Bytes queued by the verification gate and underlying transport. */
+  readonly bufferedAmount: number;
   addEventListener(type: "open", cb: () => void): void;
   addEventListener(
     type: "message",
@@ -96,9 +98,9 @@ export interface ReleaseHostOptions {
    * terminates at the attested enclave. Defaults to the global `fetch`, which
    * is the legacy gateway-terminated path.
    *
-   * Deliberately NOT used for the Solana RPC upstream: that goes to Helius,
+   * Deliberately NOT used for the Solana RPC upstream: that goes to the configured provider,
    * not the enclave, and routing it through an enclave-pinned transport would
-   * be nonsense — it would fail verification against a certificate Helius has
+   * be nonsense — it would fail verification against a certificate the provider has
    * no reason to present.
    */
   cvmFetch?: typeof fetch;
