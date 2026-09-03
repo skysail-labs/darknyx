@@ -270,7 +270,7 @@ jobs:
           cargo test -p vault --test tee_forced_settle_batched \
             cu_profile_worst_case_settle -- --nocapture
           cargo test -p darknyx-tee \
-            settle::pipeline::tests::settle_v0_tx_compiles_and_fits_under_cap \
+            settle::pipeline::tests::settle_v1_tx_compiles_inline_and_fits_under_cap \
             -- --nocapture
           bash scripts/surfpool/foundation.sh down
           trap - EXIT HUP INT TERM

@@ -10,9 +10,9 @@
 //! `vault_config.tee_pubkeys`. They are deliberately the same key; see
 //! [`crate::keys::ed25519::DerivedSigner::solana_keypair`].
 //!
-//! The helpers here build legacy (pre-v0) transactions, which is sufficient for
-//! every pipeline transaction except Tx D. Tx D needs v0 plus two lookup tables to
-//! fit under the size cap and is assembled in [`super::pipeline`] instead.
+//! The helpers here build legacy transactions, which remain sufficient for Tx
+//! A/B/E. Tx D uses v1 so it can carry the settlement payload and every account
+//! inline; it is assembled in [`super::pipeline`] instead.
 
 use base64::Engine as _;
 use solana_hash::Hash;
@@ -58,8 +58,7 @@ pub async fn submit_ixs_with_blockhash(
 
 /// Build + sign a legacy tx → base64 wire (does NOT send). Lets a caller fire
 /// many txs CONCURRENTLY (sharing one blockhash) and confirm them together —
-/// e.g. the per-batch ALT's chunked extends, which write-conflict on the ALT so
-/// the leader co-includes them in one block (a single activation window).
+/// the lock pass uses this to avoid paying one confirmation window per note.
 pub fn build_tx_b64(
     payer: &Keypair,
     ixs: &[Instruction],

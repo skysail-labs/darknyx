@@ -144,7 +144,7 @@ impl RpcClient {
                 "getTransaction",
                 json!([
                     signature,
-                    { "encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0 }
+                    { "encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 1 }
                 ]),
             )
             .await?;

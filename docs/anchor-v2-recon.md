@@ -155,8 +155,8 @@ The program is the core of the protocol, so the whole tree runs, in tiers:
   `cvm-daemon-lifecycle`.
 
 **A new program id means a fresh devnet foundation**, not a tree reset: every PDA
-is program-derived, so `VaultConfig`, the K `MerkleTree` shards, and the settle ALT
-are all new, producing a new `.devnet/e2e-config.json`.
+is program-derived, so `VaultConfig` and the K `MerkleTree` shards are all new,
+producing a new `.devnet/e2e-config.json`.
 
 ---
 

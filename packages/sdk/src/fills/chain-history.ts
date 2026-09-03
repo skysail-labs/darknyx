@@ -28,7 +28,6 @@
 import {
   Connection,
   PublicKey,
-  MessageV0,
   type VersionedTransactionResponse,
 } from "@solana/web3.js";
 import { sha256 } from "@noble/hashes/sha2";
@@ -220,18 +219,14 @@ export type ChainScan = (opts: {
   sinceSlot?: number;
 }) => Promise<RawSettleTx[]>;
 
-/** Pull the vault program's top-level ix data out of a v0 or legacy tx.
- * Program ids are always static account keys, so no ALT lookup is needed. The
- * legacy branch is required by deposit/merge cold recovery. */
+/** Pull the vault program's top-level ix data out of a legacy, v0, or v1 tx.
+ * Program ids are always static account keys, so no ALT lookup is needed. */
 function extractVaultIxDatas(
   tx: VersionedTransactionResponse,
   programId: PublicKey,
 ): Uint8Array[] {
   const message = tx.transaction.message;
-  const keys =
-    message instanceof MessageV0
-      ? message.staticAccountKeys
-      : message.accountKeys;
+  const keys = message.staticAccountKeys;
   const out: Uint8Array[] = [];
   for (const ci of message.compiledInstructions) {
     const pid = keys[ci.programIdIndex];
@@ -275,7 +270,7 @@ export function makeConnectionScan(
         const batch = relevant.slice(offset, offset + 50);
         const transactions = await conn.getTransactions(
           batch.map((signature) => signature.signature),
-          { commitment: "finalized", maxSupportedTransactionVersion: 0 },
+          { commitment: "finalized", maxSupportedTransactionVersion: 1 },
         );
         for (let index = 0; index < batch.length; index++) {
           const tx = transactions[index];

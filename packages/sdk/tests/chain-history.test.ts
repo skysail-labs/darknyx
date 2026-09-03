@@ -196,17 +196,21 @@ describe("makeConnectionScan", () => {
       },
       getTransactions: async (
         signatures: string[],
-        config: { commitment: string },
+        config: {
+          commitment: string;
+          maxSupportedTransactionVersion: number;
+        },
       ) => {
         expect(signatures).toEqual(["sig-finalized"]);
         expect(config.commitment).toBe("finalized");
+        expect(config.maxSupportedTransactionVersion).toBe(1);
         return [
           {
             slot: 456,
             meta: { logMessages: ["Program log: finalized"] },
             transaction: {
               message: {
-                accountKeys: [programId],
+                staticAccountKeys: [programId],
                 compiledInstructions: [
                   { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
                 ],
@@ -252,7 +256,7 @@ describe("makeConnectionScan", () => {
           meta: { logMessages: [] },
           transaction: {
             message: {
-              accountKeys: [programId],
+              staticAccountKeys: [programId],
               compiledInstructions: [
                 { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
               ],

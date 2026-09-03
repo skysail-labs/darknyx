@@ -145,8 +145,8 @@ solana program set-upgrade-authority "$PROGRAM_ID" \
 #    → cfg.admin = OPS_VAULT while root/upgrade remain COLD_VAULT.
 
 # 5. Through the operations Squads, create K trees (`initialize_tree` ×K),
-#    initialize each mint-pair MarketConfig, set the global fee config, and
-#    create the settle ALT. Later TEE-key rotation
+#    initialize each mint-pair MarketConfig, and set the global fee config.
+#    Later TEE-key rotation
 #    (set_tee_pubkey) runs through the ATTESTATION CEREMONY — see
 #    tee-attestation-flow.md §5 (verify MRTD/compose-hash/report_data off-chain,
 #    THEN the multisig signs). Never rubber-stamp a key (§5.2 there).

@@ -102,9 +102,9 @@ impl MatchResultPayload {
     /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 2×32 (relock tags)
     /// + 8 + 128 (fill_recovery) = 552 bytes.
     ///
-    /// Was 488. The +64 is the two relock tags; it eats into Tx D's headroom
-    /// against the 1232-byte cap, which `tx_d_stays_within_the_size_budget`
-    /// asserts rather than leaving to chance.
+    /// Was 488. The +64 is the two relock tags. The v1 Tx D wire-size
+    /// regression in `settle::pipeline` measures this payload in its complete
+    /// transaction rather than assuming that field widths remain harmless.
     pub const WIRE_LEN: usize = 552;
 
     /// Borsh serialization — the bytes that go into the

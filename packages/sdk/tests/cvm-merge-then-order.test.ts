@@ -501,7 +501,7 @@ maybeDescribe(
               .filter((entry) => entry.stage === "tee_forced_settle_batched")
               .reverse()) {
               const tx = await conn.getTransaction(row.signature, {
-                maxSupportedTransactionVersion: 0,
+                maxSupportedTransactionVersion: 1,
                 commitment: "confirmed",
               });
               if (!tx) continue;

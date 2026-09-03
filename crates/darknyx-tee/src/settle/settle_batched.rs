@@ -138,85 +138,6 @@ pub fn build_settle_batched_ix(
     }
 }
 
-/// The per-batch PDAs that go into the per-batch ALT (Tx C): the writable,
-/// match-derivable accounts a settle Tx D references but that vary per batch —
-/// `note_lock_{a,b,e,f}`, the `consumed_note` entries for both inputs, and
-/// `batch_validity_marker`. Hoisting ALL of them (not just the locks) keeps the
-/// settle tx well under the 1232-byte cap: the consumed PDAs were previously
-/// inline, which left the change-note / sharded tx riding the edge. (The two
-/// `nullifier_entry` PDAs were dropped along with their vault accounts.)
-pub fn per_batch_alt_addresses(
-    payload: &MatchResultPayload,
-    merkle_root: &[u8; 32],
-) -> Vec<Address> {
-    vec![
-        note_lock_pda(&payload.note_a_use_tag).0,
-        note_lock_pda(&payload.note_b_use_tag).0,
-        note_lock_pda(&payload.note_e_use_tag).0,
-        note_lock_pda(&payload.note_f_use_tag).0,
-        consumed_note_pda(&payload.note_a_use_tag).0,
-        consumed_note_pda(&payload.note_b_use_tag).0,
-        batch_validity_marker_pda(merkle_root).0,
-    ]
-}
-
-/// The full set of derivable PDAs a MULTI-match batch's ALT must hold:
-/// the union of every match's `note_lock_{a,b,e,f}` (each match's Tx D
-/// references its OWN locks) plus the single shared `batch_validity_marker`
-/// (one per batch, keyed by the batch root). Deduped — exact-fill matches
-/// collide on the all-zero `note_lock_e/f` PDA, and the marker is shared.
-/// NOTE this dedup means it is NOT identical to [`per_batch_alt_addresses`]
-/// even for a single match: an exact-fill payload yields 4 entries here (the
-/// `note_lock_e`/`note_lock_f` collision is collapsed) vs the 5
-/// (with a duplicate) that `per_batch_alt_addresses` always returns — so
-/// callers must not assume the two are interchangeable. Building the ALT
-/// from only `matches[0]` would leave matches 1..N's locks inline and push
-/// their settle tx over the 1232-byte cap.
-pub fn batch_alt_addresses<'a>(
-    payloads: impl IntoIterator<Item = &'a MatchResultPayload>,
-    merkle_root: &[u8; 32],
-) -> Vec<Address> {
-    let mut out: Vec<Address> = Vec::new();
-    let mut push = |a: Address| {
-        if !out.contains(&a) {
-            out.push(a);
-        }
-    };
-    for p in payloads {
-        push(note_lock_pda(&p.note_a_use_tag).0);
-        push(note_lock_pda(&p.note_b_use_tag).0);
-        push(note_lock_pda(&p.note_e_use_tag).0);
-        push(note_lock_pda(&p.note_f_use_tag).0);
-        // consumed-note entries for both inputs — Tx D inits these, and
-        // ALT-referencing them (vs inline) is what gives the change-note /
-        // sharded settle tx its headroom under the 1232-byte cap.
-        push(consumed_note_pda(&p.note_a_use_tag).0);
-        push(consumed_note_pda(&p.note_b_use_tag).0);
-    }
-    push(batch_validity_marker_pda(merkle_root).0);
-    out
-}
-
-/// The addresses the STATIC settle ALT must hold — the per-settle
-/// constant, non-signer accounts (`vault_config`, the instructions
-/// sysvar, the system program) PLUS the K `merkle_tree` shard accounts
-/// (`num_trees` of them). Created once at devnet-setup and stacked
-/// UNDER the per-batch ALT (see `pipeline.rs` + `worker.rs::static_alt`).
-/// Hoisting these is what keeps the settle v0 tx under Solana's 1232-byte
-/// cap — each shard's settle references its `merkle_tree[j]` from the ALT
-/// (1 index byte) instead of inline (32 bytes).
-pub fn static_alt_addresses(num_trees: u8) -> Vec<Address> {
-    let mut out = vec![
-        vault_config_pda().0,
-        INSTRUCTIONS_SYSVAR_ID,
-        SYSTEM_PROGRAM_ID,
-    ];
-    for tree_id in 0..num_trees.max(1) {
-        out.push(merkle_tree_pda(tree_id).0);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,37 +176,6 @@ mod tests {
 
     fn proof() -> [[u8; 32]; 4] {
         [[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]]
-    }
-
-    #[test]
-    fn batch_alt_addresses_unions_all_matches_and_one_marker() {
-        let root = [0xAB; 32];
-
-        // Single match: note_lock_a, note_lock_b, (note_lock_e==f deduped to 1),
-        // consumed_a, consumed_b, marker = 6 distinct. The retired
-        // nullifier-keyed accounts are not part of settlement.
-        let p0 = dummy_payload();
-        let single = batch_alt_addresses([&p0], &root);
-        assert_eq!(single.len(), 6);
-        assert!(single.contains(&note_lock_pda(&p0.note_a_use_tag).0));
-        assert!(single.contains(&consumed_note_pda(&p0.note_a_use_tag).0));
-        assert!(single.contains(&batch_validity_marker_pda(&root).0));
-
-        // Two DISTINCT matches (distinct notes): each adds its a/b locks +
-        // consumed; the all-zero note_lock_e/f and the marker stay shared
-        // across the batch.
-        let mut p1 = dummy_payload();
-        p1.note_a_use_tag = [0xA2; 32];
-        p1.note_b_use_tag = [0xB2; 32];
-        let multi = batch_alt_addresses([&p0, &p1], &root);
-        // p0: a,b locks + consumed_a,b + (e/f shared 1) = 5
-        // p1: a,b locks + consumed_a,b = 4 (e/f shared) → 9 + marker = 10.
-        assert_eq!(multi.len(), 10);
-        assert!(multi.contains(&note_lock_pda(&p1.note_a_use_tag).0));
-        assert!(multi.contains(&consumed_note_pda(&p1.note_a_use_tag).0));
-        // Exactly one marker.
-        let marker = batch_validity_marker_pda(&root).0;
-        assert_eq!(multi.iter().filter(|a| **a == marker).count(), 1);
     }
 
     #[test]
@@ -383,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn change_relock_accounts_and_alt_use_tags_not_commitments() {
+    fn change_relock_accounts_use_tags_not_commitments() {
         let mut p = dummy_payload();
         p.note_e_commitment = [0xE1; 32];
         p.note_f_commitment = [0xF1; 32];
@@ -399,12 +289,6 @@ mod tests {
         assert_ne!(ix.accounts[8].pubkey, note_lock_pda(&p.note_f_commitment).0);
         assert!(ix.accounts[7].is_writable);
         assert!(ix.accounts[8].is_writable);
-
-        let alt = per_batch_alt_addresses(&p, &[0xAB; 32]);
-        assert!(alt.contains(&note_lock_pda(&p.note_e_use_tag).0));
-        assert!(alt.contains(&note_lock_pda(&p.note_f_use_tag).0));
-        assert!(!alt.contains(&note_lock_pda(&p.note_e_commitment).0));
-        assert!(!alt.contains(&note_lock_pda(&p.note_f_commitment).0));
     }
 
     #[test]
@@ -439,15 +323,5 @@ mod tests {
             shared.is_empty(),
             "shared writable Tx D accounts: {shared:?}"
         );
-    }
-
-    #[test]
-    fn per_batch_alt_has_seven_addresses() {
-        let addrs = per_batch_alt_addresses(&dummy_payload(), &[0xAB; 32]);
-        // 4 locks (a,b,e,f — e/f duplicated for an exact fill, not deduped here)
-        // + 2 consumed + marker = 7.
-        assert_eq!(addrs.len(), 7);
-        // Marker is last; matches the standalone PDA.
-        assert_eq!(addrs[6], batch_validity_marker_pda(&[0xAB; 32]).0);
     }
 }

@@ -221,16 +221,6 @@ pub struct Config {
     pub tick_size: u64,
     /// Minimum order size. `DARKNYX_TEE_MIN_ORDER_SIZE`, default 0.
     pub min_order_size: u64,
-    /// On-chain address of the STATIC settle ALT (the one devnet-setup
-    /// creates holding `vault_config`, `instructions_sysvar`,
-    /// `system_program` — see SDK `static_alt_addresses()`). From
-    /// `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` (base58). When set, the settle
-    /// worker stacks it UNDER the per-batch ALT so the v0 settle tx
-    /// stays under Solana's 1232-byte cap; without it the tx is ~93 B
-    /// larger and overflows on the real-mint settle path. Unset → the
-    /// worker uses only the per-batch ALT (fine for the smaller test
-    /// payloads, NOT for a real settle).
-    pub settle_lookup_table: Option<[u8; 32]>,
     /// Protocol fee rate in basis points. `DARKNYX_TEE_FEE_RATE_BPS`,
     /// default 30 (0.3%). The matcher charges `amount × bps / 10_000`
     /// on each leg (seller→base bucket, buyer→quote bucket) and mints a
@@ -512,28 +502,6 @@ fn parse_hex32_env(var: &str, default: [u8; 32]) -> Result<[u8; 32]> {
     }
 }
 
-/// Parse an OPTIONAL 32-byte pubkey (base58) from an env var.
-/// Unset/empty → `None`; non-empty malformed → `Err`.
-fn parse_pubkey_env(var: &str) -> Result<Option<[u8; 32]>> {
-    let Ok(s) = std::env::var(var) else {
-        return Ok(None);
-    };
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    match bs58::decode(s).into_vec() {
-        Ok(b) if b.len() == 32 => {
-            let mut k = [0u8; 32];
-            k.copy_from_slice(&b);
-            Ok(Some(k))
-        }
-        _ => Err(anyhow::anyhow!(
-            "{var}: invalid pubkey (need 32-byte base58)"
-        )),
-    }
-}
-
 /// Parse a `u64` env var. Unset/empty → `default`; non-empty
 /// unparseable → `Err`.
 fn parse_u64_env(var: &str, default: u64) -> Result<u64> {
@@ -746,7 +714,6 @@ impl Config {
             market_symbol: primary.symbol.clone(),
             tick_size: parse_u64_env("DARKNYX_TEE_TICK_SIZE", 1)?,
             min_order_size: parse_u64_env("DARKNYX_TEE_MIN_ORDER_SIZE", 0)?,
-            settle_lookup_table: parse_pubkey_env("DARKNYX_TEE_SETTLE_LOOKUP_TABLE")?,
             // Clamp to 100% — the matcher's fee math assumes
             // bps ≤ 10_000 (normally enforced on-chain by
             // set_protocol_config; the CVM matcher isn't gated by it).

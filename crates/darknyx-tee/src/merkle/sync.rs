@@ -452,9 +452,8 @@ impl MerkleSync {
 /// makes the payload attributable by construction.
 ///
 /// `program_id` is reliably populated here: Solana sanitizes a message's
-/// `program_id_index` against the **static** account keys, so a program id can
-/// never be resolved through an address lookup table — including in the v0
-/// settle transactions, which do use ALTs for their other accounts.
+/// `program_id_index` against its account keys. Tx D uses v1 and carries every
+/// account inline.
 ///
 /// Top-level instructions only, matching what the RPC client parses. The settle
 /// is always a top-level instruction (the enclave builds and sends it), so a

@@ -271,8 +271,8 @@ mixes markets even when one CVM serves several.
 Tx A: two independent VALID_INPUT-backed lock_note transactions per match
 Tx B: one authorized VALID_MATCH_BATCH verify transaction per batch, carrying
       the governed fee-key epoch and encrypted fee-recovery record
-Tx C: per-batch ALT create/extend
-Tx D: one Ed25519-authenticated atomic settle transaction per active match
+Tx D: one Ed25519-authenticated v1 atomic settle transaction per active match
+      (all accounts inline; resource limits live in the v1 message config)
 Tx E: marker sweep at/after its on-chain-derived expiry
 ```
 

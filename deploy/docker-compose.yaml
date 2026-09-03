@@ -180,15 +180,6 @@ services:
       # singular mint/symbol/feed identity envs (which must leave both mint
       # vars empty). The value is supplied through the encrypted deploy env.
       DARKNYX_TEE_MARKETS_JSON: ${DARKNYX_TEE_MARKETS_JSON}
-      # On-chain address of the STATIC settle ALT (vault_config +
-      # instructions_sysvar + system_program) that devnet-setup creates
-      # (e2e-config `settleLookupTable`). The settle worker stacks it
-      # under the per-batch ALT so the v0 settle tx (Tx D) stays under
-      # the 1232-byte cap on the real-mint path. Empty/unset → per-batch
-      # ALT only (fine for the small test payloads, overflows a real
-      # settle). See crate::config + settle::worker.
-      DARKNYX_TEE_SETTLE_LOOKUP_TABLE: ${DARKNYX_TEE_SETTLE_LOOKUP_TABLE}
-
       # Protocol fee rate (basis points) the matcher charges per leg.
       # Empty/unset → the code default (30 bps = 0.3%), so fee notes
       # actually mint. Set to 0 to disable fees, or any value ≤ 10_000.

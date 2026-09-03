@@ -1,16 +1,16 @@
 /**
  * Multi-match concurrent-settle profiler (perf — settle throughput bottleneck).
  *
- * The 1-match cvm-settle-e2e hides the per-match on-chain settle cost behind the
- * one-time per-batch ALT-activation wait (~14s). This test deposits M real
+ * The 1-match cvm-settle-e2e cannot expose the marginal per-match on-chain
+ * settle cost. This test deposits M real
  * crossing pairs and submits them together so the matcher settles several
  * matches — across one or a few batches — letting us read the PER-MATCH Tx D
  * confirm latency from the CVM logs:
  *
  *   phala cvms logs <cvm> | grep "settle Tx D confirmed (per-match)"
  *
- * The FIRST Tx D in a batch eats the ALT-activation wait; the marginal ones
- * reveal the steady-state on-chain settle ceiling — post tree-sharding the
+ * The marginal Tx Ds reveal the steady-state on-chain settle ceiling — post
+ * tree-sharding the
  * concurrent Tx D's round-robin across K shard fee-payers + K trees, so they
  * co-include in a block rather than serializing on a single tree's Merkle
  * append. That ceiling is the number that decides whether the on-chain settle,

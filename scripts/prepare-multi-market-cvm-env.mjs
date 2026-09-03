@@ -69,7 +69,6 @@ const lines = [
   envLine("DARKNYX_TEE_QUOTE_MINT", ""),
   envLine("DARKNYX_TEE_MARKET_SYMBOL", ""),
   envLine("DARKNYX_TEE_MARKETS_JSON", JSON.stringify(markets)),
-  envLine("DARKNYX_TEE_SETTLE_LOOKUP_TABLE", cfg.settleLookupTable),
   envLine("DARKNYX_TEE_FEE_RATE_BPS", cfg.protocol.feeRateBps),
   envLine(
     "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT",

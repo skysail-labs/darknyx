@@ -101,17 +101,18 @@ solana-instruction      = { workspace = true }
 solana-message          = { workspace = true }
 solana-transaction      = { workspace = true }
 solana-system-interface = { workspace = true }
-# PR 4g.5c — per-batch ALT create/extend (Tx C).
-solana-address-lookup-table-interface = { workspace = true }
-# The ALT interface uses `solana_pubkey::Pubkey` in its ix builders;
-# we convert at that boundary (alt.rs). Pinned to the same 3.x line.
+# `lock_sweep` crosses one remaining modular-Solana Pubkey boundary.
 solana-pubkey = "3"
 # Base64 encoding for tx wire format (solana RPC's sendTransaction
 # takes base64-encoded tx bytes).
 base64                  = "0.22"
-# bincode — Solana tx serialise format. Needed alongside the
-# `serde` feature on solana-transaction.
+# bincode — retained for legacy/v0 transaction decoding in tests and RPC
+# helpers. V1 uses wincode below.
 bincode                 = { workspace = true }
+# V1 transactions use Solana's wincode wire representation. Unlike legacy/v0,
+# serializing them with bincode does not produce the canonical signature-first
+# bytes accepted by the runtime.
+wincode                 = { workspace = true }
 
 # ─── PR 4a — keys + dstack handshake ─────────────────────────────────
 # DstackClient::new() + info() + get_key() + get_quote() — all the

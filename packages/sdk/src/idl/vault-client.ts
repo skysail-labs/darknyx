@@ -130,28 +130,6 @@ export async function merkleTreePda(
 }
 
 /**
- * The addresses the STATIC settle ALT must hold, in order — mirrors the Rust
- * `darknyx_tee::settle::settle_batched::static_alt_addresses(num_trees)`:
- * `[vault_config, instructions_sysvar, system_program, merkle_tree(0..K-1)]`.
- * Used by `devnet-setup` to build the ALT the CVM settle worker references.
- */
-export async function staticSettleAltAddresses(
-  programId: PublicKey,
-  numTrees: number,
-): Promise<PublicKey[]> {
-  const [vaultConfig] = await vaultConfigPda(programId);
-  const out = [
-    vaultConfig,
-    SYSVAR_INSTRUCTIONS_PUBKEY,
-    SystemProgram.programId,
-  ];
-  for (let treeId = 0; treeId < Math.max(1, numTrees); treeId++) {
-    out.push((await merkleTreePda(programId, treeId))[0]);
-  }
-  return out;
-}
-
-/**
  * A lock is keyed on the note-use TAG, not the commitment — the tag is what
  * `lock_note` takes and what VALID_INPUT publishes. Passing a commitment here
  * compiles (both are `Uint8Array`) and derives a real-looking address that no

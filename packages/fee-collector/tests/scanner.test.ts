@@ -93,6 +93,7 @@ describe("Helius finalized vault-history scanner", () => {
       commitment: "finalized",
       transactionDetails: "full",
       sortOrder: "asc",
+      maxSupportedTransactionVersion: 1,
       filters: { status: "succeeded", slot: { gte: 10 } },
     });
     const secondRequest = JSON.parse(

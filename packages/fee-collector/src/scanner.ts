@@ -235,7 +235,7 @@ export async function scanFinalizedVaultHistory(params: {
       sortOrder: "asc",
       limit: pageLimit,
       commitment: "finalized",
-      maxSupportedTransactionVersion: 0,
+      maxSupportedTransactionVersion: 1,
       filters,
     };
     if (paginationToken) config.paginationToken = paginationToken;

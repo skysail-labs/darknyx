@@ -313,13 +313,13 @@ freedom to inflate value or change output ownership.
 
 Each market scheduler emits at most 16 active matches. `assemble_batch` pads
 dummy slots and constructs one proof witness. The venue semaphore bounds whole
-batches in flight; rolling ALT mutations remain serialized.
+batches in flight. Settlement has no shared lookup-table mutation: Tx D uses
+the v1 format and carries every account inline.
 
 ```text
 A  lock buyer/seller notes in independent transactions
 B  prove N=16 and verify_match_batch → read-only marker
-C  create/extend a per-batch ALT and wait until it is usable
-D  send each active tee_forced_settle_batched independently
+D  send each active v1 tee_forced_settle_batched independently
 E  sweep the marker only at/after its derived expiry
 ```
 
@@ -338,8 +338,9 @@ Important properties:
 - User-output inners derive from private consumed inners. Fee inners derive
   from the governed epoch key, consumed use tag, and role.
 - The 128-byte recovery envelope is signed but opaque to L1.
-- A worst-case v0 Tx D stacks the static settle ALT and a per-batch ALT; the
-  committed size regression keeps it below the 1,232-byte cap.
+- Tx D explicitly configures its CU and loaded-account-data ceilings in the v1
+  message. Its 1,392-byte measured wire form has 2,704 bytes of headroom under
+  the 4,096-byte cap; the committed regression also enforces the 64-account cap.
 
 ### Outcomes and confirmation
 

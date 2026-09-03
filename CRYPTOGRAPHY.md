@@ -1403,19 +1403,23 @@ depth-4 inclusion walker has a consistent shape.
 The atomic per-match settlement, sent after the batch's verify ix lands.
 This is the heart of the protocol.
 
-The tx contains **three ixs**:
+Tx D contains **two instructions**; its resource limits live in the v1 message
+configuration rather than in a ComputeBudget instruction:
 
 ```ts
-[
-  ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-  buildEd25519VerifyIx({ teePubkey, signature, message }),   // PRECOMPILE
-  buildSettleBatchedIx({ programId, teeAuthority, payload, matchIndex, merkleProof, merkleRoot }),
-]
+const message = new TransactionMessage({
+  payerKey: teePubkey,
+  recentBlockhash,
+  instructions: [buildEd25519VerifyIx(...), buildSettleBatchedIx(...)],
+}).compileToV1Message({
+  computeUnitLimit: 115_000,
+  loadedAccountsDataSizeLimit: measuredDataLimit,
+  priorityFeeLamports: totalPriorityFee,
+});
 ```
 
-It's sent as a **VersionedTransaction with stacked Address Lookup Tables**
-(one static settle ALT created at devnet-setup + one per-batch ALT holding
-the 7 derivable PDAs per match — see below).
+It's sent as a **v1 VersionedTransaction with every account inline**. V1 does
+not support Address Lookup Tables and raises the wire ceiling to 4096 bytes.
 
 The settle ix is:
 
@@ -1592,20 +1596,20 @@ Handler walkthrough:
   ≈ 5 × ~120 CU = ~600 CU, trivial)
 - **Multiple PDA `init` collisions** for replay protection
 
-**Why this is split across the A–E pipeline**: tx size.
-Each Groth16 proof is 256 bytes; combining lock proofs + a batch proof +
-the canonical-hash Ed25519 precompile + all the account keys + the 552-byte
-payload would be ~1800 bytes total — way over the 1232 cap. By splitting:
+**Why this remains a pipeline**: locks must exist before settlement, one batch
+proof is amortized across up to 16 matches, and each match must reach an
+independent terminal outcome. V1 removes the old Tx-C/ALT size workaround; it
+does not remove these state and failure-isolation boundaries.
 - Tx A (lock): one VALID_INPUT-backed `lock_note` per transaction, with buyer
   and seller transactions sent independently; each remains below 800 B.
 - Tx B (verify): 1 verify_match_batch with the embedded VALID_MATCH_BATCH
   proof, epoch, and fixed encrypted recovery record; 931 B in the current
   worst-case regression fixture.
-- Tx D (settle, V0 + stacked ALTs): Ed25519 precompile + tee_forced_settle_batched
-  + the depth-4 inclusion proof, 1172 B in the current worst-case regression
-  fixture (60 B of headroom under the 1232-byte cap).
+- Tx D (settle, v1 inline): Ed25519 precompile + tee_forced_settle_batched
+  + the depth-4 inclusion proof, 1392 B in the current regression fixture
+  (2704 B of headroom under the 4096-byte cap).
 
-See §9 for why the v0/ALT stacking was specifically required.
+See §9 for the v1 resource and reader requirements.
 
 **Tests**:
 - `tests/cvm-settle-e2e.test.ts` — the live-CVM real settle (deposit → match → settle)
@@ -1803,9 +1807,8 @@ WITHDRAW (L1, VALID_SPEND proof)
 
 ## 9. Settlement mechanics
 
-This section explains the Solana-specific implementation tricks that
-keep settlement under the 1232-byte transaction cap. A cryptographer can
-skip it, but the constraints explain why the protocol has its shape.
+This section explains the Solana transaction and account-existence constraints
+behind settlement. A cryptographer can skip it.
 
 The batched flow amortises across N matches: ONE verify + ONE close per
 batch (≤16 matches), not per match.
@@ -1833,20 +1836,17 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 |---|---|---|---|
 | **Tx A — lock** | compute_budget + one lock_note (buyer/seller sent independently) | size-guarded below 800 B | 2N per batch |
 | **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init, encrypted fee recovery) | measured below 982 B | 1 per batch |
-| **Tx C — per-batch ALT** | createLookupTable + chunked extendLookupTable(7 PDAs per match) | amortized | 1 per batch |
-| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1172 B worst case | N per batch |
+| **Tx D — settle_batched** | v1 message config + ed25519_precompile + tee_forced_settle_batched (all accounts inline) | 1392 B measured | N per batch |
 | **Tx E — close** | compute_budget + close_batch_validity_marker | ~250 B | 1 per batch |
 
-All fit under 1232 B. Atomic dependency is enforced by account-existence
+Tx A/B/E fit under the legacy 1232-byte ceiling; Tx D fits under v1's
+4096-byte ceiling. Atomic dependency is enforced by account-existence
 requirements:
 
 - `lock_note` before settle: settle's accounts list requires
   `note_lock_a` / `note_lock_b` to exist as initialized PDAs.
 - `verify_match_batch` before settle: settle requires the
   `BatchValidityMarker` PDA to exist at `[b"batch_validity", merkle_root]`.
-- Per-batch ALT before settle: the settle tx references accounts via the
-  ALT; an ALT created in the same slot is unusable, so the worker waits
-  one slot after extend before sending the settle.
 
 The multi-tx flow is **not atomic across txs** — a CVM that lands locks but
 never settles leaves rent-bearing PDAs until expiry. Expiry makes the state
@@ -1876,7 +1876,39 @@ address differs → the account isn't there → settle aborts. PDAs are
 deterministic (`find_program_address` is injective on seeds for a fixed
 program id), so an attacker can't fake "marker A corresponds to root B."
 
-### Why VersionedTransaction + ALT
+### Transaction v1: inline accounts and explicit resource limits
+
+Tx D is the only current Darknyx transaction that needs v1. Its 690-byte
+instruction data plus signature precompile and account list compile to 1392
+wire bytes, above the legacy/v0 1232-byte ceiling but comfortably within v1's
+4096-byte ceiling. The other pipeline and user transactions remain legacy or
+v0 because they already fit; migrating them would add ecosystem compatibility
+requirements without buying headroom.
+
+V1 changes more than the size constant:
+
+- lookup tables are unsupported, so all accounts are inline (maximum 64);
+- compute-unit and loaded-account-data limits default to zero and are set in
+  `TransactionConfig`;
+- ComputeBudget instructions are no-ops and must not appear in Tx D;
+- priority fee is a total lamport amount, not micro-lamports per CU;
+- RPC readers use integer `maxSupportedTransactionVersion: 1`;
+- canonical v1 wire bytes use wincode in the modular Rust client stack.
+
+The migration begins with the 64-MiB loaded-data maximum so it cannot guess
+below the upgradeable vault program's actual loaded data. A real Surfpool
+settlement simulation reports `loadedAccountsDataSize`; round that value up to
+the next 32-KiB page and add measured headroom before tightening the limit.
+
+Mainnet-beta has not activated v1 as of 2026-09-03, so this path is qualified on
+Surfpool and devnet and remains a mainnet release gate.
+
+### Retired v0 + ALT design (historical rationale)
+
+> The remainder of this subsection records why the previous implementation
+> needed static and rolling per-batch ALTs. It is not the current transaction
+> path: Tx C, ALT setup, and ALT activation waits were deleted by the v1
+> migration above.
 
 The change + re-lock settle path exercises a partial fill with an atomic re-lock — its settle tx was 1243 bytes — exactly 11 over the cap.
 The other settle paths (A, E) were 1232 or under.
@@ -2245,7 +2277,7 @@ feature- and hardware-gated.
 
 | File | Gate | What it does |
 |---|---|---|
-| `devnet-setup.test.ts` | `RUN_DEVNET_E2E=1` | mints + settle ALT + `reset_merkle_tree` + protocol config; writes `.devnet/e2e-config.json` |
+| `devnet-setup.test.ts` | `RUN_DEVNET_E2E=1` | mints + `reset_merkle_tree` + protocol config; writes `.devnet/e2e-config.json` |
 | `devnet-deposit-withdraw.test.ts` | `RUN_DEVNET_DW=1` | isolated v2 deposit → VALID_SPEND withdraw round-trip on devnet (no CVM) |
 | `cvm-settle-e2e.test.ts` | `RUN_CVM_E2E=1` | the flagship: deposit 2 notes → POST a crossing bid+ask to a live CVM → the CVM matches **and** settles → assert leaf_count grows |
 | `cvm-multimatch-settle.test.ts` | `RUN_CVM_E2E=1` | multiple N=16 prove/settle batches, including warm-vs-steady proving telemetry |

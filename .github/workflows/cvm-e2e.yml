@@ -29,7 +29,7 @@
 # rotation/funding and mint creation are not things to re-run per release test):
 #   1. Provision a dedicated CVM named `darknyx-nightly-ci` (phala cvms create …) and
 #      record its app_id → repo variable `DARKNYX_NIGHTLY_CVM_ID` (e.g. app_xxxx).
-#   2. Run devnet-setup ONCE to mint the stable base/quote mints + settle ALT +
+#   2. Run devnet-setup ONCE to mint the stable base/quote mints +
 #      protocol config, producing `.devnet/e2e-config.json`. Base64 it into the
 #      secret `DEVNET_E2E_CONFIG_B64`. (Stable mints — the CVM is pinned to them.)
 #      Found it with numTrees>=2 (RUN_DEVNET_E2E + NUM_TREES=2) to have the
@@ -217,7 +217,6 @@ jobs:
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
             echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
-            echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_FEE_RATE_BPS=30"
             echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
@@ -510,7 +509,6 @@ jobs:
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
               echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
-              echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_FEE_RATE_BPS=30"
               echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
               echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
@@ -794,7 +792,6 @@ jobs:
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
             echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
-            echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_FEE_RATE_BPS=30"
             echo "DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_NIGHTLY_FEE_EPOCH_KEY"
             echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"

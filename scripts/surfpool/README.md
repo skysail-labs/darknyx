@@ -17,7 +17,8 @@ moving `main`.
 - `qualify-rpc.mjs` creates nonempty same-slot history and checks the exact
   successful/full/ascending/slot-filtered/paginated gTFA request Darknyx uses.
   It includes a failed-transaction negative control, a real Ed25519 precompile,
-  and a v0 transaction whose observed address exists only in an ALT.
+  a v0 transaction whose observed address exists only in an ALT, and a v1
+  inline-account transaction with explicit message resource limits.
 - `install-vault.mjs` installs the fingerprinted devnet-admin SBF at the
   canonical Darknyx program ID and verifies the executable account owner.
 - `packages/sdk/tests/surfpool-qualification.test.ts` sends the committed N=16
@@ -28,7 +29,11 @@ moving `main`.
 - `crates/darknyx-tee/tests/surfpool_merkle_sync.rs` runs the production cold
   mirror and compares every K-shard leaf count and root with chain state.
 
-The deterministic worst-case settle CU and 1232-byte transaction sentinels run
+The v1 sentinel is a real signed submit, execution, and version-1 RPC read. It
+qualifies the transaction format independently of the vault foundation; the
+full production Tx D flow remains a separate local-TEE settlement test.
+
+The deterministic worst-case settle CU and v1 4096-byte transaction sentinels run
 beside these Surfpool checks. They do not claim that a full TEE settlement ran
 inside Surfpool; that belongs to Phase 3.
 
@@ -69,8 +74,8 @@ endpoint, and a local pass must be reported as Surfpool evidence only.
 `foundation.sh` owns the Phase 2 process and state boundary. It always starts
 Surfpool with `--offline`, explicitly binds RPC, WebSocket, and Studio to
 `127.0.0.1`, installs the canonical fingerprinted vault, creates fresh local
-admin/root/TEE keys, and writes the K=2 mints, market, trees, fee config, and
-settlement ALT under `.surfpool/foundation/current/`. It refuses datasource
+admin/root/TEE keys, and writes the K=2 mints, market, trees, and fee config
+under `.surfpool/foundation/current/`. It refuses datasource
 configuration, non-loopback URLs, missing SBF fingerprints, and an already
 occupied RPC port.
 

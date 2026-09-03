@@ -37,8 +37,8 @@ scope* for the prover comparison, per the framing):
 | `lock_ms` | A (lock_note ×2) | CONSENSUS/IO | →~0 |
 | **`prove_ms`** | — (VALID_MATCH_BATCH Groth16 prove) | **COMPUTE** | **unchanged — GPU target** |
 | `verify_ms` | B (verify_match_batch) | CONSENSUS/IO | →~0 |
-| `alt_tx_ms` | C (per-batch ALT create+extend) | CONSENSUS/IO | →~0 |
-| `alt_wait_ms` | — (ALT activation cooldown, ~1 slot) | CONSENSUS/IO | →0 (vanishes) |
+| `alt_tx_ms` | retired compatibility field (absent for v1 Tx D) | — | — |
+| `alt_wait_ms` | retired compatibility field (absent for v1 Tx D) | — | — |
 | `settle_ms` | D (tee_forced_settle_batched) | CONSENSUS/IO | →~0 |
 | `close_ms` | E (close_batch_validity_marker) | CONSENSUS/IO | →~0 |
 | `total_ms` | wall | — | →`prove_ms` + ε |
@@ -358,8 +358,9 @@ The settle-rate plateau across the steps is the prover ceiling.
   the same way (`rapidsnark_ab_results`: vCPU is the lever). **→ the evidence base for
   GPU-accelerated proving.**
 
-**Finding — multi-batch settle fails under concurrent load** (a NEW issue the rig
-surfaced; single-pair + single-batch tests never hit it). On `-30`:
+**Historical pre-v1 finding — multi-batch settle failed under concurrent load.**
+V1 removes the shared rolling-ALT half of this failure class; the continuation
+dependency remains. The original `-30` run found:
 - partial-fill continuation batches failed `AccountOwnedByWrongProgram (3007)` on
   `note_lock_a` — a dependent batch's settle simulated before the prior batch that
   creates its relock NoteLock landed → a **cross-batch continuation ordering race**.
@@ -367,12 +368,11 @@ surfaced; single-pair + single-batch tests never hit it). On `-30`:
 - **net result: `leaf_count` 14→14 — 0/7 matches settled.**
 
 **Root cause + fix — `SETTLE_CONCURRENCY` 3→1** (image `-31`, commit `d9a388b`):
-the scheduler ran up to 3 settle batches concurrently, but all batches share **one
-rolling per-batch ALT** (a Mutex-guarded pool) and continuation batches depend on a
-prior batch's relock NoteLock. Three batches racing the same ALT corrupted batch 0's
-account list (the `Custom 0` revert) and let continuation batches settle before their
-parent's relock landed (the `3007` cascade). Serializing settle (FIFO, one batch at a
-time) respects both invariants. The within-batch co-inclusion
+the scheduler ran up to 3 settle batches concurrently while batches shared one
+rolling per-batch ALT and continuation batches depended on a prior batch's relock
+NoteLock. Serializing settle (FIFO, one batch at a time) respected both invariants.
+The v1 migration deletes the ALT race, but does not by itself make dependent
+continuations safe to reorder. The within-batch co-inclusion
 (`settle_send_concurrency=16`, the tree-sharding win) is untouched.
 
 ### Live re-validation — 2026-06-17, image `tee-v3-hardening-31` (SETTLE_CONCURRENCY=1)

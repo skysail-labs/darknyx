@@ -231,7 +231,10 @@ packing pressure makes the saving operationally useful. Detailed raw samples and
 above.
 
 ### 7. Drop ALTs: settle Tx D → v1 inline-address transaction (SIMD-0296 / SIMD-0385)
-**Gate: 🟣 TX-V1.** SIMD-0296 raises the tx cap 1232 → **4096 B** via the SIMD-0385 **v1 format**
+**Status: implementation complete; the signed v1 submit/read probe passed on
+the pinned Surfpool 1.5.0 build. A full Tx D settlement remains pending, and
+mainnet remains gated on cluster activation.** SIMD-0296 raises the tx cap
+1232 → **4096 B** via the SIMD-0385 **v1 format**
 (leading version byte `129`; compute budget set by a **header config-mask** instead of `ComputeBudget`
 instructions; every field after the version byte is re-laid-out). v1 **does not support address lookup
 tables** — you inline every address — but 4096 B holds our full settle account list. So this is a straight
@@ -242,7 +245,7 @@ away. **No on-chain program or circuit change** — the vault is indifferent to 
 - **Tx C (per-batch ALT create/extend) — DELETED.** No ALT ⇒ nothing to create or warm.
 - **Tx D (`tee_forced_settle_batched`) — v0+2-ALT → v1+inline.** The ~13–15 accounts (`tee_authority`,
   `vault_config`, `merkle_tree`, `note_lock_a/b/e/f`, `consumed_a/b`, `batch_validity_marker`,
-  `system_program`, `instructions_sysvar`) go inline: ~1173 B (ALT-compressed) → ~1.4–1.6 KB inline,
+  `system_program`, `instructions_sysvar`) go inline: 1173 B (ALT-compressed) → **1392 B** inline,
   comfortably under 4096 (worst-case 6-leaf + 2-relock included, so no "most cases" risk for us). The CU
   limit moves from a prepended `ComputeBudget` ix to the v1 header mask.
 - **Tx A (lock ×2), Tx B (verify), Tx E (marker close) — unchanged.** Already ALT-free and <1232;
@@ -269,15 +272,16 @@ Tx D (shared `vault_config`/`system_program`/`instructions_sysvar`/payer dedup a
 serialize, so pack same-shard or accept serial) and re-opens the item-6 verify-CU math if proofs are
 co-packed. Evaluate under 🟡 VOLUME once settle-bound; don't prescribe now.
 
-**Prerequisites (must land with the switch):**
-- `solana-*` client crates (`solana-message` + the tx builder) at a version that constructs v1 txs
-  post-activation; both the TEE settle worker and the SDK `settle-builder` build Tx D.
-- RPC (Helius) accepting/forwarding v1 txs; a devnet activation to validate against.
-
-**Why gated (not now):** v1 is a post-activation platform format (~Q3 2026); building it early means
-carrying both a v0+ALT path and a v1 path for no live benefit. It is a **pure simplification + ~3.4 s
-latency trim**, not a throughput multiplier — the dominant `settle_ms` term is Alpenglow's, not this — so
-it rides in when the format activates, most valuably *before* item 1's concurrency work.
+**Implementation/rollout notes:**
+- The TEE alone frames and signs Tx D; the SDK mirrors its instructions and
+  payload bytes but intentionally has no second production transaction builder.
+- Every transaction reader now advertises version 1. Surfpool v1.5+ and devnet
+  are the qualification targets; mainnet-beta is not activated as of 2026-09-03.
+- `alt_tx_ms`/`alt_wait_ms` remain nullable telemetry fields solely so old
+  benchmark records decode; v1 records leave them absent.
+- The loaded-account-data ceiling starts at 64 MiB and must be tightened from
+  the real simulation's `loadedAccountsDataSize`, rounded to the next 32-KiB
+  page with headroom.
 **Source:** SIMD-0296 + SIMD-0385; `solana.com/upgrades/larger-transaction-sizes`;
 `crates/darknyx-tee/src/settle/{alt_pool.rs,alt.rs,job.rs,worker.rs,pipeline.rs}`; the §6 tx-size budget
 in CLAUDE.md.

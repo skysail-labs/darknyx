@@ -73,7 +73,7 @@ export function makeGtfaScan(rpcUrl: string, programId: string): GtfaScan {
       sortOrder,
       limit,
       commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
+      maxSupportedTransactionVersion: 1,
       filters,
     };
     if (paginationToken) config.paginationToken = paginationToken;
