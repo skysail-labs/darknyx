@@ -422,7 +422,14 @@ const v1Message = new TransactionMessage({
 }).compileToV1Message({
   computeUnitLimit: 20_000,
   loadedAccountsDataSizeLimit: 64 * 1024,
+  priorityFeeLamports: 7n,
 });
+assert.equal(v1Message.transactionConfig?.computeUnitLimit, 20_000);
+assert.equal(
+  v1Message.transactionConfig?.loadedAccountsDataSizeLimit,
+  64 * 1024,
+);
+assert.equal(v1Message.transactionConfig?.priorityFeeLamports, 7n);
 const v1Transaction = new VersionedTransaction(v1Message);
 await v1Transaction.sign([payer]);
 const v1Signature = await connection.sendRawTransaction(

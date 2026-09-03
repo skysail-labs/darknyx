@@ -265,7 +265,7 @@ authority; `deploy-devnet.sh` verifies the program exists before taking that pat
 The on-chain incremental Merkle tree accumulates leaves across every
 deposit + settlement. The SDK's in-memory `MerkleShadow` starts empty, so
 after a few runs they drift and every `VALID_SPEND` withdraw fails with
-`StaleMerkleRoot (6004)`. Cure — a tree-only reset (keeps mints/ALT/config):
+`StaleMerkleRoot (6004)`. Cure — a tree-only reset (keeps mints/config):
 
 ```sh
 SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
@@ -627,7 +627,7 @@ SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/rotate-tee-pubkey.mjs <key0> <key1> <key2> <key3>   # set the whole tee_pubkeys Vec
 SOLANA_RPC_URL="$DEVNET_RPC" FUNDER_KEYPAIR=~/.config/solana/id.json \
   node scripts/fund-tee-keys.mjs <key0> <key1> <key2> <key3>       # tops each to FUND_TARGET_SOL (default 2)
-# settle path needs SOL per shard for lock/verify/ALT/settle/close
+# settle path needs SOL per shard for lock/verify/settle/close
 ```
 
 ### 3.4 Run the flagship + the loadgen

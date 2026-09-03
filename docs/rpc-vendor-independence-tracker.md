@@ -210,7 +210,9 @@ An empty validator or empty tree is a failure, not a skip or pass.
   `declare_id!()`.
 - Initialize the real account layouts and K-shard configuration.
 - Preserve v0/ALT reader coverage, then execute a v1 inline transaction whose
-  CU and loaded-data ceilings are carried in `transactionConfig`.
+  `transactionConfig` carries `computeUnitLimit`,
+  `loadedAccountsDataSizeLimit`, and `priorityFeeLamports`; the last field is
+  the total lamport priority fee for the transaction, not a per-CU quote.
 - Verify at least one generated Groth16 proof through the real vault verifier.
 - Exercise the worst-case serialized settle transaction and record bytes/CU.
 - Confirm confirmation/status polling reaches the commitment expected by the

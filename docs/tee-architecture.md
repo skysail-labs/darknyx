@@ -338,8 +338,10 @@ Important properties:
 - User-output inners derive from private consumed inners. Fee inners derive
   from the governed epoch key, consumed use tag, and role.
 - The 128-byte recovery envelope is signed but opaque to L1.
-- Tx D explicitly configures its CU and loaded-account-data ceilings in the v1
-  message. Its 1,392-byte measured wire form has 2,704 bytes of headroom under
+- Tx D's v1 message-level `transactionConfig` explicitly carries
+  `computeUnitLimit`, `loadedAccountsDataSizeLimit`, and
+  `priorityFeeLamports` (a total-lamport fee, converted from the RPC's per-CU
+  quote). Its 1,392-byte measured wire form has 2,704 bytes of headroom under
   the 4,096-byte cap; the committed regression also enforces the 64-account cap.
 
 ### Outcomes and confirmation

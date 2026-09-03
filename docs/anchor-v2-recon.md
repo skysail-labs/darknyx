@@ -154,9 +154,12 @@ The program is the core of the protocol, so the whole tree runs, in tiers:
   `cvm-merge-then-order`, `cvm-attestation-e2e`, `cvm-ratls-transport`,
   `cvm-daemon-lifecycle`.
 
-**A new program id means a fresh devnet foundation**, not a tree reset: every PDA
-is program-derived, so `VaultConfig` and the K `MerkleTree` shards are all new,
-producing a new `.devnet/e2e-config.json`.
+**A new program id means a fresh devnet foundation:** every PDA is
+program-derived, so `VaultConfig` and the K `MerkleTree` shards are initialized
+as new accounts and produce a new `.devnet/e2e-config.json`. The invariant is
+still an empty tree under the code/VKs being tested: reset every existing shard
+after an in-place program/VK change; for a new program id, initialize its fresh
+shards and verify their leaf counts are zero before starting the CVM mirror.
 
 ---
 

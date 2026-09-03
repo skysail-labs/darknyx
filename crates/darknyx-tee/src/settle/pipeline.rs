@@ -265,10 +265,9 @@ pub fn build_settle_v1_tx(
 /// Convert the legacy/v0 priority-fee quote (micro-lamports per CU) into v1's
 /// total-lamport fee, rounding up so a non-zero quote never truncates to zero.
 fn priority_fee_lamports(micro_lamports_per_cu: u64, compute_units: u32) -> u64 {
-    micro_lamports_per_cu
-        .saturating_mul(u64::from(compute_units))
-        .saturating_add(999_999)
-        / 1_000_000
+    let total_micro_lamports = u128::from(micro_lamports_per_cu) * u128::from(compute_units);
+    let rounded_lamports = total_micro_lamports.div_ceil(1_000_000);
+    rounded_lamports.min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]
@@ -424,8 +423,9 @@ mod tests {
         assert_eq!(priority_fee_lamports(1, 1), 1);
         assert_eq!(priority_fee_lamports(250_000, 115_000), 28_750);
         assert_eq!(
-            priority_fee_lamports(u64::MAX, u32::MAX),
-            u64::MAX / 1_000_000
+            priority_fee_lamports(u64::MAX, SETTLE_COMPUTE_UNIT_LIMIT),
+            2_121_375_568_476_598_436
         );
+        assert_eq!(priority_fee_lamports(u64::MAX, u32::MAX), u64::MAX);
     }
 }

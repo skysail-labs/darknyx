@@ -131,14 +131,14 @@ cargo test -p vault canonical_payload_hash_fixed_vector
 ### 1.2 `darknyx-tee` (the in-TEE binary)
 
 The TEE crate has the densest unit + integration coverage — matcher tick,
-order intake, settle assembler/worker, ALT pool, Merkle mirror, the HTTP
+order intake, settle assembler/worker, Merkle mirror, the HTTP
 surface, the RPC client, auth.
 
 ```sh
 cargo test -p darknyx-tee --lib                       # ~180 unit tests (fast)
 
 # Focused module runs
-cargo test -p darknyx-tee --lib settle::              # settle worker + ALT pool + assemble + pipeline
+cargo test -p darknyx-tee --lib settle::              # settle worker + assemble + v1 pipeline
 cargo test -p darknyx-tee --lib merkle::              # mirror (O(depth) inclusion proof) + sync + events
 cargo test -p darknyx-tee --lib api::auth             # argon2 + JWT + revocation + admin-gate
 cargo test -p darknyx-tee --lib matcher::             # book + interval + openings
@@ -242,7 +242,7 @@ redeploy the vault — see CLAUDE.md §5. Only a TEE-proved circuit change
 The exact pre-release Surfpool source revision and binary checksums live in
 `scripts/surfpool/pin.json`; build or install only that revision. The lifecycle
 requires the fingerprinted devnet-admin SBF and keeps every generated key,
-mint, ALT, config, log, and signature below `.surfpool/`:
+mint, config, log, and signature below `.surfpool/`:
 
 ```sh
 bash scripts/build-vault-sbf.sh devnet-admin
@@ -793,7 +793,7 @@ SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scri
 Symptom that you need it: `StaleMerkleRoot (6004 / 0x1774)` on withdraw, or
 the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 `right_path` / `roots[]`; leaves nullifier / wallet / note-lock PDAs intact.
-`devnet-setup.test.ts` does this too (plus fresh mints + ALT).
+`devnet-setup.test.ts` does this too (plus fresh mints and protocol config).
 
 ---
 

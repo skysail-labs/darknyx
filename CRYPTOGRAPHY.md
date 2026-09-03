@@ -1781,7 +1781,7 @@ VERIFY_MATCH_BATCH (L1, 1 Groth16 per batch)
     │  BatchValidityMarker PDA at [b"batch_validity", merkle_root]
     │  Covers up to N=16 matches.
     ▼ (one per real match)
-TEE_FORCED_SETTLE_BATCHED (L1, v0 + stacked ALTs)
+TEE_FORCED_SETTLE_BATCHED (L1, v1 + inline accounts)
     │  Ed25519 + canonical hash
     │  Leaf hash + depth-4 Merkle inclusion path to the marker
     │  Conservation + structural checks; ConsumedNoteEntry PDAs
@@ -2236,7 +2236,7 @@ paths burn the same layer-2 tag-keyed guard.
 ### `darknyx-tee` tests (`cargo test -p darknyx-tee`)
 
 The crate's lib + integration suite covers per-market matcher ticks,
-partial-fill continuation, the settle pipeline/ALT pool/outcome reconciliation,
+partial-fill continuation, the v1 settle pipeline/outcome reconciliation,
 the K Merkle mirrors, auth/account lifecycle, the sole multiplexed stream,
 VALID_INPUT verification at intake, oracle verification, settlement telemetry,
 the RPC client, and `n16_assemble_prove_verify.rs` (the in-enclave N=16
@@ -2434,7 +2434,7 @@ cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --ch
 cargo test --workspace
 ( cd packages/sdk && ../../node_modules/.bin/tsc -p tsconfig.json --noEmit && ../../node_modules/.bin/vitest run )
 
-# devnet: deploy the vault + set up state (mints/ALT/reset/config)
+# devnet: deploy the vault + set up state (mints/reset/config)
 bash scripts/deploy-devnet.sh
 RUN_DEVNET_E2E=1 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \

@@ -68,14 +68,11 @@ settlement benchmark row, and keeps `1` as the production default. This makes
 the next H200 window an env-only A/B rather than a code change.
 
 The two historical correctness blockers were re-audited before exposing the
-knob:
+knob. The first is now eliminated rather than merely guarded:
 
-- Rolling-ALT planning/mutation is held under one mutex across the complete
-  create/extend transaction. Each batch captures its table before releasing the
-  mutex and re-reads canonical on-chain ordering; later extends append without
-  changing earlier indices. Rotation deactivation retains the normal cooldown.
-  A two-batch concurrent regression now drives both workers through this shared
-  pool.
+- The former rolling-ALT planning/mutation race disappeared when v1 inline
+  accounts deleted Tx C and the ALT pool. There is no longer shared lookup-table
+  state for concurrent batches to corrupt.
 - A partial-fill continuation is inserted into the opening store only after its
   parent Tx D confirms. The fixed matcher snapshot used by a tick cannot select
   that continuation for a sibling page, so there is no child batch to start
@@ -98,13 +95,9 @@ Evidence:
 **Source:** `scheduler.rs`, `worker.rs`, and
 `docs/benchmarks/settlement-throughput-methodology.md`.
 
-### 2. Per-shard / per-worker ALT pools
-**Gate: measured contention.** The shared rolling pool is now correctness-safe
-for concurrent batches but intentionally serializes the Tx C branch. The admin
-metrics expose `alt_tx_ms`, `alt_wait_ms`, queue wait, and batch concurrency, so
-we can tell whether this mutex is material. Add distinct pools only if GPU A/B
-shows Tx C serialization limiting throughput; TX-v1 would delete this subsystem
-entirely, so avoid speculative complexity.
+### 2. Per-shard / per-worker ALT pools — retired by transaction v1
+Tx D now uses v1 inline accounts. Tx C and the shared rolling pool were deleted,
+so this proposed optimization has no remaining implementation target.
 **Source:** the ALT-infra assessment (the "Priority 3 / Option A" review); memory `settle_io_and_marker_sweep`.
 
 ### 3. Reduce Tx D confirmation dependencies (optimistic / async settle)

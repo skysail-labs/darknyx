@@ -315,7 +315,7 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
   }, 30_000);
 
   it(
-    "creates token pair, initialises vault + protocol config, writes config.json",
+    "creates token pair, initialises vault + protocol config, writes e2e-config.json",
     { timeout: 180_000 },
     async () => {
       // ────────────────────────────────────────────────────────────────────
