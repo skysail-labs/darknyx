@@ -915,7 +915,9 @@ mod tests {
         );
         assert_eq!(
             generated.note_commitment,
-            commitment_from_fields_v2(&token_mint, amount, &owner, &generated.inner_hash,).unwrap()
+            commitment_from_fields_v2(&token_mint, amount, &owner, &generated.inner_hash,)
+                .unwrap()
+                .into_bytes()
         );
 
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(&token_mint);
@@ -950,8 +952,9 @@ mod tests {
 
         // Deposit the note into a fresh tree at leaf 0, build its witness.
         let owner = owner_commitment(&spending_key).unwrap();
-        let commitment: [u8; 32] =
-            commitment_from_fields_v2(&token_mint, amount, &owner, &inner_hash).unwrap();
+        let commitment = commitment_from_fields_v2(&token_mint, amount, &owner, &inner_hash)
+            .unwrap()
+            .into_bytes();
         let mut tree = IncrementalTree::new().unwrap();
         tree.append(commitment);
         let witness = tree.witness(0).unwrap();
@@ -1063,8 +1066,12 @@ mod tests {
         let ih0 = fr_to_be_bytes(&Fr::from(11u64));
         let ih1 = fr_to_be_bytes(&Fr::from(22u64));
         let (a0, a1) = (3_000u64, 2_000u64);
-        let c0 = commitment_from_fields_v2(&mint, a0, &owner, &ih0).unwrap();
-        let c1 = commitment_from_fields_v2(&mint, a1, &owner, &ih1).unwrap();
+        let c0 = commitment_from_fields_v2(&mint, a0, &owner, &ih0)
+            .unwrap()
+            .into_bytes();
+        let c1 = commitment_from_fields_v2(&mint, a1, &owner, &ih1)
+            .unwrap()
+            .into_bytes();
 
         let mut tree = IncrementalTree::new().unwrap();
         tree.append(c0);

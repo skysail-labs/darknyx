@@ -31,6 +31,7 @@ const VAULT_CONFIG_SEED: &[u8] = b"vault_config";
 const MERKLE_TREE_SEED: &[u8] = b"merkle_tree";
 const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
 const OUTSTANDING_MINT_SEED: &[u8] = b"outstanding_mint";
+const DEPOSITED_NOTE_SEED: &[u8] = b"deposited_note";
 const CONSUMED_NOTE_SEED: &[u8] = b"consumed_note";
 const NOTE_LOCK_SEED: &[u8] = b"note_lock";
 
@@ -79,6 +80,9 @@ pub fn outstanding_mint_pda(mint: &Address) -> Address {
     )
     .0
 }
+pub fn deposited_note_pda(note_commitment: &[u8; 32]) -> Address {
+    Address::find_program_address(&[DEPOSITED_NOTE_SEED, note_commitment], &vault_program_id()).0
+}
 pub fn consumed_note_pda(note_use_tag: &[u8; 32]) -> Address {
     Address::find_program_address(&[CONSUMED_NOTE_SEED, note_use_tag], &vault_program_id()).0
 }
@@ -115,7 +119,7 @@ pub fn anchor_discriminator(name: &str) -> [u8; 8] {
 /// Build the vault `deposit` ix appending a note to shard `tree_id`. Mirrors the
 /// SDK's `buildDepositInstruction` byte-for-byte: data = disc(8) ‖ tree_id(1) ‖
 /// amount(u64 LE) ‖ note_commitment(32) ‖ recovery_nonce(32) ‖ proof(256);
-/// 10 accounts in order. The hidden owner and inner are bound by VALID_DEPOSIT.
+/// 11 accounts in order. The hidden owner and inner are bound by VALID_DEPOSIT.
 pub fn build_deposit_ix(
     tree_id: u8,
     depositor: &Address,
@@ -142,6 +146,7 @@ pub fn build_deposit_ix(
         AccountMeta::new(*depositor_token_account, false),
         AccountMeta::new(vault_token_account_pda(token_mint), false),
         AccountMeta::new(outstanding_mint_pda(token_mint), false),
+        AccountMeta::new(deposited_note_pda(note_commitment), false),
         AccountMeta::new_readonly(token_program_id(), false),
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         AccountMeta::new_readonly(parse_id(RENT_SYSVAR_BASE58), false),
@@ -327,9 +332,11 @@ mod tests {
         assert_eq!(&ix.data[17..49], &[0x11; 32]); // note_commitment
         assert_eq!(&ix.data[49..81], &[0x22; 32]); // recovery_nonce
         assert_eq!(&ix.data[81..337], &[0x33; 256]); // Groth16 proof
-        assert_eq!(ix.accounts.len(), 10);
+        assert_eq!(ix.accounts.len(), 11);
         assert!(ix.accounts[0].is_signer); // depositor signs
         assert!(ix.accounts[2].is_writable); // merkle_tree[tree_id]
+        assert_eq!(ix.accounts[7].pubkey, deposited_note_pda(&[0x11; 32]));
+        assert!(ix.accounts[7].is_writable); // deposit-once guard
     }
 
     #[test]
