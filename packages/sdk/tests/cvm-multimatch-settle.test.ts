@@ -341,9 +341,11 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     // same matcher tick → ideally one batch of M (or a few — both are useful:
     // a multi-match batch shows the per-Tx-D loop; multiple batches show #4's
     // pipelining).
+    const firstOrderId = (orders[0] as { order_id: string }).order_id;
+    let sawPendingSettlement = false;
     const submitStart = Date.now();
     const statuses = await Promise.all(
-      orders.map((o) =>
+      orders.map((o, index) =>
         gwFetch(`${GATEWAY}/orders`, {
           method: "POST",
           headers: {
@@ -356,6 +358,29 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
             console.log(
               `  !! /orders ${r.status}: ${(await r.text()).slice(0, 200)}`,
             );
+          // Observe the finality-gated reservation while the remaining
+          // concurrent POSTs are still completing. Waiting for all 32 POST
+          // responses before beginning this poll races a fast Tx D: the first
+          // pair can be confirmed and swept before Promise.all resolves even
+          // though it was correctly pending throughout proving and send.
+          if (index === 0 && String(r.status).startsWith("2")) {
+            const pendingDeadline = Date.now() + 20_000;
+            while (!sawPendingSettlement && Date.now() < pendingDeadline) {
+              const orderStatus = await gwFetch(
+                `${GATEWAY}/orders/${firstOrderId}`,
+                { headers: { authorization: `Bearer ${token}` } },
+              );
+              if (orderStatus.status === 200) {
+                const body = (await orderStatus.json()) as { status?: string };
+                sawPendingSettlement = body.status === "pending_settlement";
+              }
+              if (!sawPendingSettlement) {
+                await new Promise((resolvePromise) =>
+                  setTimeout(resolvePromise, 100),
+                );
+              }
+            }
+          }
           return r.status;
         }),
       ),
@@ -365,8 +390,6 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       `  · submitted ${orders.length} orders in ${Date.now() - submitStart}ms — ${accepted} accepted (2xx)`,
     );
     expect(accepted, "some orders rejected").toBe(orders.length);
-    const firstOrderId = (orders[0] as { order_id: string }).order_id;
-
     // This fixture fully fills both inputs at a positive 30-bps fee. Every
     // confirmed match therefore appends note_c + note_d, one buyer quote
     // change, and the base + quote fee notes (5 leaves). Waiting for the old
@@ -376,7 +399,6 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const wantLeaves = depositCount + outputLeavesPerMatch * MATCHES;
     const settleStart = Date.now();
     let finalCount = depositCount;
-    let sawPendingSettlement = false;
     const deadline = Date.now() + SETTLE_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
