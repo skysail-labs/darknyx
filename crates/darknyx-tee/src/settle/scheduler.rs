@@ -364,7 +364,7 @@ impl SettleScheduler {
             tracing::info!(
                 settle_concurrency,
                 "settle scheduler: live driver attached — each batch is \
-                 assembled + driven through lock→prove→verify→ALT→settle→close"
+                 assembled + driven through lock→prove→verify→settle→close"
             );
         } else {
             tracing::warn!(
