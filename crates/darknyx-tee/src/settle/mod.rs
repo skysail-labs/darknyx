@@ -1,26 +1,18 @@
 //! Settlement pipeline — turns matcher output into confirmed on-chain settlements.
 //!
 //! The scheduler consumes `RunBatchOutput`s from the matcher driver and drives one
-//! job per match through a five-transaction sequence, documented in
+//! job per match through the settlement sequence, documented in
 //! `docs/tee-architecture.md` §6 and `CRYPTOGRAPHY.md` §9:
 //!
 //! ```text
 //!   Tx A  lock_note × 2                 pin both inputs between match and settle
 //!   Tx B  verify_match_batch            Groth16 VALID_MATCH_BATCH, writes the marker
-//!   Tx C  per-batch ALT create/extend   payload-derived PDAs, all matches
-//!   Tx D  tee_forced_settle_batched     the settlement itself (v0 tx, 2 ALTs)
+//!   Tx D  tee_forced_settle_batched     the settlement itself (v1, inline accounts)
 //!   Tx E  close_batch_validity_marker   rent reclaim, at or after expiry
 //! ```
 //!
 //! Tx D is the finality point. Tx E is asynchronous rent bookkeeping and a job is
 //! `Done` without it.
-//!
-//! Tx C does not always create a fresh table: `alt_pool` keeps a rolling set and
-//! reuses or extends one where it can, because ALT deactivation has a ~512-slot
-//! cooldown. Its address set is the **union across every match in the batch**,
-//! deduplicated — so it is not a fixed seven entries. An exact-fill match
-//! contributes fewer (the `[0;32]` change-note locks collapse to one PDA); a
-//! multi-match batch contributes more.
 //!
 //! Module map:
 //!
@@ -30,16 +22,15 @@
 //!     `close_marker.rs` — one instruction builder per transaction above.
 //!   - `assemble.rs` / `payload.rs` — build the settlement payload and its
 //!     canonical hash; `sign.rs` / `ed25519.rs` produce the TEE signature over it.
-//!   - `pipeline.rs` — assembles Tx D as a v0 transaction over two lookup tables.
-//!   - `alt.rs` / `alt_pool.rs` — per-batch lookup tables and the rolling pool that
-//!     amortises their ~512-slot deactivation cooldown.
+//!   - `pipeline.rs` — assembles Tx D as a v1 transaction with inline accounts
+//!     and message-level resource limits.
 //!   - `recover.rs` / `drain.rs` — crash recovery and planned shutdown.
 //!   - `lock_sweep.rs` / `marker_sweep.rs` — reclaim expired locks and markers.
 //!   - `vault.rs` — PDA derivations shared by every builder above.
 //!
-//! Two constraints govern changes here. Tx D sits at 1173 of the 1232-byte
-//! transaction limit, so any new account or payload field must be checked against
-//! `CRYPTOGRAPHY.md` §9. And settlement is idempotent by construction: the
+//! Two constraints govern changes here. Tx D must stay within v1's 4096-byte and
+//! 64-account limits, so any new account or payload field must be measured. And
+//! settlement is idempotent by construction: the
 //! consume-once PDAs make a replayed transaction fail rather than double-spend, so
 //! recovery re-runs a job rather than tracking whether it already ran.
 //!
@@ -55,8 +46,6 @@ pub mod scheduler;
 pub mod vault;
 
 // Instruction builders — one per pipeline transaction.
-pub mod alt;
-pub mod alt_pool;
 pub mod assemble;
 pub mod close_marker;
 pub mod drain;
@@ -80,11 +69,6 @@ pub mod worker;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use alt::{
-    alt_account, build_deactivate_alt_ix, build_extend_alt_ix, build_per_batch_alt_ixs,
-    PerBatchAltIxs,
-};
-pub use alt_pool::{AltPlan, AltPool, MAX_ALT_ENTRIES};
 pub use assemble::{
     assemble_batch, assemble_match, AssembleError, BatchAssemblyParams, MatchAssemblyInputs,
 };
@@ -102,11 +86,10 @@ pub use metrics::{
     SETTLEMENT_METRICS_SCHEMA_VERSION,
 };
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
-pub use pipeline::{build_settle_v0_tx, build_settle_v0_tx_b64};
+pub use pipeline::{build_settle_v1_tx, build_settle_v1_tx_b64};
 pub use scheduler::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};
 pub use settle_batched::{
-    build_settle_batched_ix, per_batch_alt_addresses, INSTRUCTIONS_SYSVAR_ID,
-    SETTLE_BATCHED_DISCRIMINATOR,
+    build_settle_batched_ix, INSTRUCTIONS_SYSVAR_ID, SETTLE_BATCHED_DISCRIMINATOR,
 };
 pub use sign::sign_payload;
 pub use submit::{

@@ -372,7 +372,7 @@ export async function fetchSettleTimeline(
     let tx;
     try {
       tx = await conn.getTransaction(s.signature, {
-        maxSupportedTransactionVersion: 0,
+        maxSupportedTransactionVersion: 1,
         commitment: "confirmed",
       });
     } catch {

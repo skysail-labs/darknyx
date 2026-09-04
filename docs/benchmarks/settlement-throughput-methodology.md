@@ -108,6 +108,16 @@ the on-chain 64-root history on any shard: for this 144-match fixture,
 uses K=4). These are validity preflights, not parameters to relax to make a run
 pass.
 
+An external wave-synchronisation experiment on 2026-09-05 could not reliably
+turn this workload into full pages. Even twenty independently verified
+transports took longer than one matcher interval to admit later sixteen-order
+waves, producing mostly `1+15` pages. Therefore `--real-submit-rate` controls
+offered HTTP pacing, not matcher admission or batch packing. Do not add sleeps,
+connection fan-out, or an unaudited production debug route merely to force a
+100% packing result. The experiment and the valid transaction-v1 C1 baseline
+are recorded in
+[`runs/tx-v1-c1-packing-investigation-2026-09-05.md`](./runs/tx-v1-c1-packing-investigation-2026-09-05.md).
+
 ## CPU baseline matrix
 
 Run on one healthy prod9 CPU CVM and one unchanged image:

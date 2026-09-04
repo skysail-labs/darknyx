@@ -53,8 +53,7 @@ pub enum SettleJobStage {
     Proving,
     /// Tx B (verify_match_batch) in flight.
     Verifying,
-    /// Tx C (per-batch ALT) + Tx D (tee_forced_settle_batched) in
-    /// flight.
+    /// Tx D (v1 tee_forced_settle_batched) in flight.
     Settling,
     /// Tx E (close_batch_validity_marker) in flight.
     Closing,

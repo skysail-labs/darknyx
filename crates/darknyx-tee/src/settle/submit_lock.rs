@@ -4,8 +4,8 @@
 //! separate transactions, not one batched transaction.** Two reasons, and the
 //! second is the durable one:
 //!
-//!   - Batching both locks into a single transaction only fits under the
-//!     1232-byte cap with ALT-based account deduplication.
+//!   - Each legacy lock transaction stays comfortably below the 1232-byte cap;
+//!     batching both proof-bearing instructions does not.
 //!   - The two transactions are independent. If one fails — proof rejected,
 //!     blockhash expired — the other has already landed and only the failed side is
 //!     resubmitted. A batched transaction turns any single-side failure into a

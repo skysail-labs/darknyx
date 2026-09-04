@@ -96,13 +96,12 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
 |---|---|
 | `DARKNYX_TEE_BASE_MINT` | `sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn` |
 | `DARKNYX_TEE_QUOTE_MINT` | `FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6` |
-| `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | `FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE` |
 | `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | `0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000` |
 | `DARKNYX_TEE_NUM_TREES` | `4` |
 | `DARKNYX_TEE_FEE_RATE_BPS` | `30` |
 
 > If `.devnet/e2e-config.json` ever changes, re-read these with
-> `jq -r '.baseMint.pubkey, .quoteMint.pubkey, .settleLookupTable, .protocol.ownerCommitmentHex, .numTrees' .devnet/e2e-config.json`.
+> `jq -r '.baseMint.pubkey, .quoteMint.pubkey, .protocol.ownerCommitmentHex, .numTrees' .devnet/e2e-config.json`.
 
 ### Path A — Dashboard (Custom Configuration)
 
@@ -143,7 +142,6 @@ services:
       DARKNYX_TEE_BASE_MINT: "sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn"
       DARKNYX_TEE_QUOTE_MINT: "FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6"
       DARKNYX_TEE_MARKET_SYMBOL: "SOL-USDC"
-      DARKNYX_TEE_SETTLE_LOOKUP_TABLE: "FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE"
       DARKNYX_TEE_FEE_RATE_BPS: "30"
       DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT: "0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000"
       DARKNYX_TEE_NUM_TREES: "4"
@@ -174,7 +172,6 @@ export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
-ALT=$(jq -r .settleLookupTable .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$RPC")
 mkdir -p .devnet
@@ -187,7 +184,6 @@ DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
-DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=4

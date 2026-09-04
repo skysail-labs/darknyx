@@ -32,7 +32,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
 * **TEE (`crates/darknyx-tee/`)** — the in-enclave engine. It owns hidden
   order intake (`POST /orders`), uniform-clearing-price matching, the
   full settle pipeline (lock → prove N=16 VALID_MATCH_BATCH [ark or
-  rapidsnark backend, `DARKNYX_TEE_PROVER`] → verify → per-batch ALT →
+  rapidsnark backend, `DARKNYX_TEE_PROVER`] → verify → v1
   `tee_forced_settle_batched` → close, **concurrent sends round-robined
   across K shard fee-payer keys + K trees** so the leader co-includes a
   batch's settles in one block), K Merkle-mirror indexers, deterministic
@@ -194,7 +194,7 @@ By domain, additionally:
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). **Comment conventions: [§10.5](#105-comment-conventions)** — enforced by `scripts/check-no-process-markers.sh`. |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
-| Settlement plumbing | `CRYPTOGRAPHY.md` §9 (size analysis + ALT story). The 1232-byte cap is tight — see [§6](#6-the-1232-byte-transaction-size-budget). |
+| Settlement plumbing | `CRYPTOGRAPHY.md` §9 (transaction-version and resource-limit analysis). Tx D is v1; see [§6](#6-the-settlement-transaction-budget). |
 
 ---
 
@@ -265,14 +265,14 @@ authority; `deploy-devnet.sh` verifies the program exists before taking that pat
 The on-chain incremental Merkle tree accumulates leaves across every
 deposit + settlement. The SDK's in-memory `MerkleShadow` starts empty, so
 after a few runs they drift and every `VALID_SPEND` withdraw fails with
-`StaleMerkleRoot (6004)`. Cure — a tree-only reset (keeps mints/ALT/config):
+`StaleMerkleRoot (6004)`. Cure — a tree-only reset (keeps mints/config):
 
 ```sh
 SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/reset-merkle-tree.mjs
 ```
 
-To rebuild mints + the settle ALT + protocol config from scratch (writes
+To rebuild mints + protocol config from scratch (writes
 `.devnet/e2e-config.json` that every other devnet test reads):
 
 ```sh
@@ -526,7 +526,6 @@ export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
-ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 # Materialize this mode-0600 fragment from the sealed keyring exactly as
@@ -562,7 +561,6 @@ DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
-DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_FEE_EPOCH_KEY=$DARKNYX_TEE_FEE_EPOCH_KEY
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
@@ -629,7 +627,7 @@ SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   node scripts/rotate-tee-pubkey.mjs <key0> <key1> <key2> <key3>   # set the whole tee_pubkeys Vec
 SOLANA_RPC_URL="$DEVNET_RPC" FUNDER_KEYPAIR=~/.config/solana/id.json \
   node scripts/fund-tee-keys.mjs <key0> <key1> <key2> <key3>       # tops each to FUND_TARGET_SOL (default 2)
-# settle path needs SOL per shard for lock/verify/ALT/settle/close
+# settle path needs SOL per shard for lock/verify/settle/close
 ```
 
 ### 3.4 Run the flagship + the loadgen
@@ -888,36 +886,38 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 
 ---
 
-## 6. The 1232-byte transaction-size budget
+## 6. The settlement transaction budget
 
-Solana caps a tx at 1232 bytes. The settle path is right at the edge:
+Tx D uses Solana transaction v1, whose wire cap is 4096 bytes and whose
+account list is fully inline (v1 does not support Address Lookup Tables):
 
 | Tx | ~Size | Headroom |
 |---|---|---|
 | lock_note buyer/seller (two Tx A) | <800 B each | >430 B each |
 | verify_match_batch (Tx B) | ~640 B | comfortable |
-| per-batch ALT create+extend (Tx C) | ~250 B | comfortable |
-| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | **1173 B** | **59 B** |
+| tee_forced_settle_batched (Tx D, v1, inline accounts) | **1392 B** | **2704 B** |
 | close_batch_validity_marker (Tx E) | ~250 B | comfortable |
 
-Anything that adds bytes to the settle path — a new account, an extra ix
-param, a longer payload field — risks the cap.
+The 1392-byte figure is pinned by `settle::pipeline` using the current
+worst-shape instruction. Any new account or payload field still needs a size
+assertion, but Tx D is no longer balanced on the legacy packet ceiling.
 
 * **Read `CRYPTOGRAPHY.md` §9 before changing any settle ix's accounts/data.**
-* **Static accounts go in the settle ALT** (created at devnet-setup,
-  `.devnet/e2e-config.json::settleLookupTable`): `vault_config`,
-  `instructions_sysvar`, `system_program`.
-* **Per-batch ALT** holds the 7 PDAs derivable from the payload
-  (`note_lock_a/b/e/f` + `consumed_a/b` + `batch_validity_marker`). The CVM
-  settle worker builds a rolling pool of these (ALT deactivation has a ~512-slot
-  cooldown).
-* **`createLookupTable` `recentSlot`** must come from
-  `getLatestBlockhashAndContext().context.slot`, NOT `getSlot("confirmed")`
-  (which can return a leader-skipped slot → "is not a recent slot").
-* **lock_note key dedup.** In exact-fill paths, `note_lock_e`/`note_lock_f`
-  derive from `[0;32]` → same PDA → the encoder dedups to one slot (saves 32 B).
-  The moment a change note is non-zero the dedup disappears and the tx grows —
-  don't assume an exact-fill tx size generalises.
+* **Do not prepend ComputeBudget instructions to Tx D.** They are no-ops in
+  v1. Set `compute_unit_limit`, `loaded_accounts_data_size_limit`, and the
+  optional total-lamport priority fee in `v1::TransactionConfig`.
+* **The loaded-account-data limit is mandatory.** V1 defaults it (and the CU
+  limit) to zero. Migration starts at the runtime's 64 MiB maximum; replace it
+  with `loadedAccountsDataSize` rounded to a 32-KiB page after a real settle
+  simulation. Do not guess below the upgradeable program's loaded data.
+* **V1 priority fees are total lamports**, while the existing poller supplies
+  micro-lamports/CU. `pipeline::priority_fee_lamports` performs the rounded-up
+  conversion against Tx D's requested CU limit.
+* **All RPC transaction readers advertise version 1.** Omitting
+  `maxSupportedTransactionVersion: 1` makes a successfully-settled Tx D
+  unreadable to recovery/indexing code.
+* **Activation is cluster-specific.** Devnet and supported Surfpool releases
+  accept v1. Mainnet deployment remains gated on mainnet-beta activation.
 
 ---
 
@@ -1038,7 +1038,7 @@ this — only the integration tests do, with `AccountNotFound` /
 | Changed a circom circuit | devnet `InvalidProof (6000)` | regenerate `.zkey` + `vk_*.rs` same commit; redeploy; reset tree |
 | Bumped `MatchResultPayload` field order | `canonical_payload_hash_fixed_vector` fails | mirror in TS `serializePayload` + recompute the fixed vector |
 | Added a vault PDA without the SDK | integration test `AccountNotFound` / `ConstraintSeeds` | add the SEED + `xxxPda()` to the SDK; update every `build*Ix` (§8.3) |
-| Added an account to a settle ix without the ALT | `TransactionTooLarge` | add it to the static ALT (re-run devnet-setup) or the per-batch ALT (§6) |
+| Grew Tx D without measuring its v1 wire form | pipeline size assertion / runtime `TransactionTooLarge` | update the 4096-byte v1 size regression and remeasure loaded-account data (§6) |
 | Raw `[0xA0u8; 32]` for a Poseidon-hashed field | `NotInField` host-side; `InvalidProof (6000)` / `InvalidBatchBinding (6022)` on-chain | `fr_safe(seed, salt)` or any Poseidon output (§7.2) |
 | Passed a `commitment` where a `note_use_tag` was wanted (or vice versa) | Compiles; on-chain `AccountNotFound` / `ConstraintSeeds (2006)` at a PDA that looks fine | Both are `[u8;32]`. Leaves + `DepositedNoteEntry` = commitments; `NoteLock` + `ConsumedNoteEntry` + settle inputs = tags (`CRYPTOGRAPHY.md` §2.1) |
 | Upgraded a running CVM across the journal v1→v2 bump without draining | Boot reports the journal `Damaged` and demands an operator | `POST /admin/drain`, confirm `safe_to_stop`, THEN redeploy |
@@ -1164,7 +1164,7 @@ it after; never commit a secret).**
 ## 12. When in doubt
 
 1. Touching anything ZK-adjacent → re-read [§5](#5-touching-circuits-the-failure-mode-thats-bitten-us).
-2. Adding to a settle ix's accounts/data → re-read [§6](#6-the-1232-byte-transaction-size-budget).
+2. Adding to a settle ix's accounts/data → re-read [§6](#6-the-settlement-transaction-budget).
 3. Touching cryptography in either language → re-read [§7](#7-cross-language-byte-equality-contracts).
 4. Touching markers / the settle handler → re-read [§8](#8-marker--pda-lifecycle-conventions).
 5. Deploying/testing on a CVM → [§3](#3-the-phala-cvm--build--deploy--test) + stop it after.

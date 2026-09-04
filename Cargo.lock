@@ -2441,7 +2441,6 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.8",
  "solana-address 2.6.1",
- "solana-address-lookup-table-interface",
  "solana-hash 4.5.0",
  "solana-instruction",
  "solana-keypair",
@@ -2460,6 +2459,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "wincode",
  "zeroize",
 ]
 

@@ -68,14 +68,11 @@ settlement benchmark row, and keeps `1` as the production default. This makes
 the next H200 window an env-only A/B rather than a code change.
 
 The two historical correctness blockers were re-audited before exposing the
-knob:
+knob. The first is now eliminated rather than merely guarded:
 
-- Rolling-ALT planning/mutation is held under one mutex across the complete
-  create/extend transaction. Each batch captures its table before releasing the
-  mutex and re-reads canonical on-chain ordering; later extends append without
-  changing earlier indices. Rotation deactivation retains the normal cooldown.
-  A two-batch concurrent regression now drives both workers through this shared
-  pool.
+- The former rolling-ALT planning/mutation race disappeared when v1 inline
+  accounts deleted Tx C and the ALT pool. There is no longer shared lookup-table
+  state for concurrent batches to corrupt.
 - A partial-fill continuation is inserted into the opening store only after its
   parent Tx D confirms. The fixed matcher snapshot used by a tick cannot select
   that continuation for a sibling page, so there is no child batch to start
@@ -95,16 +92,22 @@ leg—run 1/2/4 only for icicle CUDA on the same GPU host. Both CPU legs exposed
 excessive rebroadcasting, so neither is a production-capacity promotion result.
 Evidence:
 [`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
+
+**Transaction-v1 C1 re-baseline 2026-09-05:** the inline-account image produced
+zero `alt_tx`/`alt_wait` samples and delivered 1.340 confirmed matches/s with a
+5.726-second total P50. Attempts to manufacture 100% N=16 packing through
+bursting and externally aligned waves failed even with twenty independently
+RA-TLS-verified transports; packing is therefore retained as a reported
+workload variable rather than normalized away. This result does not reopen the
+CPU C2 decision. Evidence:
+[`docs/benchmarks/runs/tx-v1-c1-packing-investigation-2026-09-05.md`](benchmarks/runs/tx-v1-c1-packing-investigation-2026-09-05.md).
 **Source:** `scheduler.rs`, `worker.rs`, and
 `docs/benchmarks/settlement-throughput-methodology.md`.
 
-### 2. Per-shard / per-worker ALT pools
-**Gate: measured contention.** The shared rolling pool is now correctness-safe
-for concurrent batches but intentionally serializes the Tx C branch. The admin
-metrics expose `alt_tx_ms`, `alt_wait_ms`, queue wait, and batch concurrency, so
-we can tell whether this mutex is material. Add distinct pools only if GPU A/B
-shows Tx C serialization limiting throughput; TX-v1 would delete this subsystem
-entirely, so avoid speculative complexity.
+### 2. Per-shard / per-worker ALT pools — retired by transaction v1
+
+Tx D now uses v1 inline accounts. Tx C and the shared rolling pool were deleted,
+so this proposed optimization has no remaining implementation target.
 **Source:** the ALT-infra assessment (the "Priority 3 / Option A" review); memory `settle_io_and_marker_sweep`.
 
 ### 3. Reduce Tx D confirmation dependencies (optimistic / async settle)
@@ -231,7 +234,10 @@ packing pressure makes the saving operationally useful. Detailed raw samples and
 above.
 
 ### 7. Drop ALTs: settle Tx D → v1 inline-address transaction (SIMD-0296 / SIMD-0385)
-**Gate: 🟣 TX-V1.** SIMD-0296 raises the tx cap 1232 → **4096 B** via the SIMD-0385 **v1 format**
+**Status: implementation complete; the signed v1 submit/read probe passed on
+the pinned Surfpool 1.5.0 build. A full Tx D settlement remains pending, and
+mainnet remains gated on cluster activation.** SIMD-0296 raises the tx cap
+1232 → **4096 B** via the SIMD-0385 **v1 format**
 (leading version byte `129`; compute budget set by a **header config-mask** instead of `ComputeBudget`
 instructions; every field after the version byte is re-laid-out). v1 **does not support address lookup
 tables** — you inline every address — but 4096 B holds our full settle account list. So this is a straight
@@ -242,7 +248,7 @@ away. **No on-chain program or circuit change** — the vault is indifferent to 
 - **Tx C (per-batch ALT create/extend) — DELETED.** No ALT ⇒ nothing to create or warm.
 - **Tx D (`tee_forced_settle_batched`) — v0+2-ALT → v1+inline.** The ~13–15 accounts (`tee_authority`,
   `vault_config`, `merkle_tree`, `note_lock_a/b/e/f`, `consumed_a/b`, `batch_validity_marker`,
-  `system_program`, `instructions_sysvar`) go inline: ~1173 B (ALT-compressed) → ~1.4–1.6 KB inline,
+  `system_program`, `instructions_sysvar`) go inline: 1173 B (ALT-compressed) → **1392 B** inline,
   comfortably under 4096 (worst-case 6-leaf + 2-relock included, so no "most cases" risk for us). The CU
   limit moves from a prepended `ComputeBudget` ix to the v1 header mask.
 - **Tx A (lock ×2), Tx B (verify), Tx E (marker close) — unchanged.** Already ALT-free and <1232;
@@ -269,15 +275,16 @@ Tx D (shared `vault_config`/`system_program`/`instructions_sysvar`/payer dedup a
 serialize, so pack same-shard or accept serial) and re-opens the item-6 verify-CU math if proofs are
 co-packed. Evaluate under 🟡 VOLUME once settle-bound; don't prescribe now.
 
-**Prerequisites (must land with the switch):**
-- `solana-*` client crates (`solana-message` + the tx builder) at a version that constructs v1 txs
-  post-activation; both the TEE settle worker and the SDK `settle-builder` build Tx D.
-- RPC (Helius) accepting/forwarding v1 txs; a devnet activation to validate against.
-
-**Why gated (not now):** v1 is a post-activation platform format (~Q3 2026); building it early means
-carrying both a v0+ALT path and a v1 path for no live benefit. It is a **pure simplification + ~3.4 s
-latency trim**, not a throughput multiplier — the dominant `settle_ms` term is Alpenglow's, not this — so
-it rides in when the format activates, most valuably *before* item 1's concurrency work.
+**Implementation/rollout notes:**
+- The TEE alone frames and signs Tx D; the SDK mirrors its instructions and
+  payload bytes but intentionally has no second production transaction builder.
+- Every transaction reader now advertises version 1. Surfpool v1.5+ and devnet
+  are the qualification targets; mainnet-beta is not activated as of 2026-09-03.
+- `alt_tx_ms`/`alt_wait_ms` remain nullable telemetry fields solely so old
+  benchmark records decode; v1 records leave them absent.
+- The loaded-account-data ceiling starts at 64 MiB and must be tightened from
+  the real simulation's `loadedAccountsDataSize`, rounded to the next 32-KiB
+  page with headroom.
 **Source:** SIMD-0296 + SIMD-0385; `solana.com/upgrades/larger-transaction-sizes`;
 `crates/darknyx-tee/src/settle/{alt_pool.rs,alt.rs,job.rs,worker.rs,pipeline.rs}`; the §6 tx-size budget
 in CLAUDE.md.

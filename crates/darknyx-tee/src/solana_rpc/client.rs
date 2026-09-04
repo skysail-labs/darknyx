@@ -146,6 +146,9 @@ pub struct RpcSimulationResult {
     pub logs: Vec<String>,
     /// Compute-unit count consumed. Useful for priority-fee sizing.
     pub units_consumed: Option<u64>,
+    /// Total loaded account data reported by the runtime. Tx v1 requires an
+    /// explicit ceiling, so this is the evidence used to right-size it.
+    pub loaded_accounts_data_size: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,12 +180,10 @@ pub struct RpcInstruction {
     /// VALUES for a forged `TradeSettled` event.
     ///
     /// Reliably populated: Solana sanitizes `program_id_index` against the
-    /// **static** account keys, so a program id is never resolved through an
-    /// address lookup table — including in the v0 settle transactions, whose
-    /// other accounts do come from ALTs. (An earlier comment here claimed the
-    /// opposite and was the stated reason the field went unused.) Empty only if
+    /// message account keys. Tx D uses v1 with every account inline; program ids
+    /// also cannot be lookup-table loaded in legacy v0 messages. Empty only if
     /// the RPC returns an out-of-range index, which no honest node does and
-    /// which fails the vault comparison anyway.
+    /// the RPC returns an out-of-range index, which fails the vault comparison.
     pub program_id: String,
     /// Instruction data, base58-decoded.
     pub data: Vec<u8>,
@@ -424,9 +425,7 @@ impl SolanaRpcClient {
     /// validates the tx with preflight on the FIRST send, then re-pushes the
     /// identical (idempotent — the network dedups by signature) signed tx with
     /// `skip_preflight=true` so each resend is a cheap re-broadcast to more
-    /// leaders, not a full re-simulation (which also avoids a spurious
-    /// preflight failure if the resend hits a leader whose bank fork hasn't yet
-    /// processed the per-batch ALT extend).
+    /// leaders, not a full re-simulation.
     pub async fn send_transaction_opts(
         &self,
         tx_b64: &str,
@@ -434,8 +433,8 @@ impl SolanaRpcClient {
     ) -> Result<String, RpcError> {
         // `preflightCommitment` matches our default.
         //
-        // `maxRetries` is intentionally NOT pinned to 0: the big v0
-        // settle tx (~1.2 KB, near the cap) is easily dropped on a
+        // `maxRetries` is intentionally NOT pinned to 0: the v1 settle tx can
+        // still be dropped on a
         // single broadcast under devnet load — it passes preflight,
         // gets a signature, then never lands (confirmation polls
         // forever as `[None]`). Omitting the field lets the RPC node
@@ -635,8 +634,8 @@ impl SolanaRpcClient {
             .collect())
     }
 
-    /// `getTransaction` (`encoding=json`, `maxSupportedTransactionVersion=0`
-    /// so v0 settle txs decode). Returns `None` when the signature is
+    /// `getTransaction` (`encoding=json`, `maxSupportedTransactionVersion=1`
+    /// so v1 settle txs decode). Returns `None` when the signature is
     /// unknown / not yet confirmed at the configured commitment. Only
     /// the slot, revert status, log messages, and top-level
     /// instructions are extracted — enough for the Merkle leaf decoder.
@@ -681,7 +680,7 @@ impl SolanaRpcClient {
             {
                 "encoding": "json",
                 "commitment": self.commitment,
-                "maxSupportedTransactionVersion": 0,
+                "maxSupportedTransactionVersion": 1,
             }
         ]);
         let inner: Option<Inner> = self.call("getTransaction", params).await?;
@@ -724,7 +723,7 @@ impl SolanaRpcClient {
     /// `pagination_token` (see `merkle::sync::GTFA_PAGE_LIMIT`).
     ///
     /// Pinned options: `transactionDetails: full`, `encoding: json`,
-    /// `maxSupportedTransactionVersion: 0` (v0 settle txs decode), and
+    /// `maxSupportedTransactionVersion: 1` (v1 settle txs decode), and
     /// `status: succeeded` (a reverted tx appends no leaves, so we never need
     /// it — and this drops the per-tx err check). `slot_gte` floors the scan at
     /// the cold-boot / last-applied slot; `pagination_token` (the prior page's
@@ -801,7 +800,7 @@ impl SolanaRpcClient {
         cfg.insert("commitment".to_string(), serde_json::json!(self.commitment));
         cfg.insert(
             "maxSupportedTransactionVersion".to_string(),
-            serde_json::json!(0),
+            serde_json::json!(1),
         );
         cfg.insert("filters".to_string(), Value::Object(filters));
         if let Some(tok) = pagination_token {
@@ -866,6 +865,8 @@ impl SolanaRpcClient {
             logs: Option<Vec<String>>,
             #[serde(rename = "unitsConsumed", default)]
             units_consumed: Option<u64>,
+            #[serde(rename = "loadedAccountsDataSize", default)]
+            loaded_accounts_data_size: Option<u64>,
         }
         let params = serde_json::json!([
             tx_b64,
@@ -885,6 +886,7 @@ impl SolanaRpcClient {
             err: resp.value.err,
             logs: resp.value.logs.unwrap_or_default(),
             units_consumed: resp.value.units_consumed,
+            loaded_accounts_data_size: resp.value.loaded_accounts_data_size,
         })
     }
 

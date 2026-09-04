@@ -91,7 +91,6 @@ interface MultiMarketConfig {
   vaultProgramId: string;
   vaultConfigPda: string;
   numTrees: number;
-  settleLookupTable: string;
   markets: [MarketFixture, MarketFixture];
 }
 

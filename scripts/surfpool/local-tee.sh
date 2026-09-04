@@ -190,22 +190,20 @@ start_tee() {
     export DARKNYX_TEE_ORACLE_MODE=pyth-solana-push-v1
     export DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET DARKNYX_TEE_PASSPHRASE
     if [[ "$mode" == governed ]]; then
-      local base_mint quote_mint settle_lookup_table protocol_owner_commitment
+      local base_mint quote_mint protocol_owner_commitment
       base_mint="$(jq -er .baseMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
       quote_mint="$(jq -er .quoteMint.pubkey "$DARKNYX_E2E_CONFIG_PATH")"
-      settle_lookup_table="$(jq -er .settleLookupTable "$DARKNYX_E2E_CONFIG_PATH")"
       protocol_owner_commitment="$(jq -er .protocol.ownerCommitmentHex "$DARKNYX_E2E_CONFIG_PATH")"
       export DARKNYX_TEE_BASE_MINT="$base_mint"
       export DARKNYX_TEE_QUOTE_MINT="$quote_mint"
       export DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
       export DARKNYX_TEE_FEED_IDS="$SOL_USD_FEED"
-      export DARKNYX_TEE_SETTLE_LOOKUP_TABLE="$settle_lookup_table"
       export DARKNYX_TEE_FEE_RATE_BPS=30
       export DARKNYX_TEE_FEE_EPOCH_KEY
       export DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT="$protocol_owner_commitment"
     else
       unset DARKNYX_TEE_BASE_MINT DARKNYX_TEE_QUOTE_MINT DARKNYX_TEE_FEED_IDS
-      unset DARKNYX_TEE_SETTLE_LOOKUP_TABLE DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT
+      unset DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT
     fi
     exec "$TEE_BIN"
   ) > "$log" 2>&1 &

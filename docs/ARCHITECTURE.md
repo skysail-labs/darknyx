@@ -29,7 +29,7 @@ Intel TDX CVM (crates/darknyx-tee)
   proof verification at intake, collateral reservation, Pyth guardrails
   N=16 VALID_MATCH_BATCH proving
   K Merkle mirrors + K dstack-derived settle signers
-  lock → verify → ALT → settle → expiry-gated sweep
+  lock → verify → v1 inline-account settle → expiry-gated sweep
                          │ signed Solana transactions
                          ▼
 Solana vault (programs/vault)
@@ -271,8 +271,8 @@ mixes markets even when one CVM serves several.
 Tx A: two independent VALID_INPUT-backed lock_note transactions per match
 Tx B: one authorized VALID_MATCH_BATCH verify transaction per batch, carrying
       the governed fee-key epoch and encrypted fee-recovery record
-Tx C: per-batch ALT create/extend
-Tx D: one Ed25519-authenticated atomic settle transaction per active match
+Tx D: one Ed25519-authenticated v1 atomic settle transaction per active match
+      (all accounts inline; resource limits live in the v1 message config)
 Tx E: marker sweep at/after its on-chain-derived expiry
 ```
 
@@ -316,7 +316,8 @@ One CVM shares:
 - attestation and authentication;
 - K signer keys and Merkle mirrors;
 - oracle cache and prover artifacts;
-- ALT pool, RPC client, and a venue-wide settlement concurrency semaphore.
+- transaction-v1 builder, RPC client, and a venue-wide settlement concurrency
+  semaphore.
 
 Each market has its own symbol, mint pair, matcher state, lifecycle publisher,
 and scheduler. Oracle pause state is also per market; governance and drain

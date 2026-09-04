@@ -75,7 +75,7 @@ function gtfaConfig(overrides = {}) {
     sortOrder: "asc",
     limit: 100,
     commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
+    maxSupportedTransactionVersion: 1,
     filters: { status: "succeeded" },
     ...overrides,
   };
@@ -405,6 +405,70 @@ assert.equal(
   "ALT negative control failed: recipient unexpectedly became a static key",
 );
 
+// Prove the validator accepts, executes, and serves the v1 format Darknyx uses
+// for Tx D. V1 has no lookup tables and requires resource ceilings in the
+// message config; ComputeBudget instructions would be no-ops here.
+const v1Blockhash = await connection.getLatestBlockhash("confirmed");
+const v1Message = new TransactionMessage({
+  payerKey: payer.publicKey,
+  recentBlockhash: v1Blockhash.blockhash,
+  instructions: [
+    SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: recipient.publicKey,
+      lamports: 1n,
+    }),
+  ],
+}).compileToV1Message({
+  computeUnitLimit: 20_000,
+  loadedAccountsDataSizeLimit: 64 * 1024,
+  priorityFeeLamports: 7n,
+});
+assert.equal(v1Message.transactionConfig?.computeUnitLimit, 20_000);
+assert.equal(
+  v1Message.transactionConfig?.loadedAccountsDataSizeLimit,
+  64 * 1024,
+);
+assert.equal(v1Message.transactionConfig?.priorityFeeLamports, 7n);
+const v1Transaction = new VersionedTransaction(v1Message);
+await v1Transaction.sign([payer]);
+const v1Signature = await connection.sendRawTransaction(
+  await v1Transaction.serialize(),
+  { skipPreflight: false },
+);
+assert.equal((await waitForStatus(connection, v1Signature)).err, null);
+const v1Fetched = await connection.getTransaction(v1Signature, {
+  commitment: "confirmed",
+  maxSupportedTransactionVersion: 1,
+});
+assert.notEqual(v1Fetched, null, "v1 transaction must be RPC-readable");
+assert.equal(v1Fetched.version, 1);
+const v1History = await gtfa(
+  recipient.publicKey.toBase58(),
+  gtfaConfig({ filters: { status: "succeeded" } }),
+);
+const v1Entry = v1History.data.find(
+  (entry) => signatureOf(entry) === v1Signature,
+);
+assert.notEqual(
+  v1Entry,
+  undefined,
+  "gTFA did not return the v1 transaction through its inline recipient",
+);
+assert.equal(v1Entry.version, 1);
+assert.equal(
+  v1Entry.transaction.message.accountKeys.includes(
+    recipient.publicKey.toBase58(),
+  ),
+  true,
+  "v1 recipient is not present in the inline account list",
+);
+assert.equal(
+  (v1Entry.transaction.message.addressTableLookups ?? []).length,
+  0,
+  "v1 transaction unexpectedly carries address-table lookups",
+);
+
 console.log(
   JSON.stringify(
     {
@@ -423,6 +487,7 @@ console.log(
       alt: lookupTableAddress.toBase58(),
       ed25519Signature,
       v0AltSignature: v0Signature,
+      v1Signature,
     },
     null,
     2,

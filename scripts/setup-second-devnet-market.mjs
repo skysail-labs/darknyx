@@ -292,7 +292,6 @@ const config = {
   vaultConfigPda: primary.vaultConfigPda,
   numTrees: primary.numTrees,
   merkleTreePdas: primary.merkleTreePdas,
-  settleLookupTable: primary.settleLookupTable,
   protocol: primary.protocol,
   markets: [
     {

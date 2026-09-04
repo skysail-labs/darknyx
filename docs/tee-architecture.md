@@ -43,7 +43,7 @@ dstack gateway → Intel TDX CVM
     shared oracle cache
     VALID_MATCH_BATCH prover
     K Merkle mirrors
-    shared ALT pool + RPC client
+    transaction-v1 builder + RPC client
     K dstack-derived settlement signers
                          │ HTTPS RPC + signed txs
                          ▼
@@ -78,7 +78,7 @@ crates/darknyx-tee/src/
 ├── oracle/               boot-selected Pyth source verification and shared cache
 ├── merkle/               K cold-boot/live mirrors
 ├── prover/               witness, leaf/constraint guards, ark/rapidsnark/icicle
-├── settle/               lock, proof, ALT, Tx D, outcomes, metrics, sweepers
+├── settle/               lock, proof, v1 Tx D, outcomes, metrics, sweepers
 ├── persistence/          auth + pending marker/lock snapshots
 └── solana_rpc/           RPC transport and transaction reconciliation
 ```
@@ -112,7 +112,7 @@ A governed real-settlement boot:
    and replace environment economics with the finalized governed values.
 8. Cold-boot K Merkle mirrors from `DARKNYX_TEE_SYNC_FROM_SLOT`, then begin
    live reconciliation.
-9. Load the N=16 proving key/backend and rolling ALT state.
+9. Load the N=16 proving key/backend and transaction-v1 resource limits.
 10. Restore auth and pending sweeper snapshots from the dstack-encrypted volume.
 11. Spawn oracle, slot, priority-fee, governance, mirror, sweeper, and per-market
     matcher/scheduler tasks.
@@ -163,7 +163,8 @@ For every market the process creates:
 - a settlement scheduler that always assembles a single-market N=16 proof.
 
 The markets share authentication, oracle cache, prover artifacts, K mirrors,
-K signer keys, RPC, ALT pool, and a venue-wide whole-batch semaphore.
+K signer keys, RPC, the transaction-v1 builder, and a venue-wide whole-batch
+semaphore.
 `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` is clamped to 1..8 and defaults to 1.
 Within one batch, `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` controls concurrent Tx D
 sends (default 16).
@@ -313,13 +314,13 @@ freedom to inflate value or change output ownership.
 
 Each market scheduler emits at most 16 active matches. `assemble_batch` pads
 dummy slots and constructs one proof witness. The venue semaphore bounds whole
-batches in flight; rolling ALT mutations remain serialized.
+batches in flight. Settlement has no shared lookup-table mutation: Tx D uses
+the v1 format and carries every account inline.
 
 ```text
 A  lock buyer/seller notes in independent transactions
 B  prove N=16 and verify_match_batch → read-only marker
-C  create/extend a per-batch ALT and wait until it is usable
-D  send each active tee_forced_settle_batched independently
+D  send each active v1 tee_forced_settle_batched independently
 E  sweep the marker only at/after its derived expiry
 ```
 
@@ -338,8 +339,11 @@ Important properties:
 - User-output inners derive from private consumed inners. Fee inners derive
   from the governed epoch key, consumed use tag, and role.
 - The 128-byte recovery envelope is signed but opaque to L1.
-- A worst-case v0 Tx D stacks the static settle ALT and a per-batch ALT; the
-  committed size regression keeps it below the 1,232-byte cap.
+- Tx D's v1 message-level `transactionConfig` explicitly carries
+  `computeUnitLimit`, `loadedAccountsDataSizeLimit`, and
+  `priorityFeeLamports` (a total-lamport fee, converted from the RPC's per-CU
+  quote). Its 1,392-byte measured wire form has 2,704 bytes of headroom under
+  the 4,096-byte cap; the committed regression also enforces the 64-account cap.
 
 ### Outcomes and confirmation
 

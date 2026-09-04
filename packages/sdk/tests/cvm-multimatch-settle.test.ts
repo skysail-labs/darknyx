@@ -1,16 +1,16 @@
 /**
  * Multi-match concurrent-settle profiler (perf — settle throughput bottleneck).
  *
- * The 1-match cvm-settle-e2e hides the per-match on-chain settle cost behind the
- * one-time per-batch ALT-activation wait (~14s). This test deposits M real
+ * The 1-match cvm-settle-e2e cannot expose the marginal per-match on-chain
+ * settle cost. This test deposits M real
  * crossing pairs and submits them together so the matcher settles several
  * matches — across one or a few batches — letting us read the PER-MATCH Tx D
  * confirm latency from the CVM logs:
  *
  *   phala cvms logs <cvm> | grep "settle Tx D confirmed (per-match)"
  *
- * The FIRST Tx D in a batch eats the ALT-activation wait; the marginal ones
- * reveal the steady-state on-chain settle ceiling — post tree-sharding the
+ * The marginal Tx Ds reveal the steady-state on-chain settle ceiling — post
+ * tree-sharding the
  * concurrent Tx D's round-robin across K shard fee-payers + K trees, so they
  * co-include in a block rather than serializing on a single tree's Merkle
  * append. That ceiling is the number that decides whether the on-chain settle,
@@ -341,32 +341,52 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     // same matcher tick → ideally one batch of M (or a few — both are useful:
     // a multi-match batch shows the per-Tx-D loop; multiple batches show #4's
     // pipelining).
+    const firstOrderId = (orders[0] as { order_id: string }).order_id;
+    let sawPendingSettlement = false;
     const submitStart = Date.now();
-    const statuses = await Promise.all(
-      orders.map((o) =>
-        gwFetch(`${GATEWAY}/orders`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(o),
-        }).then(async (r) => {
-          if (!String(r.status).startsWith("2"))
-            console.log(
-              `  !! /orders ${r.status}: ${(await r.text()).slice(0, 200)}`,
-            );
-          return r.status;
-        }),
-      ),
-    );
+    const submitOrder = (order: object) =>
+      gwFetch(`${GATEWAY}/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(order),
+      }).then(async (response) => {
+        if (!String(response.status).startsWith("2")) {
+          console.log(
+            `  !! /orders ${response.status}: ${(await response.text()).slice(0, 200)}`,
+          );
+        }
+        return response.status;
+      });
+
+    // The RA-TLS harness pins one HTTP/1 connection. Submit one complete pair
+    // before polling it: polling while its counter-order is still queued on
+    // that same connection prevents the counter-order from reaching the CVM.
+    // Once both POSTs are accepted, the pair can enter pending_settlement and
+    // remains there throughout proof generation, giving the client a genuine
+    // externally observed finality-gating assertion.
+    const statuses = await Promise.all(orders.slice(0, 2).map(submitOrder));
+    const pendingDeadline = Date.now() + 20_000;
+    while (!sawPendingSettlement && Date.now() < pendingDeadline) {
+      const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (orderStatus.status === 200) {
+        const body = (await orderStatus.json()) as { status?: string };
+        sawPendingSettlement = body.status === "pending_settlement";
+      }
+      if (!sawPendingSettlement) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      }
+    }
+    statuses.push(...(await Promise.all(orders.slice(2).map(submitOrder))));
     const accepted = statuses.filter((s) => String(s).startsWith("2")).length;
     console.log(
       `  · submitted ${orders.length} orders in ${Date.now() - submitStart}ms — ${accepted} accepted (2xx)`,
     );
     expect(accepted, "some orders rejected").toBe(orders.length);
-    const firstOrderId = (orders[0] as { order_id: string }).order_id;
-
     // This fixture fully fills both inputs at a positive 30-bps fee. Every
     // confirmed match therefore appends note_c + note_d, one buyer quote
     // change, and the base + quote fee notes (5 leaves). Waiting for the old
@@ -376,7 +396,6 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const wantLeaves = depositCount + outputLeavesPerMatch * MATCHES;
     const settleStart = Date.now();
     let finalCount = depositCount;
-    let sawPendingSettlement = false;
     const deadline = Date.now() + SETTLE_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {

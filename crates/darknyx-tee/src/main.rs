@@ -48,7 +48,7 @@ use darknyx_tee::prover::RapidsnarkMatchBatchProver;
 use darknyx_tee::prover::{ArkMatchBatchProver, Prover, PRODUCTION_BATCH_N};
 use darknyx_tee::settle::worker::SettleWorkerCtx;
 use darknyx_tee::settle::{
-    alt_account, SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState,
+    SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState,
 };
 use darknyx_tee::solana_rpc::{Commitment, SolanaRpcClient};
 use darkpool_matcher::config::MatchConfig;
@@ -1036,29 +1036,8 @@ async fn build_settle_driver(
     };
     tracing::info!(backend, "VALID_MATCH_BATCH proving key loaded");
 
-    // Static settle ALT (vault_config + instructions_sysvar +
-    // system_program), created at devnet-setup. When its on-chain
-    // address is supplied via DARKNYX_TEE_SETTLE_LOOKUP_TABLE, stack it
-    // under the per-batch ALT so the v0 settle tx (Tx D) stays under
-    // the 1232-byte cap on the real-mint path. The address list MUST
-    // match the on-chain ALT's contents in order — `static_alt_addresses()`
-    // mirrors the SDK's `extendLookupTable` order exactly.
-    let static_alt = cfg.settle_lookup_table.map(|lut| {
-        alt_account(
-            solana_address::Address::new_from_array(lut),
-            darknyx_tee::settle::settle_batched::static_alt_addresses(cfg.num_trees),
-        )
-    });
-    match &static_alt {
-        Some(a) => tracing::info!(alt = %a.key, "static settle ALT threaded into settle worker"),
-        None => tracing::warn!(
-            "no static settle ALT (DARKNYX_TEE_SETTLE_LOOKUP_TABLE unset) — \
-             real-mint settle tx may exceed 1232 bytes"
-        ),
-    }
-
     // Per-shard TEE keypairs as Arcs; `[0]` is the PRIMARY (it pays the
-    // per-batch verify/ALT/close txs, so it is every marker's `payer`).
+    // per-batch verify/close txs, so it is every marker's `payer`).
     let tee_keypairs = tee_keypairs.into_iter().map(Arc::new).collect::<Vec<_>>();
 
     // The marker close (Tx E) runs ASYNCHRONOUSLY after marker expiry: the worker
@@ -1252,10 +1231,6 @@ async fn build_settle_driver(
         tee_keypairs,
         signing_keys: signing_keys.into_iter().map(Arc::new).collect(),
         prover,
-        static_alt,
-        alt_pool: Arc::new(tokio::sync::Mutex::new(
-            darknyx_tee::settle::alt_pool::AltPool::new(),
-        )),
         settle_state,
         confirm_timeout: Duration::from_secs(60),
         redrive_budget: darknyx_tee::settle::worker::REDRIVE_WALL_CLOCK_BUDGET,

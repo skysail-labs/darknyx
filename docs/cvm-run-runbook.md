@@ -117,7 +117,7 @@ cp packages/sdk/.env.example packages/sdk/.env   # then edit SOLANA_RPC_URL=<cre
 set -a; . packages/sdk/.env; set +a               # export SOLANA_RPC_URL for the scripts below
 ```
 
-Rebuild mints + the settle ALT + protocol config only if missing/stale (writes
+Rebuild mints + protocol config only if missing/stale (writes
 `.devnet/e2e-config.json` that every devnet/cvm test reads):
 
 ```sh
@@ -143,7 +143,6 @@ export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
-ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs     # FIRST — so the mirror cold-boots an empty tree (all K shards)
@@ -159,7 +158,6 @@ DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
-DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=$K

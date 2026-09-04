@@ -228,7 +228,7 @@ d("Surfpool canonical vault qualification", () => {
       expect(await connection.getAccountInfo(marker, "confirmed")).not.toBeNull();
       const landed = await connection.getTransaction(signature, {
         commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
+        maxSupportedTransactionVersion: 1,
       });
       if (!landed) throw new Error("verified transaction is not queryable");
       const computeUnits = Number(landed.meta?.computeUnitsConsumed ?? 0n);

@@ -173,7 +173,7 @@ async function fetchLeafIndex(
 ): Promise<bigint> {
   const tx = await conn.getTransaction(signature, {
     commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
+    maxSupportedTransactionVersion: 1,
   });
   if (!tx) {
     throw new Error(
@@ -219,7 +219,7 @@ export async function readNoteCreated(
 ): Promise<NoteCreatedLeaf> {
   const tx = await conn.getTransaction(signature, {
     commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
+    maxSupportedTransactionVersion: 1,
   });
   if (!tx) {
     throw new Error(
@@ -259,7 +259,7 @@ export async function readNoteMerged(
 ): Promise<NoteMergedLeaf> {
   const tx = await conn.getTransaction(signature, {
     commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
+    maxSupportedTransactionVersion: 1,
   });
   if (!tx) {
     throw new Error(

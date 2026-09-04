@@ -16,8 +16,7 @@
  *   5. Creates every configured Merkle-tree shard and resets it to empty.
  *   6. Initializes the mint-pair `MarketConfig` and sets the global 30 bps
  *      protocol fee to a synthetic protocol-owner commitment.
- *   7. Creates the static settlement address lookup table.
- *   8. Writes everything to `.devnet/e2e-config.json` so the flow test can
+ *   7. Writes everything to `.devnet/e2e-config.json` so the flow test can
  *      consume it without duplicating PDA derivation.
  *
  * NOT done here (intentionally, to keep this test focused on setup):
@@ -44,11 +43,9 @@ import {
 } from "@solana-program/token";
 import { TOKEN_PROGRAM_ID } from "./helpers/e2e-helpers.js";
 import {
-  AddressLookupTableProgram,
   Connection,
   Keypair,
   PublicKey,
-  SYSVAR_INSTRUCTIONS_PUBKEY,
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
@@ -62,7 +59,6 @@ import {
   buildSetProtocolConfigInstruction,
   marketConfigPda,
   merkleTreePda,
-  staticSettleAltAddresses,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
 import {
@@ -113,7 +109,7 @@ const NUM_TREES_PINNED = (process.env.DARKNYX_NUM_TREES ?? "").trim() !== "";
  *  the CVM's `DARKNYX_TEE_NUM_TREES`.
  *
  *  `let`, not `const`: when unpinned, it is reconciled to the DEPLOYED value in
- *  `tryReadVaultConfig` before anything downstream (tree init, the settle ALT,
+ *  `tryReadVaultConfig` before anything downstream (tree init,
  *  the written `e2e-config.json`) uses it. Adopting reality cannot cause a wrong
  *  re-foundation — `initialize` is skipped whenever a valid config exists. */
 let NUM_TREES = (() => {
@@ -224,17 +220,6 @@ export interface E2EConfig {
   numTrees: number;
   /** The K `MerkleTree` shard PDAs, indexed by tree_id. */
   merkleTreePdas: string[];
-  /**
-   * v3 — Address Lookup Table that hoists the static settle accounts
-   * (vault_config, instructions_sysvar, system_program) AND the K merkle_tree
-   * shard PDAs out of the settle tx's account-keys list. Saves bytes on every
-   * settle vs. legacy txs, which buys headroom under the 1232-byte cap.
-   *
-   * Optional: callers can still send a legacy settle tx when the marker
-   * fits; the v0 wrapper is preferred for change-note / re-lock paths
-   * where the tx is at the edge of the 1232-byte cap.
-   */
-  settleLookupTable?: string;
   createdAt: string;
 }
 
@@ -274,7 +259,7 @@ async function tryReadVaultConfig(
       );
     }
     // Unpinned: adopt what is deployed. This runs BEFORE the tree-init loops,
-    // the settle ALT, and the e2e-config.json write, so every downstream
+    // the tree-init loops and the e2e-config.json write, so every downstream
     // consumer sees the reconciled value.
     bullet(
       `adopting deployed K=${teePubkeys.length} (DARKNYX_NUM_TREES unset; default was ${NUM_TREES})`,
@@ -330,7 +315,7 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
   }, 30_000);
 
   it(
-    "creates token pair, initialises vault + protocol config + settle ALT, writes config.json",
+    "creates token pair, initialises vault + protocol config, writes e2e-config.json",
     { timeout: 180_000 },
     async () => {
       // ────────────────────────────────────────────────────────────────────
@@ -583,56 +568,7 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
       tx(`set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps)`, spcSig);
 
       // ────────────────────────────────────────────────────────────────────
-      step(4, "Create Address Lookup Table for settle txs (size relief)");
-      // ────────────────────────────────────────────────────────────────────
-      // Hoist the static settle accounts (vault_config, instructions sysvar,
-      // system program) AND the K merkle_tree shard PDAs out of the settle tx's
-      // account-keys list — the address-lookup-table compresses each from 32
-      // bytes to a 1-byte index. With sharding the worker references its
-      // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
-      // the Rust static_alt_addresses).
-      const altAddresses = await staticSettleAltAddresses(
-        VAULT_PROGRAM_ID,
-        NUM_TREES,
-      );
-      // Use the blockhash's context slot, not getSlot("confirmed") — the latter
-      // can return a leader-skipped slot absent from SlotHashes → ALT create
-      // fails with "is not a recent slot" (CRYPTOGRAPHY.md §9).
-      const slot = (await connection.getLatestBlockhashAndContext()).context
-        .slot;
-      const [createAltIx, settleLookupTable] =
-        await AddressLookupTableProgram.createLookupTable({
-          authority: admin.publicKey,
-          payer: admin.publicKey,
-          recentSlot: slot,
-        });
-      const extendAltIx = AddressLookupTableProgram.extendLookupTable({
-        payer: admin.publicKey,
-        authority: admin.publicKey,
-        lookupTable: settleLookupTable,
-        addresses: altAddresses,
-      });
-      const altTx = new Transaction().add(createAltIx, extendAltIx);
-      const altSig = await sendAndConfirmTransaction(
-        connection,
-        altTx,
-        [admin],
-        {
-          commitment: "confirmed",
-        },
-      );
-      tx("createLookupTable + extendLookupTable", altSig);
-      bullet(`settle ALT: ${settleLookupTable.toBase58()}`);
-      // Solana requires a fresh ALT to be at least one slot old before it
-      // can be referenced by a tx. Block briefly so the test that runs
-      // immediately after setup doesn't hit "ALT not found".
-      const altReadySlot = await connection.getSlot("confirmed");
-      while ((await connection.getSlot("confirmed")) <= altReadySlot) {
-        await new Promise((r) => setTimeout(r, 200));
-      }
-
-      // ────────────────────────────────────────────────────────────────────
-      step(5, `Persist config to ${CONFIG_PATH}`);
+      step(4, `Persist config to ${CONFIG_PATH}`);
       // ────────────────────────────────────────────────────────────────────
       const cfg: E2EConfig = {
         l1RpcUrl: L1_RPC_URL,
@@ -666,7 +602,6 @@ maybeDescribe("devnet E2E — one-shot setup", () => {
         vaultConfigPda: vaultPda.toBase58(),
         numTrees: NUM_TREES,
         merkleTreePdas: merkleTreePdas.map((p) => p.toBase58()),
-        settleLookupTable: settleLookupTable.toBase58(),
         createdAt: new Date().toISOString(),
       };
       saveConfig(cfg);

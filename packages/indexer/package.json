@@ -19,7 +19,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@solana/web3.js": "3.0.0-rc.2"
+    "@solana/web3.js": "3.0.0-rc.3"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

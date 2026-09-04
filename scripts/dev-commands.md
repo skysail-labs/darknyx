@@ -131,14 +131,14 @@ cargo test -p vault canonical_payload_hash_fixed_vector
 ### 1.2 `darknyx-tee` (the in-TEE binary)
 
 The TEE crate has the densest unit + integration coverage — matcher tick,
-order intake, settle assembler/worker, ALT pool, Merkle mirror, the HTTP
+order intake, settle assembler/worker, Merkle mirror, the HTTP
 surface, the RPC client, auth.
 
 ```sh
 cargo test -p darknyx-tee --lib                       # ~180 unit tests (fast)
 
 # Focused module runs
-cargo test -p darknyx-tee --lib settle::              # settle worker + ALT pool + assemble + pipeline
+cargo test -p darknyx-tee --lib settle::              # settle worker + assemble + v1 pipeline
 cargo test -p darknyx-tee --lib merkle::              # mirror (O(depth) inclusion proof) + sync + events
 cargo test -p darknyx-tee --lib api::auth             # argon2 + JWT + revocation + admin-gate
 cargo test -p darknyx-tee --lib matcher::             # book + interval + openings
@@ -242,7 +242,7 @@ redeploy the vault — see CLAUDE.md §5. Only a TEE-proved circuit change
 The exact pre-release Surfpool source revision and binary checksums live in
 `scripts/surfpool/pin.json`; build or install only that revision. The lifecycle
 requires the fingerprinted devnet-admin SBF and keeps every generated key,
-mint, ALT, config, log, and signature below `.surfpool/`:
+mint, config, log, and signature below `.surfpool/`:
 
 ```sh
 bash scripts/build-vault-sbf.sh devnet-admin
@@ -321,10 +321,8 @@ This is the canonical "start clean" step. It: creates a **fresh BASE +
 QUOTE SPL mint pair**, `vault::initialize(operationsAdmin, teePubkeys, rootKey,
 numTrees)`, initializes the mint-pair **`MarketConfig`**, loops
 **`initialize_tree(j)`** for j∈0..K, **`reset_merkle_tree(j)`** per shard,
-`set_protocol_config` (owner commitment + 30 bps fee), creates the **static
-settle ALT** (`[vault_config, sysvar, system, merkle_tree(0..K-1)]` — the
-`settleLookupTable` the CVM needs), and writes everything to
-**`.devnet/e2e-config.json`** (mints, settle ALT, protocol config,
+`set_protocol_config` (owner commitment + 30 bps fee), and writes everything to
+**`.devnet/e2e-config.json`** (mints, protocol config,
 **`numTrees`**, **`merkleTreePdas[]`**, and governed market fields).
 
 ```sh
@@ -367,7 +365,7 @@ The mints live in `.devnet/e2e-config.json` (`baseMint.pubkey` /
 `quoteMint.pubkey`), created by `devnet-setup.test.ts`. To rotate them:
 
 1. Re-run `devnet-setup.test.ts` (§4.4) — it mints a **fresh pair** and
-   rewrites `e2e-config.json` + a new settle ALT.
+   rewrites `e2e-config.json`.
 2. Re-deploy the CVM with the new mints (§5.3) — the `DARKNYX_TEE_BASE_MINT` /
    `DARKNYX_TEE_QUOTE_MINT` env values must equal the on-chain mints the
    deposited notes use, or **intake rejects every order** on a mint
@@ -465,7 +463,6 @@ after**):
 umask 077
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
-ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$DEVNET_RPC")          # cold-boot floor (so the sync rebuilds the CURRENT tree)
 cat > /tmp/darknyx.env <<EOF
@@ -476,7 +473,6 @@ DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
 DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
-DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=4                              # shard count; MUST equal e2e-config numTrees (1 = single-shard)
@@ -501,11 +497,10 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58; supply both or neither. **Omit both → placeholder dev mints with settlement disabled** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints and have finalized `VaultConfig` + `MarketConfig` available. |
 | `DARKNYX_TEE_MARKET_SYMBOL` | API + signed order routing | Display/canonical order symbol for the configured mint pair (default `SOL-USDC`; 1–32 bytes). |
 | `DARKNYX_TEE_MARKETS_JSON` | multi-market boot + routing | Preferred governed config: JSON array of 1–16 `{symbol,base_mint,quote_mint,oracle_feed_id}` entries. Symbols and ordered pairs must be unique. Do not also set the singular mint envs. Every pair needs an enabled finalized `MarketConfig`. |
-| `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
 | `DARKNYX_TEE_FEE_RATE_BPS` | matcher | Simulator/loadgen default only (30; 0 disables fees there). Governed real-market boot adopts finalized `VaultConfig.fee_rate_bps`. Charged on BOTH legs → 2 fee notes. |
 | `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | Simulator/loadgen default only (32-byte hex). Governed real-market boot adopts finalized `VaultConfig.protocol_owner_commitment`. |
 | `DARKNYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
-| `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
+| `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
 | `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` | settle scheduler | whole batches driven concurrently across the **entire CVM** (not per market; 1..=8, default 1). Raise only under the benchmark methodology; CPU proof contention can erase the IO overlap. |
 | `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
 | `DARKNYX_TEE_FEED_IDS` | oracle | Single-market comma-separated Pyth ids. Multi-market deploys take each feed from `DARKNYX_TEE_MARKETS_JSON`. Router mode batches unique feeds; push mode reads their derived accounts in one finalized RPC call. |
@@ -548,7 +543,7 @@ The flagship TEE test: the **CVM** does the matching AND the settle. The
 harness (`packages/sdk/tests/cvm-settle-e2e.test.ts`) deposits two real
 notes, generates VALID_INPUT proofs, POSTs a crossing bid+ask to the CVM's
 `POST /orders`, and the CVM's scheduler runs
-`lock → prove(N=16) → verify_match_batch → per-batch ALT → tee_forced_settle_batched → close`,
+`lock → prove(N=16) → verify_match_batch → v1 tee_forced_settle_batched → close`,
 signed by its dstack key. It asserts the on-chain `VaultConfig.leaf_count`
 grows.
 
@@ -558,7 +553,7 @@ grows.
 DEVNET_RPC="https://<your-devnet-rpc-provider>/<credential>"
 GW="https://$CVM-8443s.dstack-pha-$NODE.phala.network"  # resolve $CVM + $NODE first
 
-# 1. Fresh devnet state (mints + settle ALT + reset + e2e-config.json):  §4.4
+# 1. Fresh devnet state (mints + reset + e2e-config.json):  §4.4
 # 2. CVM deployed with the REAL mints + fee 30 + owner + dedicated RPC + sync floor: §5.1–5.3
 # 3. vault.tee_pubkey rotated to the CVM signer + signer funded:  §5.4
 # 4. Tree reset right before the run:
@@ -738,7 +733,7 @@ SOLANA_RPC_URL="$DEVNET_RPC" RUN_DEVNET_DW=1 \
 ```
 
 Run `devnet-setup.test.ts` first if `.devnet/e2e-config.json` is missing
-(it writes the mints + settle ALT + protocol config every other devnet
+(it writes the mints + protocol config every other devnet
 test reads).
 
 `devnet-merge.test.ts` is the sibling for the **in-pool note merge** ix
@@ -798,7 +793,7 @@ SOLANA_RPC_URL="$DEVNET_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scri
 Symptom that you need it: `StaleMerkleRoot (6004 / 0x1774)` on withdraw, or
 the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 `right_path` / `roots[]`; leaves nullifier / wallet / note-lock PDAs intact.
-`devnet-setup.test.ts` does this too (plus fresh mints + ALT).
+`devnet-setup.test.ts` does this too (plus fresh mints and protocol config).
 
 ---
 
@@ -811,11 +806,8 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Loadgen: **0 matches**, logs show `swept expired orders` | `--expiry-slot` below the live Solana slot | use the default 2e9 (or `>` the live slot) |
 | Loadgen: **0 matches**, no sweep | orders mispriced vs the live oracle → circuit breaker | set `--oracle-twap` to the finalized push-account EMA (§7) |
 | Settle: `InvalidMarkerExpiry (6018)` | marker expiry outside `clock.slot < e <= clock.slot+300` | margin is 250 in the worker; ensure the CVM's RPC slot is fresh (slot poller) |
-| Settle: `<slot> is not a recent slot` (CreateLookupTable) | ALT `recent_slot` ahead of the simulating replica | the worker backs off 32 slots; transient — retry |
-| Settle: `did not confirm … [None]` | ALT not active yet, or tx dropped | the worker waits a slot + rebroadcasts; a hard timeout now errors `AltNotActive` (retryable) |
-| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT also hoists the consumed-note PDAs; the worker logs the inline-account breakdown on overflow. |
-| Settle: `Transaction too large: …5224 B…` (ALT extend) | per-batch ALT extend not chunked for a big batch | fixed: extends chunk at ≤25 addr/tx + fire concurrently (image ≥ `tee-v3-hardening-26`) |
-| Settle stage ~13s wall despite co-inclusion | per-batch ALT activation finality wait (Tx D rebroadcasts until the freshly-extended ALT is loadable) | inherent pre-Alpenglow; concurrent extends collapse it to ONE activation window |
+| Settle: `Transaction too large: …` (settle Tx D) | v1 Tx D exceeded 4096 B or 64 inline accounts | inspect the pipeline size/account regression; split only if the measured v1 limit is genuinely exhausted |
+| Settle: `MaxLoadedAccountsDataSizeExceeded` | v1 loaded-account-data ceiling is too low | simulate once at the 64 MiB maximum, read `loadedAccountsDataSize`, then round up to the next 32-KiB page with headroom |
 | All ixs fail `ConstraintSeeds (2006)` after a redeploy | old-layout `VaultConfig` PDA (size/offset mismatch) | `node scripts/close-vault-config.mjs` then `devnet-setup` (§4.4) |
 | Settle signed by an unregistered key → `Unauthorized` | the CVM's K shard signers aren't all registered | `rotate-tee-pubkey.mjs <K0..Kn>` (the full set); `fund-tee-keys.mjs` |
 | `merkle reconcile DIVERGED` in CVM logs | trees reset on-chain underneath the append-only mirror (dev resets without CVM restart) | cosmetic for settle; restart the CVM (or bump `DARKNYX_TEE_SYNC_FROM_SLOT`). Logged once per shard. |

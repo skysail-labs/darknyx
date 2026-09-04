@@ -284,7 +284,7 @@ describe("same-origin live proxy", () => {
         method: "getTransaction",
         params: [
           "signature",
-          { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+          { commitment: "confirmed", maxSupportedTransactionVersion: 1 },
         ],
       }),
     });
@@ -293,7 +293,7 @@ describe("same-origin live proxy", () => {
       method: "getTransaction",
       params: [
         "signature",
-        { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+        { commitment: "confirmed", maxSupportedTransactionVersion: 1 },
       ],
     });
   });

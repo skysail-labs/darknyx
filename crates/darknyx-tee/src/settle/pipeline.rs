@@ -1,28 +1,22 @@
 //! Assembly of Tx D — the settlement transaction itself.
 //!
-//! `tee_forced_settle_batched` is the only transaction in the pipeline that must be
-//! a v0 transaction stacking Address Lookup Tables, because it does not otherwise
-//! fit under Solana's 1232-byte limit. It carries three instructions, in order:
+//! `tee_forced_settle_batched` is the only transaction in the pipeline that uses
+//! Solana's v1 transaction format. Its payload and inline account list exceed the
+//! legacy/v0 1232-byte limit, while v1 permits up to 4096 bytes. It carries two
+//! instructions, in order:
 //!
-//!   1. `ComputeBudget::SetComputeUnitLimit` (and, when a priority fee is bid,
-//!      `SetComputeUnitPrice`) — first, so the right-sized CU limit applies to
-//!      everything after it;
-//!   2. the Ed25519 precompile instruction verifying the TEE signature over the
+//!   1. the Ed25519 precompile instruction verifying the TEE signature over the
 //!      canonical payload hash ([`super::ed25519`]);
-//!   3. the settle instruction itself ([`super::settle_batched`]).
+//!   2. the settle instruction itself ([`super::settle_batched`]).
 //!
-//! These compile into a `v0::Message` over the lookup tables the worker supplies.
-//! In the configured deployment that is two: the static settle ALT built at
-//! devnet setup (`vault_config`, `instructions_sysvar`, `system_program`) and the
-//! per-batch ALT built by Tx C. `static_alt` is optional, and with it unset the
-//! transaction rides on the per-batch ALT alone and is correspondingly larger.
-//! The TEE keypair signs as both fee-payer and `tee_authority`.
+//! V1 does not support Address Lookup Tables. Every account is inline, and the
+//! compute-unit limit, loaded-account-data limit, and optional total priority fee
+//! live in the v1 message configuration rather than no-op ComputeBudget
+//! instructions. The TEE keypair signs as both fee-payer and `tee_authority`.
 //!
-//! On the two-ALT path the assembled transaction measures 1172 bytes, leaving 60
-//! bytes of headroom.
-//! Adding an account or payload field here overflows the limit and surfaces as
-//! `TransactionTooLarge` at send time — see `CRYPTOGRAPHY.md` §9 before changing
-//! either instruction's accounts or data.
+//! This format is opt-in and requires the cluster's transaction-v1 feature to be
+//! active. Devnet and the supported local validators have activated it; mainnet
+//! deployment remains gated on cluster activation.
 //!
 //! Mirrored by `packages/sdk/tests/helpers/batched-settle.ts`.
 
@@ -31,7 +25,7 @@ use solana_address::Address;
 use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
-use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
+use solana_message::{v1, VersionedMessage};
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 
@@ -114,6 +108,13 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 /// image before the reduced fee is relied on — a too-low limit fails the
 /// settle tx loud-and-safe with `ComputationalBudgetExceeded` (no fund risk).
 const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 115_000;
+/// Provisional maximum account data Tx D may load. V1 defaults this resource to
+/// zero, so an explicit limit is mandatory. The migration deliberately starts
+/// at the runtime's legacy/v0 default maximum; the Surfpool settlement
+/// simulation must report `loadedAccountsDataSize`, after which this is rounded
+/// up to the next 32-KiB page with measured headroom. Guessing below the loaded
+/// upgradeable-program data would make every otherwise-valid settle fail.
+pub(crate) const SETTLE_LOADED_ACCOUNTS_DATA_SIZE_LIMIT: u32 = 64 * 1024 * 1024;
 /// CU ceiling for each lock_note tx (Tx A). The proof-backed LiteSVM test
 /// measures 101,076 CU; 136k leaves about 34% local-runtime headroom.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
@@ -167,53 +168,45 @@ pub(crate) fn budget_ixs(limit: u32, priority_fee: u64) -> Vec<Instruction> {
     v
 }
 
-/// Compile + sign the settle v0 transaction. `alts` is the static
-/// settle ALT followed by the per-batch ALT (order doesn't matter
-/// for resolution, but convention is static-first).
+/// Compile and sign the settle v1 transaction with every account inline.
 ///
 /// Returns the base64-encoded wire bytes ready for
 /// `SolanaRpcClient::send_transaction`.
-pub fn build_settle_v0_tx_b64(
+pub fn build_settle_v1_tx_b64(
     tee_keypair: &Keypair,
     ed25519_ix: Instruction,
     settle_ix: Instruction,
-    alts: &[AddressLookupTableAccount],
     blockhash: Hash,
+    priority_fee_micro_lamports_per_cu: u64,
 ) -> Result<String, RpcError> {
-    // Delegate compile/sign to `build_settle_v0_tx` (single source) +
+    // Delegate compile/sign to `build_settle_v1_tx` (single source) +
     // serialise to the base64 wire form.
-    let tx = build_settle_v0_tx(tee_keypair, ed25519_ix, settle_ix, alts, blockhash)?;
-    let wire = bincode::serialize(&tx)
-        .map_err(|e| RpcError::Schema(format!("v0 tx bincode serialise failed: {e}")))?;
+    let tx = build_settle_v1_tx(
+        tee_keypair,
+        ed25519_ix,
+        settle_ix,
+        blockhash,
+        priority_fee_micro_lamports_per_cu,
+    )?;
+    let wire = wincode::serialize(&tx)
+        .map_err(|e| RpcError::Schema(format!("v1 tx wincode serialise failed: {e}")))?;
 
-    // Pre-send size guard. The settle tx rides near the 1232-byte cap; if an
-    // account that SHOULD be ALT-referenced fell inline (e.g. a per-batch ALT
-    // that didn't cover this batch's PDAs), the RPC rejects it post-send with an
-    // opaque -32602. Catch it here + log WHICH accounts are inline (static keys)
-    // vs ALT-looked-up, so the failure names its cause instead of a byte count.
-    if wire.len() > SOLANA_TX_SIZE_CAP {
-        if let VersionedMessage::V0(m) = &tx.message {
+    // Pre-send guard against the v1 4096-byte hard ceiling. Log the inline
+    // account count because v1 has no ALT indirection to hide an accidental
+    // account expansion.
+    if wire.len() > SOLANA_V1_TX_SIZE_CAP {
+        if let VersionedMessage::V1(m) = &tx.message {
             let inline: Vec<String> = m.account_keys.iter().map(|k| k.to_string()).collect();
-            let alt_lookups: usize = m
-                .address_table_lookups
-                .iter()
-                .map(|l| l.writable_indexes.len() + l.readonly_indexes.len())
-                .sum();
             tracing::error!(
                 raw_bytes = wire.len(),
-                cap = SOLANA_TX_SIZE_CAP,
+                cap = SOLANA_V1_TX_SIZE_CAP,
                 inline_accounts = m.account_keys.len(),
-                alt_lookups,
-                alts_passed = alts.len(),
                 inline = ?inline,
-                "settle Tx D over the 1232-byte cap — accounts that should be \
-                 ALT-referenced are inline; check the per-batch ALT covers this \
-                 batch's locks/consumed PDAs",
+                "settle Tx D exceeds the v1 transaction-size cap",
             );
         }
         return Err(RpcError::Schema(format!(
-            "settle Tx D is {} raw bytes (cap {SOLANA_TX_SIZE_CAP}); too many inline accounts \
-             — per-batch ALT likely missing this batch's PDAs",
+            "settle Tx D is {} raw bytes (v1 cap {SOLANA_V1_TX_SIZE_CAP})",
             wire.len()
         )));
     }
@@ -234,52 +227,55 @@ pub fn first_signature_b58(tx_b64: &str) -> Option<String> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(tx_b64)
         .ok()?;
-    let tx: VersionedTransaction = bincode::deserialize(&raw).ok()?;
+    let tx: VersionedTransaction = wincode::deserialize(&raw).ok()?;
     tx.signatures.first().map(|s| s.to_string())
 }
 
 /// Solana's hard transaction-size cap (raw wire bytes).
-const SOLANA_TX_SIZE_CAP: usize = 1232;
+const SOLANA_V1_TX_SIZE_CAP: usize = 4096;
 
-/// Same as [`build_settle_v0_tx_b64`] but returns the raw
+/// Same as [`build_settle_v1_tx_b64`] but returns the raw
 /// `VersionedTransaction` (for tests that want to inspect the
-/// compiled message — account count, ALT lookups, wire size).
-///
-/// NOTE: the settle tx (Tx D) deliberately carries only the right-sized
-/// `SetComputeUnitLimit` ix. Payload v9 restores at least 112 bytes of wire
-/// headroom; keeping the price ix off Tx D preserves that regression margin.
-/// Tx D confirmation latency is bound by per-batch ALT activation, not by
-/// priority (a fee cannot make a leader load an ALT that is not rooted yet).
-/// Priority fees remain on the other settle-path transactions.
-pub fn build_settle_v0_tx(
+/// compiled message, resource config, account count, and wire size).
+pub fn build_settle_v1_tx(
     tee_keypair: &Keypair,
     ed25519_ix: Instruction,
     settle_ix: Instruction,
-    alts: &[AddressLookupTableAccount],
     blockhash: Hash,
+    priority_fee_micro_lamports_per_cu: u64,
 ) -> Result<VersionedTransaction, RpcError> {
     let payer = tee_keypair.pubkey();
-    // ComputeBudget limit ix first so the right-sized CU limit applies to the
-    // whole tx; then the ed25519 precompile + the settle ix. No price ix — see
-    // the doc comment (1232-byte cap).
-    let cu_ix = set_compute_unit_limit_ix(SETTLE_COMPUTE_UNIT_LIMIT);
+    let total_priority_fee = priority_fee_lamports(
+        priority_fee_micro_lamports_per_cu,
+        SETTLE_COMPUTE_UNIT_LIMIT,
+    );
+    let mut config = v1::TransactionConfig::empty()
+        .with_compute_unit_limit(SETTLE_COMPUTE_UNIT_LIMIT)
+        .with_loaded_accounts_data_size_limit(SETTLE_LOADED_ACCOUNTS_DATA_SIZE_LIMIT);
+    if total_priority_fee > 0 {
+        config = config.with_priority_fee(total_priority_fee);
+    }
     let message =
-        v0::Message::try_compile(&payer, &[cu_ix, ed25519_ix, settle_ix], alts, blockhash)
-            .map_err(|e| RpcError::Schema(format!("v0 message compile failed: {e}")))?;
-    VersionedTransaction::try_new(VersionedMessage::V0(message), &[tee_keypair])
-        .map_err(|e| RpcError::Schema(format!("v0 tx sign failed: {e}")))
+        v1::Message::try_compile_with_config(&payer, &[ed25519_ix, settle_ix], blockhash, config)
+            .map_err(|e| RpcError::Schema(format!("v1 message compile failed: {e}")))?;
+    VersionedTransaction::try_new(VersionedMessage::V1(message), &[tee_keypair])
+        .map_err(|e| RpcError::Schema(format!("v1 tx sign failed: {e}")))
+}
+
+/// Convert the legacy/v0 priority-fee quote (micro-lamports per CU) into v1's
+/// total-lamport fee, rounding up so a non-zero quote never truncates to zero.
+fn priority_fee_lamports(micro_lamports_per_cu: u64, compute_units: u32) -> u64 {
+    let total_micro_lamports = u128::from(micro_lamports_per_cu) * u128::from(compute_units);
+    let rounded_lamports = total_micro_lamports.div_ceil(1_000_000);
+    rounded_lamports.min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settle::alt::alt_account;
     use crate::settle::ed25519::build_ed25519_verify_ix;
     use crate::settle::payload::MatchResultPayload;
-    use crate::settle::settle_batched::{
-        build_settle_batched_ix, per_batch_alt_addresses, static_alt_addresses,
-    };
-    use solana_address::Address;
+    use crate::settle::settle_batched::build_settle_batched_ix;
 
     fn payload() -> MatchResultPayload {
         MatchResultPayload {
@@ -309,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn settle_v0_tx_compiles_and_fits_under_cap() {
+    fn settle_v1_tx_compiles_inline_and_fits_under_cap() {
         let kp = Keypair::new_from_array([0x42; 32]);
         let p = payload();
         let root = [0xAB; 32];
@@ -318,62 +314,55 @@ mod tests {
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 5, &proof, &root);
 
-        // Production stacks BOTH ALTs (worker.rs): the static settle ALT
-        // (vault_config + sysvar + system program + K merkle_tree shards) under
-        // the per-batch ALT (the 5 derivable PDAs). Both are needed to keep the
-        // worst-case (change-note, no PDA dedup) settle tx under 1120 bytes.
-        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
-        let alt = alt_account(
-            Address::new_from_array([0x55; 32]),
-            per_batch_alt_addresses(&p, &root),
-        );
-
-        let tx = build_settle_v0_tx(
+        let tx = build_settle_v1_tx(
             &kp,
             ed_ix,
             settle_ix,
-            &[static_alt, alt],
             Hash::new_from_array([0x01; 32]),
+            250_000,
         )
-        .expect("v0 compile + sign");
+        .expect("v1 compile + sign");
 
-        // This is the worst case: distinct change notes, all accounts present,
-        // a full recovery bundle, four tree shards in the static ALT, and both
-        // production ALTs.
-        //
-        // SIZE BUDGET. The payload spends 64 bytes on `note_e_use_tag` /
-        // `note_f_use_tag` — the relock PDAs need the tag while the leaf append
-        // needs the commitment, and neither derives from
-        // the other without the private inner. So: 1173 of the 1232 Solana cap,
-        // 59 bytes of real headroom.
-        //
-        // The guard is deliberately set just above the measured size, not at the
-        // hard cap. Anything that grows Tx D by more than a handful of bytes —
-        // one more account, one more payload field — should fail HERE, with a
-        // number, rather than as a `TransactionTooLarge` on devnet. At 59 bytes
-        // remaining there is room for roughly one more 32-byte field and nothing
-        // else; the next addition needs a byte back from somewhere.
-        let wire = bincode::serialize(&tx).unwrap();
-        const MAX_TX_D_WIRE_LEN: usize = 1180;
-        const MIN_TX_D_HEADROOM: usize = 52;
+        let wire = wincode::serialize(&tx).unwrap();
+        const MAX_TX_D_WIRE_LEN: usize = 2_048;
+        const MIN_TX_D_HEADROOM: usize = 2_048;
         eprintln!(
-            "TX_D_WIRE_SIZE_V11 bytes={} headroom={}",
+            "TX_D_V1_WIRE_SIZE bytes={} headroom={}",
             wire.len(),
-            SOLANA_TX_SIZE_CAP - wire.len()
+            SOLANA_V1_TX_SIZE_CAP - wire.len()
         );
         assert!(
             wire.len() <= MAX_TX_D_WIRE_LEN,
-            "settle v0 tx is {} bytes (max {MAX_TX_D_WIRE_LEN}) — payload or ALT headroom regressed",
+            "settle v1 tx is {} bytes (max {MAX_TX_D_WIRE_LEN}) — inline account or payload growth regressed",
             wire.len()
         );
         assert!(
-            SOLANA_TX_SIZE_CAP - wire.len() >= MIN_TX_D_HEADROOM,
-            "settle v0 tx has only {} bytes of headroom (min {MIN_TX_D_HEADROOM})",
-            SOLANA_TX_SIZE_CAP - wire.len()
+            SOLANA_V1_TX_SIZE_CAP - wire.len() >= MIN_TX_D_HEADROOM,
+            "settle v1 tx has only {} bytes of headroom (min {MIN_TX_D_HEADROOM})",
+            SOLANA_V1_TX_SIZE_CAP - wire.len()
         );
 
-        // It's a v0 message with one signature (the TEE keypair).
-        assert!(matches!(tx.message, VersionedMessage::V0(_)));
+        let VersionedMessage::V1(message) = &tx.message else {
+            panic!("settle must compile as v1");
+        };
+        assert_eq!(
+            message.config.compute_unit_limit,
+            Some(SETTLE_COMPUTE_UNIT_LIMIT)
+        );
+        assert_eq!(
+            message.config.loaded_accounts_data_size_limit,
+            Some(SETTLE_LOADED_ACCOUNTS_DATA_SIZE_LIMIT)
+        );
+        assert_eq!(message.config.priority_fee, Some(28_750));
+        assert!(
+            message.account_keys.len() <= 64,
+            "v1 account list has {} entries (runtime cap 64)",
+            message.account_keys.len()
+        );
+        assert!(message
+            .account_keys
+            .iter()
+            .all(|key| *key != COMPUTE_BUDGET_PROGRAM_ID));
         assert_eq!(tx.signatures.len(), 1);
     }
 
@@ -385,22 +374,9 @@ mod tests {
         let proof = [[0x01; 32]; 4];
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
-        // Both ALTs (as production stacks them) — see the worst-case test above.
-        // With the v8 +128 recovery bundle the per-batch ALT alone overflows the
-        // 1232 cap, so the static ALT is required here too.
-        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
-        let alt = alt_account(
-            Address::new_from_array([0x55; 32]),
-            per_batch_alt_addresses(&p, &root),
-        );
-        let b64 = build_settle_v0_tx_b64(
-            &kp,
-            ed_ix,
-            settle_ix,
-            &[static_alt, alt],
-            Hash::new_from_array([0x01; 32]),
-        )
-        .unwrap();
+        let b64 =
+            build_settle_v1_tx_b64(&kp, ed_ix, settle_ix, Hash::new_from_array([0x01; 32]), 0)
+                .unwrap();
         assert!(b64
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)));
@@ -419,21 +395,9 @@ mod tests {
         let proof = [[0x01; 32]; 4];
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
-        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
-        let alt = alt_account(
-            Address::new_from_array([0x55; 32]),
-            per_batch_alt_addresses(&p, &root),
-        );
         let bh = Hash::new_from_array([0x01; 32]);
-        let tx = build_settle_v0_tx(
-            &kp,
-            ed_ix.clone(),
-            settle_ix.clone(),
-            &[static_alt.clone(), alt.clone()],
-            bh,
-        )
-        .unwrap();
-        let b64 = build_settle_v0_tx_b64(&kp, ed_ix, settle_ix, &[static_alt, alt], bh).unwrap();
+        let tx = build_settle_v1_tx(&kp, ed_ix.clone(), settle_ix.clone(), bh, 0).unwrap();
+        let b64 = build_settle_v1_tx_b64(&kp, ed_ix, settle_ix, bh, 0).unwrap();
 
         // The journal records THIS string before the send; recovery later asks
         // the chain about it. If the two ever disagreed, every recovered entry
@@ -451,5 +415,17 @@ mod tests {
             first_signature_b58("aGVsbG8=").is_none(),
             "valid b64, not a tx"
         );
+    }
+
+    #[test]
+    fn v1_priority_fee_conversion_rounds_up() {
+        assert_eq!(priority_fee_lamports(0, SETTLE_COMPUTE_UNIT_LIMIT), 0);
+        assert_eq!(priority_fee_lamports(1, 1), 1);
+        assert_eq!(priority_fee_lamports(250_000, 115_000), 28_750);
+        assert_eq!(
+            priority_fee_lamports(u64::MAX, SETTLE_COMPUTE_UNIT_LIMIT),
+            2_121_375_568_476_598_436
+        );
+        assert_eq!(priority_fee_lamports(u64::MAX, u32::MAX), u64::MAX);
     }
 }

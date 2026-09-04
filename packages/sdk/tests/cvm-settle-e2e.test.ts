@@ -671,7 +671,7 @@ maybeDescribe(
         // ── 6. watch on-chain leaf_count grow (settle appended note_c/d) ─
         // The black box: wall-time from "orders accepted" to the settle landing
         // on-chain — covers the CVM matcher tick + lock_note → verify_match_batch
-        // → per-batch ALT → tee_forced_settle_batched → close (5 txs). For the
+        // → v1 tee_forced_settle_batched → close. For the
         // per-stage split, cross-reference `phala cvms logs` (each stage is logged
         // with a timestamp); this client-side number is the end-to-end latency.
         let finalCount = depositCount;
@@ -746,7 +746,7 @@ maybeDescribe(
             .filter((r) => r.stage === "tee_forced_settle_batched")
             .reverse()) {
             const tx = await conn.getTransaction(row.signature, {
-              maxSupportedTransactionVersion: 0,
+              maxSupportedTransactionVersion: 1,
               commitment: "confirmed",
             });
             if (!tx) continue;

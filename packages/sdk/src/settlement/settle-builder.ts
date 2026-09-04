@@ -1,5 +1,5 @@
 /**
- * Settlement tx builder.
+ * Settlement instruction and canonical-payload builder.
  *
  * Mirrors `programs/vault/src/instructions/tee_forced_settle.rs`:
  *   - Canonical SHA-256 payload hash (byte-identical across TS + Rust + TEE).
@@ -7,13 +7,18 @@
  *   - `tee_forced_settle` ix — Anchor-discriminator + Borsh-serialised
  *     `MatchResultPayload` + full accounts list.
  *
- * Typical call site (relayer):
+ * Typical call site (the TEE mirrors these bytes in Rust):
  *   ```ts
  *   const payload = buildSettlementPayloadFromMatch(match, ...);
  *   const msgHash = canonicalPayloadHash(payload);
  *   const sig = teeSignEd25519(msgHash); // inside TEE
- *   const tx = buildSettleTx({ programId, teePubkey, payload, signature: sig });
+ *   const edIx = buildEd25519VerifyIx({ teePubkey, signature: sig, message: msgHash });
+ *   const settleIx = await buildSettleBatchedIx({ programId, teeAuthority: teePubkey, payload, ... });
  *   ```
+ *
+ * Production transaction framing lives in the TEE: Tx D compiles these two
+ * instructions into a v1 message with inline accounts and explicit CU/data
+ * limits. This SDK deliberately does not expose a second transaction builder.
  */
 
 import { createHash } from "node:crypto";

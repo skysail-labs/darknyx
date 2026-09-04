@@ -8,8 +8,8 @@
 //! ```text
 //!   1. LockingNotes  per match: lock_note × 2 (Tx A)
 //!   2. Proving       once: prover.prove(witnesses) in spawn_blocking
-//!   3. Verifying     once: verify_match_batch (Tx B) + per-batch ALT (Tx C)
-//!   4. Settling      per match: tee_forced_settle_batched v0 tx (Tx D)
+//!   3. Verifying     once: verify_match_batch (Tx B)
+//!   4. Settling      per match: tee_forced_settle_batched v1 tx (Tx D)
 //!   5. Closing       once: close_batch_validity_marker (Tx E)
 //! ```
 //!
@@ -33,16 +33,10 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::SigningKey;
 use solana_address::Address;
 use solana_hash::Hash;
-use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use tokio::sync::{mpsc, RwLock};
 
-use super::alt::{
-    build_deactivate_alt_ix, build_extend_alt_ix_chunks, build_per_batch_alt_ixs,
-    parse_alt_addresses,
-};
-use super::alt_pool::{AltPlan, AltPool};
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleFailureKind, SettleJobId, SettleJobStage, SettlementOutcome};
 use super::marker_sweep::marker_expiry_slot as read_marker_expiry;
@@ -50,14 +44,13 @@ use super::metrics::{
     emit_batch_record, BatchMetricsCompletion, SettlementOutcomeCounts, SettlementStageTimings,
 };
 use super::payload::MatchResultPayload;
-use super::pipeline::{budget_ixs, build_settle_v0_tx_b64, VERIFY_COMPUTE_UNIT_LIMIT};
+use super::pipeline::{budget_ixs, build_settle_v1_tx_b64, VERIFY_COMPUTE_UNIT_LIMIT};
 use super::scheduler::SettleSchedulerState;
-use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
+use super::settle_batched::build_settle_batched_ix;
 use super::sign::sign_payload;
 use super::submit::{
-    build_tx_b64, confirm_signatures, send_and_confirm_many_with_rebroadcast,
-    send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
-    TransactionConfirmationOutcome,
+    confirm_signatures, send_and_confirm_many_with_rebroadcast, send_and_confirm_with_rebroadcast,
+    submit_ixs, TransactionConfirmationOutcome,
 };
 use super::submit_lock::{build_lock_tx_b64, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
@@ -109,7 +102,7 @@ pub struct SettleWorkerCtx {
     pub rpc: SolanaRpcClient,
     /// The K per-shard TEE keypairs (one fee-payer + `tee_authority` per
     /// Merkle-tree shard). `[0]` is the PRIMARY: it pays the per-batch txs
-    /// (lock Tx A, verify Tx B, ALT Tx C, close Tx E). The concurrent settle
+    /// (lock Tx A, verify Tx B, close Tx E). The concurrent settle
     /// Tx D's round-robin `(tee_keypairs[j], merkle_tree[j])` per match so they
     /// share no writable account (distinct shard + distinct fee-payer) → the
     /// leader can co-include + parallelize them. Length == `num_trees`.
@@ -122,17 +115,6 @@ pub struct SettleWorkerCtx {
     /// (ark-circom now, rapidsnark later) is swappable + so tests
     /// inject a fast fake.
     pub prover: Arc<dyn Prover>,
-    /// The static settle ALT (vault_config / instructions_sysvar /
-    /// system_program), created at devnet-setup. `None` until that
-    /// lands — the worker then relies on the per-batch ALT alone
-    /// (slightly larger tx, still under cap for small batches).
-    pub static_alt: Option<solana_message::AddressLookupTableAccount>,
-    /// Rolling per-batch ALT pool. Reused across batches (extend, not
-    /// create) and rotated near the 256-address cap — see
-    /// [`super::alt_pool`]. Behind a `Mutex` because the pool mutates as
-    /// each batch extends/rotates it; settle batches run serially today,
-    /// so contention is nil.
-    pub alt_pool: Arc<tokio::sync::Mutex<AltPool>>,
     /// Shared scheduler state — the worker updates job stages here.
     pub settle_state: Arc<RwLock<SettleSchedulerState>>,
     /// Per-leg confirmation timeout.
@@ -174,47 +156,6 @@ pub struct SettleWorkerCtx {
     pub journal: Arc<tokio::sync::Mutex<SettleJournal>>,
 }
 
-/// Fire a set of per-batch ALT `extend` ixs CONCURRENTLY (one tx each, bounded),
-/// confirming all. The extends write-conflict on the ALT account, so the leader
-/// co-includes them in ONE block — collapsing the old sequential-confirm latency
-/// (~1.13s × chunks) into a single confirmation window + a single activation
-/// window. Their on-chain append order is leader-chosen; the caller re-reads the
-/// ALT's canonical order afterward (see [`parse_alt_addresses`]).
-async fn send_extends_concurrent(
-    rpc: &SolanaRpcClient,
-    payer: &Keypair,
-    extend_ixs: Vec<Instruction>,
-    blockhash: Hash,
-    timeout: Duration,
-    concurrency: usize,
-) -> Result<(), WorkerError> {
-    if extend_ixs.is_empty() {
-        return Ok(());
-    }
-    // Build+sign each extend tx up front (sharing the blockhash), then fire.
-    let mut txs: Vec<String> = Vec::with_capacity(extend_ixs.len());
-    for ix in extend_ixs {
-        txs.push(build_tx_b64(payer, &[ix], blockhash)?);
-    }
-    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
-    let mut set: tokio::task::JoinSet<Result<(), WorkerError>> = tokio::task::JoinSet::new();
-    for tx_b64 in txs {
-        let rpc = rpc.clone();
-        let sem = sem.clone();
-        set.spawn(async move {
-            let _permit = sem.acquire_owned().await.expect("extend semaphore");
-            send_and_confirm_with_rebroadcast(&rpc, &tx_b64, timeout, Duration::from_millis(1500))
-                .await?;
-            Ok(())
-        });
-    }
-    while let Some(joined) = set.join_next().await {
-        joined
-            .map_err(|e| WorkerError::Rpc(RpcError::Schema(format!("extend send task: {e}"))))??;
-    }
-    Ok(())
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum WorkerError {
     #[error("rpc: {0}")]
@@ -227,8 +168,6 @@ pub enum WorkerError {
     Leaf(String),
     #[error("batch has {0} matches but witnesses has {1} slots")]
     Mismatch(usize, usize),
-    #[error("per-batch ALT not active after wait (landed slot {0}); not settling against an unloadable lookup table")]
-    AltNotActive(u64),
 }
 
 /// Map a worker failure to the closed-set label a client is allowed to see.
@@ -241,7 +180,6 @@ impl From<&WorkerError> for SettleFailureKind {
             WorkerError::Rpc(_) => Self::Rpc,
             WorkerError::Prover(_) | WorkerError::ProverPanic(_) => Self::Prover,
             WorkerError::Leaf(_) => Self::Leaf,
-            WorkerError::AltNotActive(_) => Self::AltNotActive,
             WorkerError::Mismatch(_, _) => Self::Internal,
         }
     }
@@ -249,7 +187,7 @@ impl From<&WorkerError> for SettleFailureKind {
 
 impl SettleWorkerCtx {
     /// The PRIMARY TEE keypair (`tee_keypairs[0]`) — pays the per-batch
-    /// lock/verify/ALT/close txs.
+    /// lock/verify/close txs.
     fn primary_keypair(&self) -> &Arc<Keypair> {
         &self.tee_keypairs[0]
     }
@@ -665,16 +603,14 @@ async fn run_batch_settle_inner(
     // single structured summary is emitted at the end (parseable from
     // `phala cvms logs`). This separates the TWO things the on-chain landing
     // timeline conflates: real in-enclave compute (prove_ms — the only heavy
-    // ZK step) vs Solana tx-confirmation latency (lock/verify/settle/close ms)
-    // vs the ALT-activation slot-wait (alt_wait_ms). Optimize the dominant one.
+    // ZK step) vs Solana tx-confirmation latency (lock/verify/settle/close ms).
     let t_pipeline = Instant::now();
 
     // The batch's public inputs (merkle_root + per-match leaves) are a cheap
     // Poseidon fold of the match leaves — NOT the heavy Groth16 prove — and are
     // byte-identical to what the prover emits (the prover cross-checks the
     // circuit witness against exactly these). Computing them up front lets the
-    // per-batch ALT (whose `batch_validity_marker` PDA is seeded by merkle_root)
-    // be built CONCURRENTLY with proving instead of waiting for it.
+    // batch-validity marker is seeded by this root.
     let public = build_batch_public_inputs(inputs.witnesses.as_ref())
         .map_err(|e| WorkerError::Prover(format!("public inputs: {e}")))?;
     let merkle_root = public.merkle_root;
@@ -683,15 +619,11 @@ async fn run_batch_settle_inner(
     // hashing the tree again per match (the old path performed 240 hashes).
     let batch_paths = public.merkle_paths;
 
-    // ── Stages 1-3 run CONCURRENTLY ─────────────────────────────
-    // lock (Tx A), prove→verify (Tx B), and per-batch ALT create+activate
-    // (Tx C) are mutually independent: the ALT uses the pre-computed
-    // merkle_root, not the proof; verify is the only thing that needs the
-    // proof. Overlapping them collapses the pre-settle critical path from the
-    // SUM of their latencies to ~the MAX — and, crucially, starts the ALT's
-    // activation clock ~one prove earlier, so the settle's ALT-loadability wait
-    // is shorter. Each branch reports its own internal timing; `parallel_ms` is
-    // the wall-clock of the overlapped phase.
+    // ── Stages 1-2 run CONCURRENTLY ─────────────────────────────
+    // Lock (Tx A) and prove→verify (Tx B) are mutually independent. Overlap
+    // collapses the pre-settle critical path from their sum to approximately
+    // their maximum. Tx C disappeared with the v1 migration: v1 carries all
+    // accounts inline and cannot reference lookup tables.
     // T-06 WRITE POINT 1 — durable BEFORE the first side effect of this batch.
     // The locks below are the first thing that touches the chain, and a lock
     // that outlives the enclave's memory of it is exactly what freezes a user's
@@ -933,201 +865,16 @@ async fn run_batch_settle_inner(
         ))
     };
 
-    // Branch C — per-batch ALT create/extend (Tx C) + activation wait.
-    let alt_branch = async {
-        let t = Instant::now();
-        // Per-batch ALT via the rolling pool: reuse a long-lived `current`
-        // ALT (extend it with this batch's derivable PDAs) and only create a
-        // fresh one — deactivating the old — when it nears the 256-address
-        // cap. The address set is the UNION of EVERY match's note-lock PDAs +
-        // the single shared batch marker — so a multi-match batch's settle txs
-        // all stay under the 1232-byte cap, not just match 0's.
-        let alt_addrs =
-            batch_alt_addresses(inputs.matches.iter().map(|m| &m.payload), &merkle_root);
-        // Hold the pool lock across the WHOLE ALT op (plan + create/extend tx +
-        // commit + capturing THIS batch's table), so concurrent batches (the
-        // pipelined scheduler) serialize ONLY here — their prove + settle-wait
-        // still overlap. Capturing `settle_account()` while still locked is
-        // required: once we release, another in-flight batch may extend/rotate
-        // the pool and a later read would return the wrong table.
-        let in_mem_alt = {
-            let mut pool = ctx.alt_pool.lock().await;
-            let plan = pool.plan(alt_addrs.len());
-            let bh = ctx.rpc.get_latest_blockhash().await?;
-            match plan {
-                AltPlan::Create { deactivate } => {
-                    // Rotation: best-effort deactivate the old, full ALT so its
-                    // rent can be reclaimed after the 512-slot cooldown. A
-                    // failure here must NOT block the settle — the old ALT just
-                    // lingers (a later reclaim sweep can retry).
-                    let mut deactivated = None;
-                    if let Some(old) = deactivate {
-                        let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
-                        match submit_ixs_with_blockhash(
-                            &ctx.rpc,
-                            ctx.primary_keypair(),
-                            &[deact_ix],
-                            Hash::new_from_array(bh.blockhash),
-                        )
-                        .await
-                        {
-                            Ok(sig) => {
-                                let _ =
-                                    confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
-                                deactivated = Some((old, bh.context_slot));
-                            }
-                            Err(e) => tracing::warn!(error = ?e, alt = %old,
-                                "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
-                        }
-                    }
-                    // `CreateLookupTable` rejects a `recent_slot` not present in
-                    // the SlotHashes sysvar of the bank that processes it. A
-                    // load-balanced RPC can answer getLatestBlockhash from a
-                    // replica a few slots AHEAD of the simulating bank → "is not
-                    // a recent slot". Back off 32 (within the 512-slot window).
-                    const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
-                    let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
-                    let alt_build =
-                        build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
-                    // tx0: create + the FIRST extend chunk (keeps small batches a
-                    // single tx). The create must confirm before the rest can
-                    // reference the ALT.
-                    let mut extends = alt_build.extend_ixs.into_iter();
-                    let mut tx0 = vec![alt_build.create_ix];
-                    tx0.extend(extends.next());
-                    let create_sig = submit_ixs_with_blockhash(
-                        &ctx.rpc,
-                        ctx.primary_keypair(),
-                        &tx0,
-                        Hash::new_from_array(bh.blockhash),
-                    )
-                    .await?;
-                    confirm_signatures(&ctx.rpc, &[create_sig], ctx.confirm_timeout).await?;
-                    // Remaining chunks CONCURRENTLY — they write-conflict on the
-                    // ALT so the leader co-includes them in one block (a single
-                    // activation window instead of one slot per chunk). Order is
-                    // leader-chosen → we re-read the ALT's canonical order below.
-                    send_extends_concurrent(
-                        &ctx.rpc,
-                        ctx.primary_keypair(),
-                        extends.collect(),
-                        Hash::new_from_array(bh.blockhash),
-                        ctx.confirm_timeout,
-                        ctx.settle_send_concurrency,
-                    )
-                    .await?;
-                    pool.commit_create(alt_build.alt_address, alt_addrs.clone(), deactivated);
-                }
-                AltPlan::Extend { alt } => {
-                    // Append this batch's addresses; chunks fired CONCURRENTLY
-                    // (co-include → single activation window).
-                    send_extends_concurrent(
-                        &ctx.rpc,
-                        ctx.primary_keypair(),
-                        build_extend_alt_ix_chunks(&tee_pubkey, &alt, &alt_addrs),
-                        Hash::new_from_array(bh.blockhash),
-                        ctx.confirm_timeout,
-                        ctx.settle_send_concurrency,
-                    )
-                    .await?;
-                    pool.commit_extend(&alt_addrs);
-                }
-            }
-            // The pool's in-memory table (key + the addresses in submit order).
-            // Used as the fallback below if the on-chain re-read comes back empty
-            // (e.g. a transient RPC blip, or the mock RPC in unit tests).
-            pool.settle_account()
-                .expect("pool has a current ALT after plan/commit")
-        };
-        let alt_tx_ms = t.elapsed().as_millis() as u64;
-
-        // A freshly created OR extended ALT's new addresses are NOT loadable
-        // until the slot AFTER the extend lands. Wait until the chain advances
-        // past the slot we observed the extend confirmed at, or fail loudly
-        // (sending Tx D against an unloadable ALT → silently dropped). No lock
-        // needed here — `per_batch_alt` is already captured.
-        let t = Instant::now();
-        let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
-        let activation_deadline = Instant::now() + Duration::from_secs(12);
-        let mut poll_delay = Duration::from_millis(400);
-        let mut activated = false;
-        loop {
-            // A Solana slot cannot advance before time passes. Polling
-            // immediately after the landing read spent one guaranteed-useless
-            // RPC request per batch; sleep first, then back off under degraded
-            // RPC while keeping the original 12-second ceiling (PF-13).
-            let now = Instant::now();
-            if now >= activation_deadline {
-                break;
-            }
-            tokio::time::sleep(std::cmp::min(
-                poll_delay,
-                activation_deadline.duration_since(now),
-            ))
-            .await;
-            if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
-                activated = true;
-                break;
-            }
-            if Instant::now() >= activation_deadline {
-                break;
-            }
-            poll_delay = std::cmp::min(poll_delay + poll_delay, Duration::from_secs(2));
-        }
-        if !activated {
-            tracing::error!(
-                alt_landed_slot,
-                "per-batch ALT activation timed out; aborting settle"
-            );
-            return Err(WorkerError::AltNotActive(alt_landed_slot));
-        }
-
-        // Re-read the ALT's CANONICAL on-chain address order. The extends were
-        // fired concurrently, so the leader (not us) chose their append order;
-        // the Tx D v0 message resolves each account to its index in this list,
-        // which MUST mirror the on-chain ALT exactly. Fall back to the pool's
-        // in-memory table if the read comes back empty (transient RPC / tests).
-        let alt_key = in_mem_alt.key;
-        let on_chain = ctx
-            .rpc
-            .get_account_info(&alt_key)
-            .await?
-            .map(|acc| parse_alt_addresses(&acc.data))
-            .unwrap_or_default();
-        let per_batch_alt = if on_chain.is_empty() {
-            tracing::warn!(alt = %alt_key, "per-batch ALT re-read empty; using in-memory order");
-            in_mem_alt
-        } else {
-            solana_message::AddressLookupTableAccount {
-                key: alt_key,
-                addresses: on_chain,
-            }
-        };
-        tracing::info!(
-            alt = %per_batch_alt.key,
-            entries = per_batch_alt.addresses.len(),
-            "per-batch ALT ready (canonical order re-read after concurrent extends)"
-        );
-        Ok::<_, WorkerError>((per_batch_alt, alt_tx_ms, t.elapsed().as_millis() as u64))
-    };
-
-    let (lock_r, pv_r, alt_r) = tokio::join!(lock_branch, prove_verify_branch, alt_branch);
+    let (lock_r, pv_r) = tokio::join!(lock_branch, prove_verify_branch);
     let lock_ms = lock_r?;
     let (prove_ms, verify_ms, marker_expiry_slot, prover_timings) = pv_r?;
-    let (per_batch_alt, alt_tx_ms, alt_wait_ms) = alt_r?;
     let parallel_ms = t_par.elapsed().as_millis() as u64;
 
     let mut t = Instant::now();
 
-    // ── 4. Settle each match (Tx D, v0) — CONCURRENT sends ──────
+    // ── 3. Settle each match (Tx D, v1) — CONCURRENT sends ──────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Settling)
         .await;
-    let mut alts = Vec::new();
-    if let Some(static_alt) = &ctx.static_alt {
-        alts.push(static_alt.clone());
-    }
-    alts.push(per_batch_alt);
-
     // Each match now resolves independently. A round uses one fresh blockhash
     // for only the unresolved matches, gathers every signature result, and
     // reconciles ambiguous/rejected results against the two atomic consumed
@@ -1260,12 +1007,12 @@ async fn run_batch_settle_inner(
                     siblings,
                     &merkle_root,
                 );
-                Ok(build_settle_v0_tx_b64(
+                Ok(build_settle_v1_tx_b64(
                     shard_keypair,
                     ed_ix,
                     settle_ix,
-                    &alts,
                     blockhash,
+                    priority_fee,
                 )?)
             })();
             match built {
@@ -1511,20 +1258,17 @@ async fn run_batch_settle_inner(
     // `close_ms` is now just the enqueue (≈0) — the on-chain close is async.
     let close_ms = t.elapsed().as_millis() as u64;
     let total_ms = t_pipeline.elapsed().as_millis() as u64;
-    // The fine-grained per-stage latency profile. lock/prove+verify/alt run
+    // The fine-grained per-stage latency profile. lock/prove+verify run
     // CONCURRENTLY: `parallel_ms` is the wall-clock of that overlapped phase
-    // (≈ the max of the branches, vs the old sum of lock+prove+verify+alt).
-    // `prove_ms` is the only in-enclave ZK compute; `alt_wait_ms` is the
-    // Solana ALT-activation slot-wait; lock/verify/settle/close are tx
-    // submit+confirm latency.
+    // (≈ the max of the branches, vs the old sum of lock+prove+verify).
+    // `prove_ms` is the only in-enclave ZK compute; lock/verify/settle/close
+    // are tx submit+confirm latency.
     tracing::info!(
         batch_id,
         n,
         lock_ms,
         prove_ms,
         verify_ms,
-        alt_tx_ms,
-        alt_wait_ms,
         parallel_ms,
         settle_ms,
         close_ms,
@@ -1547,8 +1291,11 @@ async fn run_batch_settle_inner(
                 prove_step_ms: Some(prover_timings.prove_step_ms),
                 prove_ms: Some(prove_ms),
                 verify_ms: Some(verify_ms),
-                alt_tx_ms: Some(alt_tx_ms),
-                alt_wait_ms: Some(alt_wait_ms),
+                // Retained in the telemetry schema so historical benchmark
+                // records remain readable. V1 removed Tx C and its activation
+                // wait, therefore new records report these as absent.
+                alt_tx_ms: None,
+                alt_wait_ms: None,
                 parallel_ms: Some(parallel_ms),
                 settle_ms: Some(settle_ms),
                 close_ms: Some(close_ms),
@@ -1859,15 +1606,6 @@ mod tests {
             tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
             signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n }),
-            // Production stacks the static settle ALT under the per-batch ALT;
-            // with the v8 +128 recovery bundle the per-batch ALT alone overflows
-            // the 1232-byte cap, so the worker tests must mirror production and
-            // provide it too (vault_config + sysvar + system + 4 merkle shards).
-            static_alt: Some(crate::settle::alt::alt_account(
-                solana_address::Address::new_from_array([0x44; 32]),
-                crate::settle::settle_batched::static_alt_addresses(4),
-            )),
-            alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),
             redrive_budget: Duration::from_secs(30),
@@ -1966,26 +1704,24 @@ mod tests {
         ctx
     }
 
-    /// Decode the fee-payer (`static_account_keys()[0]`) of a base64
-    /// VersionedTransaction, returning `None` for a legacy (non-v0) tx so the
-    /// caller can filter the settle Tx D's (the only v0 txs) from the
-    /// lock/verify/ALT/close legacy txs.
-    fn v0_fee_payer(tx_b64: &str) -> Option<Address> {
+    /// Decode the fee-payer of a base64 v1 transaction, returning `None` for
+    /// the legacy lock/verify transactions.
+    fn v1_fee_payer(tx_b64: &str) -> Option<Address> {
         use base64::Engine as _;
         use solana_transaction::versioned::VersionedTransaction;
         let wire = base64::engine::general_purpose::STANDARD
             .decode(tx_b64)
             .ok()?;
-        let tx: VersionedTransaction = bincode::deserialize(&wire).ok()?;
+        let tx: VersionedTransaction = wincode::deserialize(&wire).ok()?;
         match tx.message {
-            solana_message::VersionedMessage::V0(m) => m.account_keys.first().copied(),
+            solana_message::VersionedMessage::V1(m) => m.account_keys.first().copied(),
             _ => None,
         }
     }
 
     /// Fee-payer (`account_keys[0]`) of a base64 LEGACY tx, returning `None`
-    /// for a v0 tx — so a test can filter the legacy lock txs (Tx A) from the
-    /// v0 settle txs (Tx D).
+    /// for a versioned tx — so a test can filter legacy lock txs (Tx A) from
+    /// v1 settle txs (Tx D).
     fn legacy_fee_payer(tx_b64: &str) -> Option<Address> {
         use base64::Engine as _;
         let wire = base64::engine::general_purpose::STANDARD
@@ -1995,16 +1731,16 @@ mod tests {
         tx.message.account_keys.first().copied()
     }
 
-    /// Whether a base64 transaction is v0 (the settle Tx D's; the lock, verify
-    /// and ALT transactions are all legacy).
-    fn is_v0_tx(tx_b64: &str) -> bool {
+    /// Whether a base64 transaction is v1 (the settle Tx D's; lock and verify
+    /// transactions remain legacy).
+    fn is_v1_tx(tx_b64: &str) -> bool {
         use base64::Engine as _;
         use solana_transaction::versioned::VersionedTransaction;
         base64::engine::general_purpose::STANDARD
             .decode(tx_b64)
             .ok()
-            .and_then(|wire| bincode::deserialize::<VersionedTransaction>(&wire).ok())
-            .is_some_and(|tx| matches!(tx.message, solana_message::VersionedMessage::V0(_)))
+            .and_then(|wire| wincode::deserialize::<VersionedTransaction>(&wire).ok())
+            .is_some_and(|tx| matches!(tx.message, solana_message::VersionedMessage::V1(_)))
     }
 
     /// A mock RPC that can be switched into permanent `getLatestBlockhash`
@@ -2042,8 +1778,8 @@ mod tests {
                 }
                 "sendTransaction" => {
                     // Trip the outage the moment the SETTLE tx enters flight.
-                    // The settle Tx D's are the only v0 transactions in the
-                    // pipeline (locks/verify/ALT are legacy), so this is an
+                    // The settle Tx D's are the only v1 transactions in the
+                    // pipeline (locks/verify are legacy), so this is an
                     // exact, race-free trigger: the pre-loop phases have all
                     // completed, and the redrive loop is about to poll for a
                     // confirmation it will never get.
@@ -2054,7 +1790,7 @@ mod tests {
                     // the test passed while exercising nothing. The elapsed-time
                     // assertion in the test caught it.
                     if let Some(b64) = req["params"][0].as_str() {
-                        if is_v0_tx(b64) {
+                        if is_v1_tx(b64) {
                             fail.store(true, Ordering::SeqCst);
                         }
                     }
@@ -2204,10 +1940,10 @@ mod tests {
         };
         run_batch_settle(&ctx, inputs).await.expect("batch settle");
 
-        // The settle Tx D's are the only v0 txs; collect their fee-payers.
+        // The settle Tx D's are the only v1 txs; collect their fee-payers.
         let sent = cap.lock().await.clone();
-        let settle_payers: Vec<Address> = sent.iter().filter_map(|t| v0_fee_payer(t)).collect();
-        assert_eq!(settle_payers.len(), 2, "expected two v0 settle Tx D's");
+        let settle_payers: Vec<Address> = sent.iter().filter_map(|t| v1_fee_payer(t)).collect();
+        assert_eq!(settle_payers.len(), 2, "expected two v1 settle Tx D's");
         assert_ne!(
             settle_payers[0], settle_payers[1],
             "the two settle Tx D's must be fee-paid by DISTINCT shard keys"
@@ -2280,7 +2016,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn concurrent_batches_share_the_rolling_alt_without_index_corruption() {
+    async fn concurrent_v1_batches_settle_without_shared_alt_state() {
         let url = spawn_mock_rpc().await;
         let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
         seed_jobs(&state, 0, 1).await;

@@ -50,7 +50,7 @@ Secrets/config (RPC credential, CVM gateway, RUN\_\* flags) load from a gitignor
 
 | File                              | Gate                 | Asserts                                                          |
 | --------------------------------- | -------------------- | ---------------------------------------------------------------- |
-| `devnet-setup.test.ts`            | `RUN_DEVNET_E2E=1`   | rebuilds mints + settle ALT + config → `.devnet/e2e-config.json` |
+| `devnet-setup.test.ts`            | `RUN_DEVNET_E2E=1`   | rebuilds mints + protocol config → `.devnet/e2e-config.json` |
 | `devnet-deposit-withdraw.test.ts` | `RUN_DEVNET_DW=1`    | deposit replay + 72-byte lock/release/expiry + withdraw lifecycle |
 | `devnet-merge.test.ts`            | `RUN_DEVNET_MERGE=1` | deposit → merge(K=2) → withdraw                                  |
 | `devnet-leaf-index.test.ts`       | `RUN_DEVNET_LEAF=1`  | event-based leaf-index read vs real RPC                          |

@@ -132,9 +132,9 @@ validated` evidence.
 | SP-01 | P0 | **Closed** | 1 | An immutable Surfpool revision is built on supported developer/CI architectures and its version is visible in every run. | None | Cached source build; removes moving-main ambiguity | Retain the exact pin until a released build containing gTFA passes the same matrix. |
 | SP-02 | P0 | **Closed** | 1 | Surfpool native gTFA is byte/semantic compatible with Darknyx's full ascending successful slot-floored history scan. | None unless a genuine incompatibility is found | Replaces provider gTFA during local runs | Preserve the proven nonempty history/root contract. |
 | SP-03 | P0 | **Closed** | 1/2 | The canonical vault program can be installed at its declared ID on a fresh Surfnet without rebranding/recompiling the protocol ID. | Local deployment path only | Avoids dependence on a missing canonical program-ID private key | Preserve the fingerprinted installer and deployed-byte comparison. |
-| SP-04 | P0 | **Closed** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, v0 messages, ALTs, 1232-byte limits, and commitment/status polling. | None | Determines whether Surfpool can host full integration rather than SDK-only tests | Preserve the conformance matrix. |
+| SP-04 | P0 | **Closed** | 1 | Surfpool executes the syscalls and transaction shapes Darknyx relies on: Groth16, Ed25519, legacy/v0 messages, ALTs, v1 inline messages with explicit resource limits, and commitment/status polling. | Tx D now uses v1; readers advertise version 1. | Determines whether Surfpool can host full integration rather than SDK-only tests | Preserve the conformance matrix. |
 | LF-01 | P0 | **Closed** | 2 | A single command creates and a single command tears down a hermetic offline Surfnet with no surviving process. | New test/runbook surface only | Makes local runs reproducible and prevents background process leaks | Preserve supervisor and teardown assertions. |
-| LF-02 | P0 | **Closed** | 2 | Local keys, mints, ALTs, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Preserve local/real state isolation. |
+| LF-02 | P0 | **Closed** | 2 | Local keys, mints, vault config, K trees/signers, fee config, and output files live in a separate `.surfpool/` namespace. | Local account foundation only | Prevents local/devnet cross-contamination | Preserve local/real state isolation. |
 | LF-03 | P0 | **Closed** | 2 | Local Pyth sponsored-push fixtures satisfy the exact Darknyx owner/PDA/discriminator/full-verification/feed/time/slot checks without external RPC. | No production oracle change | Removes Hermes/public-devnet oracle traffic and adds adversarial coverage | Preserve positive and adversarial fixture coverage. |
 | LF-04 | P1 | **Closed** | 2 | Surfpool-only cheatcodes never become reachable from a real deployment or an internet-exposed default. | Test scripts only | Keeps the local control plane out of product code | Preserve loopback-only guards. |
 | LT-01 | P0 | **Closed** | 3 | The production `darknyx-tee` binary boots locally against the pinned dstack v0.5.9 simulator and Surfpool without a simulator-only protocol fork. | Explicit development configuration; no production fallback | Exercises real process boot, KMS API shape, governance reads, matcher, prover, and settlement | Preserve the simulator evidence boundary. |
@@ -197,7 +197,7 @@ Seed nonempty local activity and assert:
 3. `sortOrder: asc` preserves `(slot, intra-slot execution order)`.
 4. `filters.slot.gte` is inclusive and excludes older activity.
 5. A result set larger than one page has no overlap or gap.
-6. v0 transactions and ALT-loaded addresses/instructions decode correctly.
+6. v0 ALT-loaded addresses and v1 inline transactions decode correctly.
 7. Reverted transactions never create phantom leaves.
 8. A nonempty vault history reconstructs the exact on-chain K-shard roots.
 
@@ -209,8 +209,10 @@ An empty validator or empty tree is a failure, not a skip or pass.
   `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` without changing
   `declare_id!()`.
 - Initialize the real account layouts and K-shard configuration.
-- Create and extend both static/per-batch ALTs, advance the required slot, and
-  consume them in v0 transactions.
+- Preserve v0/ALT reader coverage, then execute a v1 inline transaction whose
+  `transactionConfig` carries `computeUnitLimit`,
+  `loadedAccountsDataSizeLimit`, and `priorityFeeLamports`; the last field is
+  the total lamport priority fee for the transaction, not a per-CU quote.
 - Verify at least one generated Groth16 proof through the real vault verifier.
 - Exercise the worst-case serialized settle transaction and record bytes/CU.
 - Confirm confirmation/status polling reaches the commitment expected by the
