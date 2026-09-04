@@ -24,7 +24,7 @@ neither belongs in the production image merely to obtain a flattering number.
 | image | `tee-v3-hardening-92` / `sha256:dd31985fee01d921ed4c8e0ea49e479b25a69583831d95d2e60d8bc8d1a2c0f0` |
 | compose hash | `abdc838c3c51a96d9e1f1da44f23e634e9c756658a2bf6135dcd6c0a92f9e726` |
 | prover / witness | rapidsnark CPU / native |
-| settlement | transaction v1 with inline accounts; no ALT create, extend, or warm-up |
+| settlement | transaction v1 with inline accounts and no setup transaction or warm-up |
 | Solana RPC | private Helius devnet endpoint |
 | trees / batch concurrency | K=4 / C1 |
 | workload | 16 persistent partial-fill bids × 9 asks = 144 matched pairs |
@@ -51,13 +51,12 @@ first batch. There were no rejected or ambiguous outcomes. The first three
 runs had no rebroadcasts; the final run had two, or 0.016 per measured confirmed
 match.
 
-The valid C1 baseline removed the former ALT stages entirely:
-`alt_tx` and `alt_wait` both had zero samples. Relative to the 2026-07-23 v0 C1
+The valid C1 baseline removed the former setup stages entirely. Relative to the 2026-07-23 v0 C1
 control, its observed confirmed throughput rose from 0.961 to 1.340 matches/s
 (+39.4%), total P50 fell from 15.683 to 5.726 seconds (-63.5%), and settle P50
 fell from 12.229 seconds to 0.988 seconds (-91.9%). This is a cross-date result,
 not an isolated A/B: the N=16 circuit and other implementation details also
-changed, so only the disappearance of the ALT stages can be attributed
+changed, so only the disappearance of the setup stages can be attributed
 mechanically to transaction v1.
 
 ## Final wave-run detail

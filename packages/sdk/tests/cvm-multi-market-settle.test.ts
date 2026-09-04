@@ -3,8 +3,8 @@
  *
  * One boot serves SOL-USDC and BTC-USDC. The test deposits every input before
  * matching begins, then submits one crossing pair per market concurrently.
- * Both market schedulers therefore share the real prover, signer set, ALT
- * pool, Merkle shards, and venue-wide settlement semaphore in the same CVM.
+ * Both market schedulers therefore share the real prover, signer set, Merkle
+ * shards, and venue-wide settlement semaphore in the same CVM.
  *
  * It additionally verifies:
  *   - /instruments advertises both governed mint pairs from one endpoint;

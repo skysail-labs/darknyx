@@ -59,9 +59,9 @@ ledgers are:
   dispositions and for the cross-tracker residual view.
 
 Shelved product features such as mass quote, peg orders, and post-only are not
-audit findings and are intentionally left in
-[`api-surface-roadmap.md`](../docs/api-surface-roadmap.md), not mixed into this
-security backlog.
+audit findings. Their re-entry conditions live in the
+[`docs/` documentation map](../docs/README.md#deferred-product-decisions), not
+in this security backlog.
 
 ## Status meanings
 

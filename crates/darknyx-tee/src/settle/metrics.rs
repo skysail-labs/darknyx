@@ -54,10 +54,6 @@ pub struct SettlementStageTimings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub alt_tx_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alt_wait_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settle_ms: Option<u64>,
@@ -542,8 +538,6 @@ pub fn emit_batch_record(record: &SettlementBatchRecord) {
         prove_step_ms = record.timings.prove_step_ms,
         prove_ms = record.timings.prove_ms,
         verify_ms = record.timings.verify_ms,
-        alt_tx_ms = record.timings.alt_tx_ms,
-        alt_wait_ms = record.timings.alt_wait_ms,
         parallel_ms = record.timings.parallel_ms,
         settle_ms = record.timings.settle_ms,
         close_ms = record.timings.close_ms,

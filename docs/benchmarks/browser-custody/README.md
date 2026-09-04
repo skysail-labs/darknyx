@@ -1,7 +1,7 @@
 # Browser custody qualification
 
 This directory holds retained evidence for packaging decision D1 in
-`docs/darknyx-client-design-record.md`. The decision-grade prototype formerly
+`docs/browser-client-launch-qualification.md`. The decision-grade prototype formerly
 lived in `packages/browser-custody-spike`; it was removed on 2026-08-15 after
 its selected design and still-required regressions landed in
 `packages/browser-client`. Git history preserves the original harness.

@@ -306,7 +306,7 @@ instructions as implementation proceeds.
 - **Hosted evidence (2026-08-25, private Helius devnet):** upgraded the
   canonical program in place
   (`SRJyPDPMoSrW5KGX77orzeHzc7541h9yUPtxzv6AbG5m11Ukgv6XZJV4h9qNJ8evMsJkJAikDNd3usC66uruipf`),
-  regenerated the four-shard foundation with fresh mints and ALT, and reset
+  regenerated the four-shard foundation with fresh mints, and reset
   shards 0..3. The repeatable `RUN_DEVNET_DW=1` test then proved a real deposit
   and VALID_INPUT lock, rejected the exact deposit replay atomically, observed
   an 8-byte deposit marker, rejected release while live, observed and parsed a

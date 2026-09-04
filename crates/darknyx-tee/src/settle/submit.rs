@@ -76,16 +76,11 @@ pub fn build_tx_b64(
 /// commitment, REBROADCASTING the identical signed tx every `resend_every`
 /// until it lands. Returns the (stable) signature once confirmed.
 ///
-/// This is the fix for the per-batch-ALT settle stall (Tx D): a freshly
-/// created/extended Address Lookup Table's new entries can take several slots
-/// to become loadable network-wide, so the leader that receives the first
-/// broadcast often drops the tx (it can't resolve the ALT yet) — and the lone
-/// initial `send_transaction` then relies on the RPC node's own lazy
-/// rebroadcast cadence, which on devnet leaves Tx D unconfirmed for ~10-14 s.
-/// Re-pushing the same signature every ~1.5 s lets the tx land the moment the
-/// ALT activates instead of waiting on the RPC. Resends use `skip_preflight`
-/// (the first send already validated via preflight; the network dedups by
-/// signature, so resends are idempotent and cheap).
+/// Devnet RPCs and leaders can drop an accepted transaction before it lands.
+/// Re-pushing the identical signed bytes on a bounded cadence avoids relying
+/// on the RPC provider's lazy rebroadcast loop. Resends use `skip_preflight`
+/// because the first send already ran preflight; the network deduplicates by
+/// signature, so retries are idempotent.
 ///
 /// Errors if the tx reverts (carries the on-chain err) or `timeout` elapses.
 /// Returns `(signature, confirmed_slot)`. The slot lets the settle worker
@@ -135,8 +130,8 @@ pub async fn send_and_confirm_with_rebroadcast(
             )));
         }
         // Rebroadcast the identical tx (skip preflight) so a leader that dropped
-        // the first copy gets another chance once the ALT is loadable. Resend
-        // errors (e.g. transient RPC) are non-fatal — keep polling.
+        // the first copy gets another chance. Transient resend errors are
+        // non-fatal — keep polling the canonical signature.
         if last_send.elapsed() >= resend_every {
             if rpc.send_transaction_opts(tx_b64, true).await.is_ok() {
                 resends += 1;

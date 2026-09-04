@@ -9,8 +9,8 @@
 //!      canonical payload hash ([`super::ed25519`]);
 //!   2. the settle instruction itself ([`super::settle_batched`]).
 //!
-//! V1 does not support Address Lookup Tables. Every account is inline, and the
-//! compute-unit limit, loaded-account-data limit, and optional total priority fee
+//! Every account is inline, and the compute-unit limit, loaded-account-data
+//! limit, and optional total priority fee
 //! live in the v1 message configuration rather than no-op ComputeBudget
 //! instructions. The TEE keypair signs as both fee-payer and `tee_authority`.
 //!
@@ -192,8 +192,7 @@ pub fn build_settle_v1_tx_b64(
         .map_err(|e| RpcError::Schema(format!("v1 tx wincode serialise failed: {e}")))?;
 
     // Pre-send guard against the v1 4096-byte hard ceiling. Log the inline
-    // account count because v1 has no ALT indirection to hide an accidental
-    // account expansion.
+    // account count so an accidental expansion is visible immediately.
     if wire.len() > SOLANA_V1_TX_SIZE_CAP {
         if let VersionedMessage::V1(m) = &tx.message {
             let inline: Vec<String> = m.account_keys.iter().map(|k| k.to_string()).collect();

@@ -629,8 +629,6 @@ jobs:
                   .timings.prove_step_ms,
                   .timings.prove_ms,
                   .timings.verify_ms,
-                  .timings.alt_tx_ms,
-                  .timings.alt_wait_ms,
                   .timings.parallel_ms,
                   .timings.settle_ms,
                   .timings.close_ms,

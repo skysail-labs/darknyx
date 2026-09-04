@@ -20,8 +20,6 @@ pub struct StageTimings {
     pub prove_step_ms: Option<u64>,
     pub prove_ms: Option<u64>,
     pub verify_ms: Option<u64>,
-    pub alt_tx_ms: Option<u64>,
-    pub alt_wait_ms: Option<u64>,
     pub parallel_ms: Option<u64>,
     pub settle_ms: Option<u64>,
     pub close_ms: Option<u64>,
@@ -324,14 +322,6 @@ impl BenchmarkArtifact {
             (
                 "verify",
                 measured.iter().map(|b| b.timings.verify_ms).collect(),
-            ),
-            (
-                "alt_tx",
-                measured.iter().map(|b| b.timings.alt_tx_ms).collect(),
-            ),
-            (
-                "alt_wait",
-                measured.iter().map(|b| b.timings.alt_wait_ms).collect(),
             ),
             (
                 "parallel",

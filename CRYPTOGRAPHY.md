@@ -1418,8 +1418,8 @@ const message = new TransactionMessage({
 });
 ```
 
-It's sent as a **v1 VersionedTransaction with every account inline**. V1 does
-not support Address Lookup Tables and raises the wire ceiling to 4096 bytes.
+It's sent as a **v1 VersionedTransaction with every account inline**, under a
+4096-byte wire ceiling.
 
 The settle ix is:
 
@@ -1598,7 +1598,7 @@ Handler walkthrough:
 
 **Why this remains a pipeline**: locks must exist before settlement, one batch
 proof is amortized across up to 16 matches, and each match must reach an
-independent terminal outcome. V1 removes the old Tx-C/ALT size workaround; it
+independent terminal outcome. V1 removes the old Tx-C size workaround; it
 does not remove these state and failure-isolation boundaries.
 - Tx A (lock): one VALID_INPUT-backed `lock_note` per transaction, with buyer
   and seller transactions sent independently; each remains below 800 B.
@@ -1887,7 +1887,7 @@ requirements without buying headroom.
 
 V1 changes more than the size constant:
 
-- lookup tables are unsupported, so all accounts are inline (maximum 64);
+- all accounts are inline (maximum 64);
 - compute-unit and loaded-account-data limits default to zero and are set in
   `TransactionConfig`;
 - ComputeBudget instructions are no-ops and must not appear in Tx D;
@@ -1900,176 +1900,8 @@ below the upgradeable vault program's actual loaded data. A real Surfpool
 settlement simulation reports `loadedAccountsDataSize`; round that value up to
 the next 32-KiB page and add measured headroom before tightening the limit.
 
-Mainnet-beta has not activated v1 as of 2026-09-03, so this path is qualified on
-Surfpool and devnet and remains a mainnet release gate.
-
-### Retired v0 + ALT design (historical rationale)
-
-> The remainder of this subsection records why the previous implementation
-> needed static and rolling per-batch ALTs. It is not the current transaction
-> path: Tx C, ALT setup, and ALT activation waits were deleted by the v1
-> migration above.
-
-The change + re-lock settle path exercises a partial fill with an atomic re-lock — its settle tx was 1243 bytes — exactly 11 over the cap.
-The other settle paths (A, E) were 1232 or under.
-
-Why the 11-byte difference? **Legacy tx serialization de-duplicates
-account keys**. In the exact-fill paths, both `note_e_commitment` and
-`note_f_commitment` are `[0;32]`. The `note_lock_e` PDA is derived from
-`note_e_commitment`, and `note_lock_f` from `note_f_commitment` — so they
-end up at the **same PDA address** (`find_program_address(&[b"note_lock", [0;32]], program_id)`).
-The legacy tx encoder sees two account-key entries that hash identically
-and merges them into one slot in the keys list, saving 32 bytes.
-
-The moment `note_e ≠ 0` (any change-note path), the two PDAs become
-distinct addresses and no dedup happens — the settle tx is 32 bytes
-fatter than the exact-fill case. That's enough to push it over 1232.
-
-#### The fix: Address Lookup Table
-
-A VersionedTransaction with an attached ALT replaces 32-byte account-key
-entries with 1-byte indices into the ALT. The cost is a 32-byte ALT
-pubkey reference + a few bytes of overhead in the tx header. Net: each
-ALT-resolved account saves ~30 bytes.
-
-What can be ALT'd? **Read-only and non-signer writable accounts that are
-static across many txs**. Signer accounts must stay in the main key list
-because their signatures need to be order-preserved. So the candidates for
-the settle tx are:
-
-| Account | Static? | In ALT? |
-|---|---|---|
-| `tee_authority` (signer) | varies | NO — signers can't be ALT'd |
-| `vault_config` | always | ✅ |
-| `note_lock_a/b/e/f` | per-match | NO |
-| `consumed_a/b` | per-match | NO |
-| `instructions_sysvar` | always | ✅ |
-| `batch_validity_marker` | per-batch (derivable from the payload) | ✅ per-batch ALT |
-| `system_program` | always | ✅ |
-
-So we hoist three accounts (`vault_config`, `instructions_sysvar`,
-`system_program`) into an ALT. Savings: 3 × 30 ≈ 90 bytes. More than
-enough.
-
-#### ALT setup
-
-Created once at devnet-setup time:
-
-```ts
-const slot = await connection.getSlot("confirmed");
-const [createAltIx, altPubkey] =
-    AddressLookupTableProgram.createLookupTable({
-        authority: admin.publicKey,
-        payer:     admin.publicKey,
-        recentSlot: slot,
-    });
-const extendIx = AddressLookupTableProgram.extendLookupTable({
-    payer:        admin.publicKey,
-    authority:    admin.publicKey,
-    lookupTable:  altPubkey,
-    addresses:    [vaultConfigPda, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId,
-                   ...merkleTreePdas /* one per shard, tree 0..K-1 */],
-});
-// Send both ixs in one tx, then wait one slot for the ALT to be referenceable.
-```
-
-The resulting ALT pubkey was written to `.devnet/e2e-config.json` as
-`settleLookupTable` and was reused by every settle tx. With tree sharding, the
-static ALT also listed the **K `merkle_tree` PDAs**, so each writable
-`merkle_tree[tree_id]` resolved through one table regardless of the shard. This
-is historical behavior only; the current setup file has no
-`settleLookupTable` field.
-
-#### Per-batch ALTs on top of the static one
-
-The settle adds a 1-byte `match_index` + 4 × 32-byte Merkle
-siblings = 129 bytes to ix.data. That pushed `tee_forced_settle_batched`
-over the 1232-byte cap even with the static settle ALT. Fix: stack a
-second ALT, created once per batch, holding the **7 PDAs** that vary
-per match but are derivable from the payload alone:
-
-| Account | Why it's in the per-batch ALT |
-|---|---|
-| `note_lock_a` | derived from `payload.note_a_use_tag` |
-| `note_lock_b` | derived from `payload.note_b_use_tag` |
-| `note_lock_e` | derived from `payload.note_e_use_tag` (or zero) |
-| `note_lock_f` | derived from `payload.note_f_use_tag` (or zero) |
-| `consumed_note_a` | derived from `payload.note_a_use_tag` (consume-once guard) |
-| `consumed_note_b` | derived from `payload.note_b_use_tag` |
-| `batch_validity_marker` | derived from the batch's `merkle_root` |
-
-(The two `nullifier_{a,b}` PDAs were dropped from both the settle tx and
-this ALT — see §9's account-table note.) Folding the consumed-note PDAs
-into the ALT (they were inline before) is what keeps the
-**continuation/change-note** settle — where `note_lock_e/f` are non-zero
-so the exact-fill dedup disappears and the tx grows — under the cap. The
-settle tx remains under 1232 for both exact-fill and change-note paths. Payload
-Payload v11 added the two relock tags; the current v12 signed-domain regression
-fixture is 1172 bytes (60 bytes headroom).
-
-Because the per-batch ALT now carries 7 addresses per match (and a
-batch packs up to N=16 matches → well past the ~30-address ceiling a
-single `extendLookupTable` tx can hold), the extend is **chunked**:
-`MAX_EXTEND_ADDRESSES = 25` addresses per extend tx (`settle/alt.rs::
-build_extend_alt_ix_chunks`), and the chunks are fired **concurrently**
-so the leader co-includes them in one block instead of paying one
-confirmation per chunk. The worker then **re-reads the ALT's canonical
-on-chain address order** (`parse_alt_addresses`, the account data at
-byte offset 56 in 32-byte strides) before building any settle tx —
-concurrent extends can land in a different order than they were issued,
-and a v0 tx's account indices must match the ALT's real layout, not the
-order the worker intended. If the re-read returns empty (the entries
-haven't rooted yet) it falls back to the in-memory order.
-
-`createLookupTable` requires the `recentSlot` arg to be a slot present
-in the `SlotHashes` sysvar. Fetching via `getSlot("confirmed")`
-occasionally picks a slot the leader skipped → `InvalidInstructionData`
-("…is not a recent slot"). Use `getLatestBlockhashAndContext().context.slot`
-instead — that slot is the one the blockhash was sampled at and is
-therefore guaranteed to be in `SlotHashes`.
-
-The per-batch ALT + `close_batch_validity_marker` are amortised across
-all N matches in the batch (one ALT, one close per batch — not per
-match). For N = 16 matches this turns 80+ per-match alt/close ops into
-1 ALT-create + a few chunked extends + 16 settles + 1 close per batch.
-ALT deactivation has a 512-slot (~3.5 minute) cooldown, so the settle
-worker keeps a **rolling pool** of per-batch ALTs (`settle/alt_pool.rs`,
-driven by `settle/worker.rs`) and recycles them once deactivation
-clears, rather than creating-and-burning one per batch.
-
-> **ALT activation finality.** Freshly-extended ALT entries only become
-> *loadable* by a v0 tx ~1 slot after the extend roots. This one-slot
-> wait — not darkpool compute — is the residual `settle_ms` tail you see
-> in the CVM timings. Concurrent chunked extends collapse the *extend*
-> cost into one block, but the activation wait is block-finality-bound
-> and goes away under Alpenglow's sub-second finality, not via any
-> code change here.
-
-#### Sending a v0 tx
-
-```ts
-const lookup = await connection.getAddressLookupTable(altPubkey).then(r => r.value!);
-const messageV0 = new TransactionMessage({
-    payerKey:        teeKeypair.publicKey,
-    recentBlockhash: blockhash,
-    instructions:    [compute_budget, ed25519_ix, tee_forced_settle_ix],
-}).compileToV0Message([lookup]);
-const tx = new VersionedTransaction(messageV0);
-tx.sign([teeKeypair]);
-await connection.sendTransaction(tx);
-```
-
-The wrapper lives in `packages/sdk/tests/helpers/settle-v0.ts`. All three
-e2e flows route their settle through it.
-
-#### Result
-
-| Test | Legacy tx size | v0 + ALT tx size |
-|---|---|---|
-| devnet-trade-flow (exact fill) | ~1180 | ~1100 |
-| change + relock | n/a | **1172 ✅** (60 B headroom) |
-
-All five change-note tests now pass.
+This path is qualified on Surfpool and devnet. Mainnet release remains gated on
+verifying transaction-v1 activation against the target cluster at release time.
 
 ### The canonical payload hash
 

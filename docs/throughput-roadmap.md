@@ -22,40 +22,32 @@ the prerequisite work, and where the inline analysis lives.
   protects.
   **Target hardware: H200** (Hopper, compute capability 9.0 → `sm_90`), which matches the already
   pinned `CUDA_ARCH=90` build ARG — no arch change needed. Confirmed 2026-07-20.
-- **🔵 ALPENGLOW** — unblocked once Solana fast-finality (Alpenglow) collapses on-chain confirmation
-  latency (the `settle_ms` / `verify_ms` / `alt_wait` IO terms → ~0).
+- **🔵 ALPENGLOW** — unblocked once Solana fast-finality (Alpenglow) collapses
+  the `settle_ms` and `verify_ms` confirmation terms.
 - **🟡 VOLUME** — not a platform gate; only worth doing once real order flow makes the system
   settle-bound (the settle queue actually backs up). Premature at low volume.
 - **🟠 CU-BUDGET** — not latency; the on-chain Groth16 **verify CU** axis. Only worth doing once a
   Tx's compute budget becomes the binding constraint (currently it is not — see item 6).
-- **🟣 TX-V1** — larger transactions (SIMD-0296: 1232 → **4096 bytes**) via the new **v1 tx format**
-  (SIMD-0385). Targeted ~Q3 2026, lands with/near Alpenglow. v1 **does not support ALTs**, but 4096 B
-  fits our full inline address list — so this is the gate that lets the settle path drop the entire ALT
-  apparatus. See item 7.
+- **🟣 TX-V1** — the settlement implementation and devnet/Surfpool validation
+  are complete. Mainnet use remains gated on cluster activation. See item 7.
 
 ## Cost model this roadmap is reasoned against
 
-From `crates/darknyx-tee-loadgen/BENCHMARK.md` (rapidsnark-CPU, 8 vCPU, full N=16 batch):
+The current reference is the 2026-09-05 transaction-v1 C1 run on a prod9
+8-vCPU CVM. Packing was 49.26%, so this is a production-shaped baseline rather
+than a normalized full-batch ceiling:
 
 | Term | ms | Nature | Killed by |
 |---|--:|---|---|
-| `prove_ms` (witness **297** + prove_step **2214**) † | ~2,557 | **fixed per batch** (padded N=16) | 🟢 GPU (prove_step — now **~87%** of prove) |
-| `verify_ms` | ~1,119 | IO | 🔵 Alpenglow |
-| `settle_ms` (Tx D) | ~11,222 | IO — **dominant**; ~fixed per batch (co-inclusion) | 🔵 Alpenglow |
-| `alt_tx`+`alt_wait` | ~3,380 | IO — ALT create + slot-warmup | 🟣 TX-V1 (ALT eliminated, not Alpenglow — see item 7) |
-| `total_ms` (overlapped wall) | ~16,938 | — | — |
+| `prove_ms` (witness + prove step) | 3,494 p50 | **fixed per batch** (padded N=16) | 🟢 GPU (prove step) |
+| `settle_ms` (Tx D) | 988 p50 | IO, affected by confirmation/co-inclusion | 🔵 Alpenglow |
+| `total_ms` (overlapped wall) | 5,726 p50 | — | — |
 
-> † **The `prove_ms` split was re-measured 2026-07-18** on a live CVM (prod9,
-> image `tee-v3-hardening-64`, rapidsnark backend) **after the native witness
-> generator landed**: `witness_ms=297`, `prove_step_ms=2214`. The older
-> BENCHMARK.md figure (witness 2124 + prove_step 1485) predates native
-> witness-gen and **must not be used to reason about the GPU ceiling** — see
-> item 5. The IO rows above are still the BENCHMARK.md numbers.
-
-Two facts drive everything below: (1) the pre-settle phase (lock ‖ prove+verify ‖ ALT) is **already
-overlapped** (`worker.rs` `tokio::join!`), and (2) at the production-default
-`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1` each batch monopolizes a ~17 s serial
-pipeline slot dominated by `settle_ms` IO.
+Two facts drive everything below: (1) lock and prove+verify are already
+overlapped (`worker.rs` `tokio::join!`), and (2) at the production-default
+`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1` each batch owns one serial pipeline
+slot. The current reference is prove-dominated; older pre-v1 samples are not a
+valid model for the current critical path.
 
 ---
 
@@ -70,9 +62,9 @@ the next H200 window an env-only A/B rather than a code change.
 The two historical correctness blockers were re-audited before exposing the
 knob. The first is now eliminated rather than merely guarded:
 
-- The former rolling-ALT planning/mutation race disappeared when v1 inline
-  accounts deleted Tx C and the ALT pool. There is no longer shared lookup-table
-  state for concurrent batches to corrupt.
+- The former shared transaction-setup mutation race disappeared when v1 inline
+  accounts deleted Tx C. There is no longer shared account-planning state for
+  concurrent batches to corrupt.
 - A partial-fill continuation is inserted into the opening store only after its
   parent Tx D confirms. The fixed matcher snapshot used by a tick cannot select
   that continuation for a sibling page, so there is no child batch to start
@@ -94,7 +86,7 @@ Evidence:
 [`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
 
 **Transaction-v1 C1 re-baseline 2026-09-05:** the inline-account image produced
-zero `alt_tx`/`alt_wait` samples and delivered 1.340 confirmed matches/s with a
+no setup-transaction stage and delivered 1.340 confirmed matches/s with a
 5.726-second total P50. Attempts to manufacture 100% N=16 packing through
 bursting and externally aligned waves failed even with twenty independently
 RA-TLS-verified transports; packing is therefore retained as a reported
@@ -104,16 +96,16 @@ CPU C2 decision. Evidence:
 **Source:** `scheduler.rs`, `worker.rs`, and
 `docs/benchmarks/settlement-throughput-methodology.md`.
 
-### 2. Per-shard / per-worker ALT pools — retired by transaction v1
+### 2. Per-shard transaction-setup pools — retired by transaction v1
 
-Tx D now uses v1 inline accounts. Tx C and the shared rolling pool were deleted,
-so this proposed optimization has no remaining implementation target.
-**Source:** the ALT-infra assessment (the "Priority 3 / Option A" review); memory `settle_io_and_marker_sweep`.
+Tx D now uses v1 inline accounts. Tx C and its shared rolling state were
+deleted, so this proposed optimization has no remaining implementation target.
 
 ### 3. Reduce Tx D confirmation dependencies (optimistic / async settle)
-**Gate: 🔵 ALPENGLOW (mostly free) — or manual.** The dominant cost is `settle_ms` (Tx D block
-confirmation, ~fixed per batch). Alpenglow collapses this at the platform level for ~nothing. The manual
-pre-Alpenglow version is to shorten the sequential A→B→C→D confirmation chain (e.g., send Tx D on a
+**Gate: 🔵 ALPENGLOW (mostly free) — or manual.** Tx D confirmation remains a
+variable IO term even though proving dominates the current baseline. Alpenglow
+collapses it at the platform level for ~nothing. The manual pre-Alpenglow
+version is to shorten the sequential A→B→D confirmation chain (e.g., send Tx D on a
 looser commitment, or drive a dependency tracker so the scheduler doesn't block on each confirm). Note:
 **Tx E (`close_batch_validity_marker`) is already done** — it was moved off the critical path to an async
 sweeper (`settle::marker_sweep`, merged). Tx D is the remaining one.
@@ -233,63 +225,30 @@ packing pressure makes the saving operationally useful. Detailed raw samples and
 `groth16-solana` 0.2.0 `groth16.rs`; `programs/vault/src/zk/{verifier.rs,vk_*.rs}`; the 7 verify sites
 above.
 
-### 7. Drop ALTs: settle Tx D → v1 inline-address transaction (SIMD-0296 / SIMD-0385)
-**Status: implementation complete; the signed v1 submit/read probe passed on
-the pinned Surfpool 1.5.0 build. A full Tx D settlement remains pending, and
-mainnet remains gated on cluster activation.** SIMD-0296 raises the tx cap
-1232 → **4096 B** via the SIMD-0385 **v1 format**
-(leading version byte `129`; compute budget set by a **header config-mask** instead of `ComputeBudget`
-instructions; every field after the version byte is re-laid-out). v1 **does not support address lookup
-tables** — you inline every address — but 4096 B holds our full settle account list. So this is a straight
-win: our entire ALT apparatus exists *only* to fit Tx D under 1232, and adopting v1 makes all of it go
-away. **No on-chain program or circuit change** — the vault is indifferent to how accounts arrive.
+### 7. Transaction-v1 settlement rollout and capacity follow-up
 
-**Per-tx impact:**
-- **Tx C (per-batch ALT create/extend) — DELETED.** No ALT ⇒ nothing to create or warm.
-- **Tx D (`tee_forced_settle_batched`) — v0+2-ALT → v1+inline.** The ~13–15 accounts (`tee_authority`,
-  `vault_config`, `merkle_tree`, `note_lock_a/b/e/f`, `consumed_a/b`, `batch_validity_marker`,
-  `system_program`, `instructions_sysvar`) go inline: 1173 B (ALT-compressed) → **1392 B** inline,
-  comfortably under 4096 (worst-case 6-leaf + 2-relock included, so no "most cases" risk for us). The CU
-  limit moves from a prepended `ComputeBudget` ix to the v1 header mask.
-- **Tx A (lock ×2), Tx B (verify), Tx E (marker close) — unchanged.** Already ALT-free and <1232;
-  optionally migrate to v1 for uniformity, not required.
+**Status:** Tx D uses transaction v1 with every account inline. The signed
+submit/read probe, local Surfpool matrix, devnet settlement, and the 2026-09-05
+CPU-CVM C1 baseline passed. Mainnet use remains gated on cluster activation.
 
-**Eliminated complexity (the real prize):** the whole `settle/alt_pool.rs` rolling pool (246-entry
-rotation, **512-slot deactivation cooldown**, `Create`/`Extend` planning), `settle/alt.rs`, the Tx-C path
-threaded through `job.rs`/`pipeline.rs`/`worker.rs`, the `alt_wait` slot-warmup, the
-`createLookupTable recentSlot` gotcha, and the entire §6 1232-byte budget discipline (lock_note key-dedup,
-payload-size fights). This is a large, audit-surface-reducing deletion.
+Tx D is currently 1,392 bytes under the 4,096-byte wire ceiling and stays
+within the 64-inline-account maximum. It sets compute, loaded-account-data, and
+priority-fee limits through the v1 message configuration. Tx A, Tx B, and Tx E
+remain on their smaller formats because migrating them would add compatibility
+requirements without useful headroom.
 
-**Roadmap + cost-model interactions:**
-- Kills the **`alt_tx + alt_wait` ~3,380 ms** term outright — the cost-table "Killed by" for that row is
-  TX-V1, not Alpenglow (the ALT was structural, not confirmation latency).
-- **Substitutes item 2** (per-shard/per-worker ALT pools) entirely — there is no ALT to pool.
-- **Removes the ALT-corruption barrier in item 1** — `SETTLE_CONCURRENCY>1` was unsafe partly because
-  concurrent batches corrupted the *shared* rolling ALT (the 2026-06-17 loadgen incident); with no ALT
-  that failure class disappears. Item 1 then stays 🟢 GPU-gated only for the prove-contention reason, and
-  should land *after* this so concurrency is built ALT-free from the start.
+The migration deleted Tx C and all shared transaction-setup state. Remaining
+follow-up is deliberately narrow:
 
-**Enabled (secondary, optional):** at 4096 B you can pack 2–3 matches' settle instructions into ONE v1
-Tx D (shared `vault_config`/`system_program`/`instructions_sysvar`/payer dedup across ixs; ~70k CU each ≪
-1.4M/tx), cutting per-batch settle-tx count 16 → ~6–8. Interacts with tree-sharding (in-tx matches
-serialize, so pack same-shard or accept serial) and re-opens the item-6 verify-CU math if proofs are
-co-packed. Evaluate under 🟡 VOLUME once settle-bound; don't prescribe now.
+- tighten the initial 64-MiB loaded-account-data ceiling from real simulation
+  evidence, rounded to a 32-KiB page with explicit headroom;
+- once real volume makes settlement transaction count material, benchmark
+  packing two or three settle instructions per v1 transaction against the
+  current independently submitted, cross-shard model;
+- keep mainnet disabled until the cluster advertises transaction-v1 support.
 
-**Implementation/rollout notes:**
-- The TEE alone frames and signs Tx D; the SDK mirrors its instructions and
-  payload bytes but intentionally has no second production transaction builder.
-- Every transaction reader now advertises version 1. Surfpool v1.5+ and devnet
-  are the qualification targets; mainnet-beta is not activated as of 2026-09-03.
-- `alt_tx_ms`/`alt_wait_ms` remain nullable telemetry fields solely so old
-  benchmark records decode; v1 records leave them absent.
-- The loaded-account-data ceiling starts at 64 MiB and must be tightened from
-  the real simulation's `loadedAccountsDataSize`, rounded to the next 32-KiB
-  page with headroom.
-**Source:** SIMD-0296 + SIMD-0385; `solana.com/upgrades/larger-transaction-sizes`;
-`crates/darknyx-tee/src/settle/{alt_pool.rs,alt.rs,job.rs,worker.rs,pipeline.rs}`; the §6 tx-size budget
-in CLAUDE.md.
-
----
+**Source:** SIMD-0296 and SIMD-0385, `settle/pipeline.rs`, and the
+2026-09-05 C1 benchmark report.
 
 ### 8. RA-TLS client concurrency — `connections: 1` is a per-client ceiling 🟡
 

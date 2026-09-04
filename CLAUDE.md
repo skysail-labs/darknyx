@@ -889,7 +889,7 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 ## 6. The settlement transaction budget
 
 Tx D uses Solana transaction v1, whose wire cap is 4096 bytes and whose
-account list is fully inline (v1 does not support Address Lookup Tables):
+account list is fully inline:
 
 | Tx | ~Size | Headroom |
 |---|---|---|

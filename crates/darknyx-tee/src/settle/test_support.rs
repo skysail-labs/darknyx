@@ -65,10 +65,8 @@ pub(crate) async fn spawn_mock_rpc() -> String {
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let result = match method {
             "getLatestBlockhash" => {
-                // Advance the slot every call so the worker's per-batch
-                // ALT-activation wait (poll until the slot moves past the
-                // extend's landing slot) breaks promptly instead of
-                // spinning out its 30 retries.
+                // Advance the slot every call so deadline and retry paths see
+                // forward progress instead of timing out on a frozen mock.
                 let slot = 1000 + slot_counter.fetch_add(1, Ordering::SeqCst);
                 json!({
                     "context": { "slot": slot },
@@ -96,8 +94,8 @@ pub(crate) async fn spawn_mock_rpc() -> String {
                     .collect();
                 json!({ "context": { "slot": 1000 }, "value": value })
             }
-            // Per-batch ALT re-read → null so the worker falls back to its
-            // in-memory ALT order (the mock doesn't model account state).
+            // Unknown account reads return null; individual tests override
+            // this handler when they need concrete account state.
             "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
             // An unexpected method gets a proper top-level JSON-RPC
             // error object (no `result`), so the client surfaces it as

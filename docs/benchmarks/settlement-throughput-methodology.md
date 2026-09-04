@@ -15,7 +15,7 @@ match can append a variable number of change and fee notes).
 | Post-offer drain latency | Completion of the final HTTP submission to each batch's terminal record (floored at zero for batches that finish while offering continues) | Shows how long the venue takes to drain after load stops |
 | Per-order client latency | A client timestamps its accepted submission and the authenticated `orders` event carrying the same `market_id` and `match_id` | User-visible execution friction; the wire correlation is implemented, while client-specific transport/network time is intentionally not mixed into the server benchmark |
 | Queue wait | Batch `started_at_ms - enqueued_at_ms`; report P50/P95/P99 and oldest queued age | Detects saturation before outright failures |
-| Stage latency | `witness`, `prove_step`, full `prove`, `verify`, ALT, Tx D settle, and total | Attributes gains and identifies the next bottleneck |
+| Stage latency | `witness`, `prove_step`, full `prove`, `verify`, Tx D settle, and total | Attributes gains and identifies the next bottleneck |
 | Outcome quality | Confirmed/rejected/ambiguous matches and rebroadcasts | A faster run is invalid if reliability regresses |
 | N=16 packing | Sum active matches / sum padded slots | Separates prover speed from workload packing |
 | Tx D co-inclusion | `(confirmed slot observations - distinct confirmed slots) / confirmed slot observations` | Shows whether shard sends land together |

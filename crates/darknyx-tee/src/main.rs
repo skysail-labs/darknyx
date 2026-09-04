@@ -14,8 +14,8 @@
 //!   5. Spawn long-running tokio tasks:
 //!      - one `MatcherDriver` per market — ticks every `BATCH_MS`;
 //!      - one shared `oracle_sync` — refreshes every configured Pyth feed;
-//!      - one settlement scheduler per market, sharing the prover, ALT pool,
-//!        signer set, and venue-wide batch-concurrency budget.
+//!      - one settlement scheduler per market, sharing the prover, signer set,
+//!        and venue-wide batch-concurrency budget.
 //!   6. Thread the matcher registry into `ApiState` so signed symbols route
 //!      placements and existing-order operations return to the same book.
 //!   7. Bind the configured HTTP socket + `axum::serve(...)` until
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
             // Derive the full K-shard signer set (one fee-payer/authority per
             // Merkle-tree shard, at darknyx/ed25519-signer/v2/{i}). signers[0] is
             // the primary `signer` from probe_dstack (the /info advertisement +
-            // the per-batch lock/verify/ALT/close payer); signers[1..] are the
+            // the per-batch lock/verify/close payer); signers[1..] are the
             // extra shard fee-payers the settle Tx D's round-robin across. ALL K
             // must be registered in vault_config.tee_pubkeys + funded.
             let signers = darknyx_tee::keys::ed25519::derive_set(&client, cfg.num_trees).await?;
@@ -198,8 +198,8 @@ async fn main() -> Result<()> {
 
     // ─── 2. Shared multi-market runtime ──────────────────────────────
     // Each configured pair gets an independent MatcherState/driver/channel.
-    // The oracle cache, slot clock, signer set, prover, ALT pool, and global
-    // settle concurrency budget remain venue-wide shared resources.
+    // The oracle cache, slot clock, signer set, prover, and global settle
+    // concurrency budget remain venue-wide shared resources.
     let mut match_configs = cfg
         .markets
         .iter()
@@ -457,7 +457,7 @@ async fn main() -> Result<()> {
     // The scheduler accumulates per-match jobs; when the TEE is fully
     // configured (signer + RPC + N=16 prover) a `SettleDriver` drives
     // each batch through the full on-chain pipeline (lock → prove →
-    // verify → ALT → settle → async close) and finalizes each match only from
+    // verify → settle → async close) and finalizes each match only from
     // its own Tx D outcome.
     // Missing any dependency (explicit simulator test mode, prover zkey absent in a
     // local dev run) → enqueue-only, logged below.

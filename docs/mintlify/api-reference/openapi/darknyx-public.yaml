@@ -1301,7 +1301,6 @@ components:
                 - rpc_unavailable
                 - prover_failed
                 - leaf_resolution_failed
-                - alt_not_active
                 - settlement_rejected
                 - internal_error
                 description: 'Present only when `stage` is `failed`. A closed-set label

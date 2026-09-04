@@ -326,18 +326,6 @@ rg 'prove breakdown|settlement benchmark record|settle Tx D confirmed' \
   .surfpool/local-tee/evidence/phase3-*/tee.before-restart.log
 ```
 
-For the transaction-v1 settlement path, numeric `alt_tx_ms` or `alt_wait_ms`
-fields are stale behavior and must not appear:
-
-```sh
-if rg 'alt_(tx_ms|wait_ms)=' \
-  .surfpool/local-tee/evidence/phase3-*/tee.log \
-  .surfpool/local-tee/evidence/phase3-*/tee.before-restart.log; then
-  echo 'unexpected ALT stage in transaction-v1 evidence' >&2
-  exit 1
-fi
-```
-
 Evidence is intentionally local and gitignored. Do not commit logs, generated
 keys, ledgers, or `.surfpool/local-tee/current/env.sh`.
 

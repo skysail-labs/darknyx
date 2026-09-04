@@ -249,9 +249,9 @@ pub struct Config {
     /// on-chain throughput lever); 1 reproduces the old one-at-a-time behavior.
     pub settle_send_concurrency: u64,
     /// Maximum whole settlement batches in flight. Default 1 preserves the
-    /// production baseline. Values 2..=8 are an explicit benchmark knob:
-    /// rolling-ALT mutations remain serialized and continuation notes cannot
-    /// re-enter the matcher until their parent Tx D confirms.
+    /// production baseline. Values 2..=8 are an explicit benchmark knob;
+    /// continuation notes cannot re-enter the matcher until their parent Tx D
+    /// confirms.
     pub settle_batch_concurrency: u8,
     /// Number of Merkle-tree shards (`= vault_config.num_trees`). The settle
     /// worker derives K signer keys (`darknyx/ed25519-signer/v2/{i}`) and

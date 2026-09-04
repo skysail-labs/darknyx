@@ -357,7 +357,7 @@ did not justify attributing the ~10.9-second prove step to circuit growth.
 Image-65 prod9 baseline (2026-07-19): `cvm-settle-e2e` passed in 42.92 seconds.
 The enclave reported native `witness_ms=219`, rapidsnark
 `prove_step_ms=1967`, aggregate `prove_ms=2215`, lock 1,387 ms, verify 1,325 ms,
-ALT transaction/wait 1,271/283 ms, parallel phase 3,540 ms, Tx-D confirmation
+retired pre-v1 setup transaction/wait 1,271/283 ms, parallel phase 3,540 ms, Tx-D confirmation
 10,644 ms (four rebroadcasts), settlement 10,741 ms, and total pipeline 14,321
 ms. The boot probe saw 8 logical CPUs, model `06/af` at 2,400 MHz, unlimited
 `cpu.max`, zero `nr_throttled`/`throttled_usec`, and 356.5 single-thread Mops/s.
@@ -392,7 +392,7 @@ still ONE proof: a batch is N=16 with `active_matches=4` and `padded_slots=16`,
 so four matches share a single Groth16. It therefore does NOT yet give warm
 *repeated* proofs on one boot; that needs a run whose matches span several
 matcher ticks. Full stage split: `lock_ms=1629`, `verify_ms=1815`,
-`alt_tx_ms=1202`, `alt_wait_ms=846`, `parallel_ms=4969`, `settle_ms=7789`,
+retired pre-v1 setup/wait `1202/846 ms`, `parallel_ms=4969`, `settle_ms=7789`,
 `close_ms=0`, `rebroadcasts=8`, `distinct_confirmed_slots=2`.
 
 That run's PRIMARY purpose was correctness, not timing. `cvm-settle-e2e` only
