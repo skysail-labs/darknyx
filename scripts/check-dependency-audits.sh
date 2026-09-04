@@ -80,8 +80,28 @@ trap 'rm -f "$CURRENT"' EXIT
 # (zero vulnerabilities), so absence of rows cannot itself be the error signal —
 # the exit code has to carry it.
 NPM_RAW="$(mktemp)"
-npm audit --omit=dev --json > "$NPM_RAW" 2>/dev/null || true   # npm exits non-zero when findings exist
-python3 - "$NPM_RAW" > "$CURRENT" <<'PY'
+NPM_ERR="$(mktemp)"
+NPM_PARSE=3
+
+# npm's audit endpoint occasionally returns a registry error object (or an
+# empty body) after npm's own long retry cycle. That is neither a clean report
+# nor an advisory, so retry it within a bounded two-minute window. A usable
+# report still fails on any unbaselined advisory below; all three unusable
+# responses still fail closed. Keeping stderr lets CI say why the registry was
+# unavailable instead of collapsing every transport failure into "no
+# vulnerabilities key".
+for attempt in 1 2 3; do
+  : > "$NPM_RAW"
+  : > "$NPM_ERR"
+  : > "$CURRENT"
+  npm audit --omit=dev --json \
+    --fetch-retries=1 \
+    --fetch-retry-mintimeout=1000 \
+    --fetch-retry-maxtimeout=5000 \
+    --fetch-timeout=30000 \
+    > "$NPM_RAW" 2> "$NPM_ERR" || true # npm exits non-zero when findings exist
+
+  if python3 - "$NPM_RAW" > "$CURRENT" <<'PY'
 import json, sys
 try:
     with open(sys.argv[1]) as fh:
@@ -90,7 +110,10 @@ except Exception as e:
     print(f"could not parse npm audit output: {e}", file=sys.stderr)
     sys.exit(3)
 if not isinstance(d, dict) or "vulnerabilities" not in d:
-    print("npm audit output has no 'vulnerabilities' key", file=sys.stderr)
+    error = d.get("error", {}) if isinstance(d, dict) else {}
+    code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
+    summary = error.get("summary", "no error summary") if isinstance(error, dict) else "no error summary"
+    print(f"npm audit returned an unusable report ({code}): {summary}", file=sys.stderr)
     sys.exit(3)
 rows = set()
 for name, v in d["vulnerabilities"].items():
@@ -99,17 +122,31 @@ for name, v in d["vulnerabilities"].items():
             rows.add(f"{via['url'].rsplit('/', 1)[-1]} {name} {v['severity']}")
 print("\n".join(sorted(rows)))
 PY
-NPM_PARSE=$?
-rm -f "$NPM_RAW"
+  then
+    NPM_PARSE=0
+    break
+  fi
+
+  echo "npm audit report unavailable (attempt $attempt/3)" >&2
+  if [ "$attempt" -lt 3 ]; then
+    sleep $((attempt * 2))
+  fi
+done
+
 if [ "$NPM_PARSE" -ne 0 ]; then
   echo "::error::npm audit COULD NOT BE READ — the npm half of this gate did NOT run."
   echo "  Nothing was compared against the baseline. Check npm connectivity and"
   echo "  that \`npm ci\` has populated node_modules."
+  if [ -s "$NPM_ERR" ]; then
+    echo "  Last npm diagnostic:"
+    sed 's/^/    /' "$NPM_ERR" | tail -8
+  fi
   failed=1
   NPM_USABLE=0   # nothing trustworthy to compare against the baseline
 else
   NPM_USABLE=1
 fi
+rm -f "$NPM_RAW" "$NPM_ERR"
 
 if [ "$NPM_USABLE" -ne 1 ]; then
   : # already reported above; do not also claim a baseline problem
