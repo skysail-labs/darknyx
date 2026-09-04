@@ -1973,13 +1973,12 @@ const extendIx = AddressLookupTableProgram.extendLookupTable({
 // Send both ixs in one tx, then wait one slot for the ALT to be referenceable.
 ```
 
-The resulting ALT pubkey is written to `.devnet/e2e-config.json` as
-`settleLookupTable` and reused by every settle tx forever. With
-tree-sharding the static ALT also lists the **K `merkle_tree` PDAs** —
-every settle's writable `merkle_tree[tree_id]` (the per-shard tree the
-match's outputs append to) resolves through this one ALT regardless of
-which shard the worker round-robins the match onto, so no per-shard ALT
-churn is needed.
+The resulting ALT pubkey was written to `.devnet/e2e-config.json` as
+`settleLookupTable` and was reused by every settle tx. With tree sharding, the
+static ALT also listed the **K `merkle_tree` PDAs**, so each writable
+`merkle_tree[tree_id]` resolved through one table regardless of the shard. This
+is historical behavior only; the current setup file has no
+`settleLookupTable` field.
 
 #### Per-batch ALTs on top of the static one
 

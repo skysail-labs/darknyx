@@ -97,23 +97,24 @@ Move the two gitignored workspaces once. Do not run `mv` again when the
 symlinks already exist.
 
 ```sh
-test ! -L target && mv target /Volumes/DarknyxBuild/darknyx-monorepo-target
-ln -s /Volumes/DarknyxBuild/darknyx-monorepo-target target
-
-test ! -L .surfpool \
-  && mv .surfpool /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
-ln -s /Volumes/DarknyxBuild/darknyx-monorepo-surfpool .surfpool
-```
-
-For a checkout without either directory yet, create the external directories
-and symlinks instead:
-
-```sh
-mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-target
-mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
-test -e target || ln -s /Volumes/DarknyxBuild/darknyx-monorepo-target target
-test -e .surfpool \
-  || ln -s /Volumes/DarknyxBuild/darknyx-monorepo-surfpool .surfpool
+if test ! -L target; then
+  if test -e target; then
+    test ! -e /Volumes/DarknyxBuild/darknyx-monorepo-target
+    mv target /Volumes/DarknyxBuild/darknyx-monorepo-target
+  else
+    mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-target
+  fi
+  ln -s /Volumes/DarknyxBuild/darknyx-monorepo-target target
+fi
+if test ! -L .surfpool; then
+  if test -e .surfpool; then
+    test ! -e /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
+    mv .surfpool /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
+  else
+    mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
+  fi
+  ln -s /Volumes/DarknyxBuild/darknyx-monorepo-surfpool .surfpool
+fi
 ```
 
 Verify that both paths resolve onto the APFS image:
@@ -133,6 +134,7 @@ been mounted yet.
 If `.surfpool/bin/surfpool` already exists, verify it against `pin.json`:
 
 ```sh
+set -euo pipefail
 test "$(.surfpool/bin/surfpool --version)" \
   = "$(jq -r .reportedVersion scripts/surfpool/pin.json)"
 test "$(shasum -a 256 .surfpool/bin/surfpool | awk '{print $1}')" \
@@ -328,7 +330,7 @@ For the transaction-v1 settlement path, numeric `alt_tx_ms` or `alt_wait_ms`
 fields are stale behavior and must not appear:
 
 ```sh
-if rg 'alt_tx_ms=[0-9]|alt_wait_ms=[0-9]' \
+if rg 'alt_(tx_ms|wait_ms)=' \
   .surfpool/local-tee/evidence/phase3-*/tee.log \
   .surfpool/local-tee/evidence/phase3-*/tee.before-restart.log; then
   echo 'unexpected ALT stage in transaction-v1 evidence' >&2

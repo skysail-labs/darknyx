@@ -43,7 +43,7 @@ dstack gateway → Intel TDX CVM
     shared oracle cache
     VALID_MATCH_BATCH prover
     K Merkle mirrors
-    shared ALT pool + RPC client
+    transaction-v1 builder + RPC client
     K dstack-derived settlement signers
                          │ HTTPS RPC + signed txs
                          ▼
@@ -78,7 +78,7 @@ crates/darknyx-tee/src/
 ├── oracle/               boot-selected Pyth source verification and shared cache
 ├── merkle/               K cold-boot/live mirrors
 ├── prover/               witness, leaf/constraint guards, ark/rapidsnark/icicle
-├── settle/               lock, proof, ALT, Tx D, outcomes, metrics, sweepers
+├── settle/               lock, proof, v1 Tx D, outcomes, metrics, sweepers
 ├── persistence/          auth + pending marker/lock snapshots
 └── solana_rpc/           RPC transport and transaction reconciliation
 ```
@@ -112,7 +112,7 @@ A governed real-settlement boot:
    and replace environment economics with the finalized governed values.
 8. Cold-boot K Merkle mirrors from `DARKNYX_TEE_SYNC_FROM_SLOT`, then begin
    live reconciliation.
-9. Load the N=16 proving key/backend and rolling ALT state.
+9. Load the N=16 proving key/backend and transaction-v1 resource limits.
 10. Restore auth and pending sweeper snapshots from the dstack-encrypted volume.
 11. Spawn oracle, slot, priority-fee, governance, mirror, sweeper, and per-market
     matcher/scheduler tasks.
@@ -163,7 +163,8 @@ For every market the process creates:
 - a settlement scheduler that always assembles a single-market N=16 proof.
 
 The markets share authentication, oracle cache, prover artifacts, K mirrors,
-K signer keys, RPC, ALT pool, and a venue-wide whole-batch semaphore.
+K signer keys, RPC, the transaction-v1 builder, and a venue-wide whole-batch
+semaphore.
 `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` is clamped to 1..8 and defaults to 1.
 Within one batch, `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` controls concurrent Tx D
 sends (default 16).

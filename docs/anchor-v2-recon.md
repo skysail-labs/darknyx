@@ -158,8 +158,11 @@ The program is the core of the protocol, so the whole tree runs, in tiers:
 program-derived, so `VaultConfig` and the K `MerkleTree` shards are initialized
 as new accounts and produce a new `.devnet/e2e-config.json`. The invariant is
 still an empty tree under the code/VKs being tested: reset every existing shard
-after an in-place program/VK change; for a new program id, initialize its fresh
-shards and verify their leaf counts are zero before starting the CVM mirror.
+after an in-place program/VK change. For a new program id, initialize its fresh
+shards, run `scripts/reset-merkle-tree.mjs` with `VAULT_PROGRAM_ID` set to that
+new id, and verify every shard's leaf count is zero before starting the CVM
+mirror. The explicit reset is intentionally retained as the program/VK-change
+gate even though newly initialized shards begin empty.
 
 ---
 

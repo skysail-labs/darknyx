@@ -247,8 +247,21 @@ async function main() {
     await new Promise((resolve) => server.close(resolve));
     await Promise.allSettled(transports.map(({ agent }) => agent.close()));
   };
-  process.once("SIGINT", () => void stop());
-  process.once("SIGTERM", () => void stop());
+  const stopOnSignal = async () => {
+    try {
+      await stop();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown failure";
+      process.stderr.write(`verified load proxy shutdown failed: ${message}\n`);
+      process.exitCode = 1;
+    }
+  };
+  process.once("SIGINT", async () => {
+    await stopOnSignal();
+  });
+  process.once("SIGTERM", async () => {
+    await stopOnSignal();
+  });
 }
 
 main().catch((error) => {

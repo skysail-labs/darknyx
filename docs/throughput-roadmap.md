@@ -105,6 +105,7 @@ CPU C2 decision. Evidence:
 `docs/benchmarks/settlement-throughput-methodology.md`.
 
 ### 2. Per-shard / per-worker ALT pools — retired by transaction v1
+
 Tx D now uses v1 inline accounts. Tx C and the shared rolling pool were deleted,
 so this proposed optimization has no remaining implementation target.
 **Source:** the ALT-infra assessment (the "Priority 3 / Option A" review); memory `settle_io_and_marker_sweep`.
