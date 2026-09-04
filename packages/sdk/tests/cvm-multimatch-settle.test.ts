@@ -344,47 +344,44 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const firstOrderId = (orders[0] as { order_id: string }).order_id;
     let sawPendingSettlement = false;
     const submitStart = Date.now();
-    const statuses = await Promise.all(
-      orders.map((o, index) =>
-        gwFetch(`${GATEWAY}/orders`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(o),
-        }).then(async (r) => {
-          if (!String(r.status).startsWith("2"))
-            console.log(
-              `  !! /orders ${r.status}: ${(await r.text()).slice(0, 200)}`,
-            );
-          // Observe the finality-gated reservation while the remaining
-          // concurrent POSTs are still completing. Waiting for all 32 POST
-          // responses before beginning this poll races a fast Tx D: the first
-          // pair can be confirmed and swept before Promise.all resolves even
-          // though it was correctly pending throughout proving and send.
-          if (index === 0 && String(r.status).startsWith("2")) {
-            const pendingDeadline = Date.now() + 20_000;
-            while (!sawPendingSettlement && Date.now() < pendingDeadline) {
-              const orderStatus = await gwFetch(
-                `${GATEWAY}/orders/${firstOrderId}`,
-                { headers: { authorization: `Bearer ${token}` } },
-              );
-              if (orderStatus.status === 200) {
-                const body = (await orderStatus.json()) as { status?: string };
-                sawPendingSettlement = body.status === "pending_settlement";
-              }
-              if (!sawPendingSettlement) {
-                await new Promise((resolvePromise) =>
-                  setTimeout(resolvePromise, 100),
-                );
-              }
-            }
-          }
-          return r.status;
-        }),
-      ),
-    );
+    const submitOrder = (order: object) =>
+      gwFetch(`${GATEWAY}/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(order),
+      }).then(async (response) => {
+        if (!String(response.status).startsWith("2")) {
+          console.log(
+            `  !! /orders ${response.status}: ${(await response.text()).slice(0, 200)}`,
+          );
+        }
+        return response.status;
+      });
+
+    // The RA-TLS harness pins one HTTP/1 connection. Submit one complete pair
+    // before polling it: polling while its counter-order is still queued on
+    // that same connection prevents the counter-order from reaching the CVM.
+    // Once both POSTs are accepted, the pair can enter pending_settlement and
+    // remains there throughout proof generation, giving the client a genuine
+    // externally observed finality-gating assertion.
+    const statuses = await Promise.all(orders.slice(0, 2).map(submitOrder));
+    const pendingDeadline = Date.now() + 20_000;
+    while (!sawPendingSettlement && Date.now() < pendingDeadline) {
+      const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (orderStatus.status === 200) {
+        const body = (await orderStatus.json()) as { status?: string };
+        sawPendingSettlement = body.status === "pending_settlement";
+      }
+      if (!sawPendingSettlement) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      }
+    }
+    statuses.push(...(await Promise.all(orders.slice(2).map(submitOrder))));
     const accepted = statuses.filter((s) => String(s).startsWith("2")).length;
     console.log(
       `  · submitted ${orders.length} orders in ${Date.now() - submitStart}ms — ${accepted} accepted (2xx)`,
