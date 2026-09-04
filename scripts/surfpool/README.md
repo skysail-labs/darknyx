@@ -122,6 +122,10 @@ deterministic development keys. The TEE still uses its production RPC client,
 governance reads, K-shard mirror, matcher, prover, settlement journal, and vault
 transactions; there is no simulator-only protocol fork.
 
+For a start-to-finish operator procedure—including pinned dependency setup,
+the optional external-SSD layout, progress monitoring, evidence checks, and
+safe teardown—follow [`LOCAL_MATRIX_RUNBOOK.md`](LOCAL_MATRIX_RUNBOOK.md).
+
 Build the optimized host binary first. The Ark proving-key load is several
 minutes in an unoptimized build and seconds in release mode:
 

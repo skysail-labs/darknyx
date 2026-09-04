@@ -1,5 +1,5 @@
 # Rust
-target/
+/target
 **/target/
 *.rs.bk
 Cargo.lock.bak
@@ -44,7 +44,7 @@ darknyx-seed-backup.json
 # Devnet test fixtures (generated + funded locally; never committed)
 .devnet/
 !.devnet/README.md
-.surfpool/
+/.surfpool
 
 # Circom build artifacts (generated — except committed zkeys)
 # Do NOT ignore circuits/build/ at the directory level; git won't descend
