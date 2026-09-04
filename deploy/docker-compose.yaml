@@ -26,12 +26,12 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-91 (commit 99c6c5f9,
-    # protocol-fee recovery v2 plus the two-epoch release-assurance rehearsal;
-    # pot19 N=16 proving key fetched via Git LFS during the image build).
+    # Source tag for audit cross-reference: tee-v3-hardening-92 (commit 3bb052c2,
+    # transaction-v1 inline-account settlement; pot19 N=16 proving key fetched
+    # via Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:af1a31600f6a5cc9bc0de14df4609cdb73e87906ef7805b482d09360ce123422
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:dd31985fee01d921ed4c8e0ea49e479b25a69583831d95d2e60d8bc8d1a2c0f0
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
