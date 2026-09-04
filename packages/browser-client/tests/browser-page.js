@@ -98,7 +98,11 @@ async function unsupported() {
 async function supported() {
   await store.clear();
   const inactivityMs = 150;
-  let vault = new BrowserVault({ store, inactivityMs });
+  // Provisioning includes a virtual WebAuthn ceremony and IndexedDB write.
+  // Keep that lifecycle independent from the deliberately tiny inactivity
+  // window below: a loaded CI runner can legitimately take >150 ms between
+  // the Worker arming its timer and this page observing the provision result.
+  let vault = new BrowserVault({ store, inactivityMs: 60_000 });
   await vault.provision("Darknyx browser vault");
   const original = structuredClone(await store.load());
   if (!original) throw new Error("provision did not persist a record");
@@ -126,6 +130,12 @@ async function supported() {
   await store.save(original);
   await vault.unlock();
 
+  // Exercise inactivity on a fresh locked Worker whose only timed operation is
+  // unlock. This tests the same production timer without making provision
+  // latency part of the assertion.
+  vault.destroy();
+  vault = new BrowserVault({ store, inactivityMs });
+  await vault.unlock();
   const pollingDeadline = performance.now() + inactivityMs + 120;
   let polled = "unlocked";
   while (performance.now() < pollingDeadline) {
