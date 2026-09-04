@@ -97,23 +97,23 @@ Move the two gitignored workspaces once. Do not run `mv` again when the
 symlinks already exist.
 
 ```sh
-test ! -L target && mv target /Volumes/DarknyxBuild/nyx-monorepo-target
-ln -s /Volumes/DarknyxBuild/nyx-monorepo-target target
+test ! -L target && mv target /Volumes/DarknyxBuild/darknyx-monorepo-target
+ln -s /Volumes/DarknyxBuild/darknyx-monorepo-target target
 
 test ! -L .surfpool \
-  && mv .surfpool /Volumes/DarknyxBuild/nyx-monorepo-surfpool
-ln -s /Volumes/DarknyxBuild/nyx-monorepo-surfpool .surfpool
+  && mv .surfpool /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
+ln -s /Volumes/DarknyxBuild/darknyx-monorepo-surfpool .surfpool
 ```
 
 For a checkout without either directory yet, create the external directories
 and symlinks instead:
 
 ```sh
-mkdir -p /Volumes/DarknyxBuild/nyx-monorepo-target
-mkdir -p /Volumes/DarknyxBuild/nyx-monorepo-surfpool
-test -e target || ln -s /Volumes/DarknyxBuild/nyx-monorepo-target target
+mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-target
+mkdir -p /Volumes/DarknyxBuild/darknyx-monorepo-surfpool
+test -e target || ln -s /Volumes/DarknyxBuild/darknyx-monorepo-target target
 test -e .surfpool \
-  || ln -s /Volumes/DarknyxBuild/nyx-monorepo-surfpool .surfpool
+  || ln -s /Volumes/DarknyxBuild/darknyx-monorepo-surfpool .surfpool
 ```
 
 Verify that both paths resolve onto the APFS image:
