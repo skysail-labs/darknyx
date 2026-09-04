@@ -92,6 +92,15 @@ leg—run 1/2/4 only for icicle CUDA on the same GPU host. Both CPU legs exposed
 excessive rebroadcasting, so neither is a production-capacity promotion result.
 Evidence:
 [`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
+
+**Transaction-v1 C1 re-baseline 2026-09-05:** the inline-account image produced
+zero `alt_tx`/`alt_wait` samples and delivered 1.340 confirmed matches/s with a
+5.726-second total P50. Attempts to manufacture 100% N=16 packing through
+bursting and externally aligned waves failed even with twenty independently
+RA-TLS-verified transports; packing is therefore retained as a reported
+workload variable rather than normalized away. This result does not reopen the
+CPU C2 decision. Evidence:
+[`docs/benchmarks/runs/tx-v1-c1-packing-investigation-2026-09-05.md`](benchmarks/runs/tx-v1-c1-packing-investigation-2026-09-05.md).
 **Source:** `scheduler.rs`, `worker.rs`, and
 `docs/benchmarks/settlement-throughput-methodology.md`.
 
