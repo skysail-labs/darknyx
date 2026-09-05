@@ -29,7 +29,7 @@ Darknyx chose between:
 | `config.rs::MarketSpec` | Strict `DARKNYX_TEE_MARKETS_JSON`, 1–16 entries, unique symbols and ordered mint pairs                   |
 | `main.rs`               | One `MatcherState`, `MatcherDriver`, and match channel per market                                        |
 | `ApiState::matchers`    | Boot-static symbol→matcher registry; enclave-only order-id→symbol routing for later cancel/get/modify    |
-| settle schedulers       | One receiver per market, one shared prover/ALT pool/signer set, one CVM-wide batch-concurrency semaphore |
+| settle schedulers       | One receiver per market, one shared prover/signer set, one CVM-wide batch-concurrency semaphore |
 | `/instruments`          | Lists every configured, finalized governed market                                                        |
 
 The on-chain program, by contrast, is **already market-agnostic**:
@@ -122,7 +122,7 @@ to avoid this — which is the same coupling as §3.2 from the other direction.
 | **Shard contention**      | CVMs contend on shared trees unless ranges are split                        | ✅ One CVM-wide settle resource pool owns all shards        |
 | **Blast radius**          | ✅ A bug/halt in one market can't touch another                             | Global governance/runtime failure is shared; oracle health is isolated per market |
 | **Proving capacity**      | ✅ Naturally parallel (separate machines)                                   | Per-market queues share one explicitly bounded proof budget |
-| **Cost**                  | N billable CVMs, N attestation/funding/ALT/mirror stacks                    | ✅ One stack                                                |
+| **Cost**                  | N billable CVMs, N attestation/funding/mirror stacks                        | ✅ One stack                                                |
 | **Per-market governance** | ✅ Native (`MarketConfig.enabled` per pair)                                 | Also fine — same per-pair PDA                               |
 
 ---

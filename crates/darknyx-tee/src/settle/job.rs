@@ -100,8 +100,6 @@ pub enum SettleFailureKind {
     Prover,
     /// Merkle leaf/path resolution failed for one of the batch's inputs.
     Leaf,
-    /// The per-batch address lookup table never became active.
-    AltNotActive,
     /// The settlement was definitively rejected on-chain, or its window
     /// expired — a real outcome, not an infrastructure fault.
     Rejected,
@@ -117,7 +115,6 @@ impl SettleFailureKind {
             Self::Rpc => "rpc_unavailable",
             Self::Prover => "prover_failed",
             Self::Leaf => "leaf_resolution_failed",
-            Self::AltNotActive => "alt_not_active",
             Self::Rejected => "settlement_rejected",
             Self::Internal => "internal_error",
         }
@@ -485,14 +482,14 @@ mod tests {
     //    error happened to format into itself — one such error interpolated the
     //    RPC endpoint, credential included.
 
-    /// Every label a client can observe. Adding a variant without adding it
-    /// here fails to compile, so the wire contract cannot drift silently.
-    fn all_kinds() -> [SettleFailureKind; 6] {
+    /// The currently published labels. Keep this list in sync with the enum
+    /// and OpenAPI; `label()` is compile-exhaustive, while this array drives
+    /// serialization coverage for every current variant.
+    fn all_kinds() -> [SettleFailureKind; 5] {
         [
             SettleFailureKind::Rpc,
             SettleFailureKind::Prover,
             SettleFailureKind::Leaf,
-            SettleFailureKind::AltNotActive,
             SettleFailureKind::Rejected,
             SettleFailureKind::Internal,
         ]
@@ -504,7 +501,6 @@ mod tests {
         assert_eq!(SettleFailureKind::Rpc.label(), "rpc_unavailable");
         assert_eq!(SettleFailureKind::Prover.label(), "prover_failed");
         assert_eq!(SettleFailureKind::Leaf.label(), "leaf_resolution_failed");
-        assert_eq!(SettleFailureKind::AltNotActive.label(), "alt_not_active");
         assert_eq!(SettleFailureKind::Rejected.label(), "settlement_rejected");
         assert_eq!(SettleFailureKind::Internal.label(), "internal_error");
     }

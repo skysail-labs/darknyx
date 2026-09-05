@@ -16,7 +16,7 @@
 //!   getLatestBlockhash            recent_blockhash for every tx
 //!   sendTransaction               submit signed bytes
 //!   getSignatureStatuses          poll for confirmation
-//!   getAccountInfo                read state, e.g. an ALT's activation slot
+//!   getAccountInfo                read account state
 //!   simulateTransaction           pre-flight before send
 //!   getRecentPrioritizationFees   priority-fee bidding hints
 //!   getMultipleAccounts           batched account reads

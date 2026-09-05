@@ -1036,7 +1036,6 @@ components:
                     rpc_unavailable,
                     prover_failed,
                     leaf_resolution_failed,
-                    alt_not_active,
                     settlement_rejected,
                     internal_error,
                   ]
@@ -1092,8 +1091,6 @@ components:
         prove_step_ms: { type: integer, format: uint64 }
         prove_ms: { type: integer, format: uint64 }
         verify_ms: { type: integer, format: uint64 }
-        alt_tx_ms: { type: integer, format: uint64 }
-        alt_wait_ms: { type: integer, format: uint64 }
         parallel_ms: { type: integer, format: uint64 }
         settle_ms: { type: integer, format: uint64 }
         close_ms: { type: integer, format: uint64 }

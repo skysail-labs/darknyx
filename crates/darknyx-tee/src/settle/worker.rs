@@ -1291,11 +1291,6 @@ async fn run_batch_settle_inner(
                 prove_step_ms: Some(prover_timings.prove_step_ms),
                 prove_ms: Some(prove_ms),
                 verify_ms: Some(verify_ms),
-                // Retained in the telemetry schema so historical benchmark
-                // records remain readable. V1 removed Tx C and its activation
-                // wait, therefore new records report these as absent.
-                alt_tx_ms: None,
-                alt_wait_ms: None,
                 parallel_ms: Some(parallel_ms),
                 settle_ms: Some(settle_ms),
                 close_ms: Some(close_ms),
@@ -1391,9 +1386,8 @@ mod tests {
             let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let result = match method {
                 "getLatestBlockhash" => {
-                    // Advance the slot every call so the worker's per-batch
-                    // ALT-activation wait breaks (it errors if the slot
-                    // never moves past the extend's landing slot).
+                    // Advance the slot every call so deadline and retry paths
+                    // see forward progress.
                     let slot = 1000 + counter.fetch_add(1, Ordering::SeqCst);
                     json!({
                         "context": { "slot": slot },
@@ -1423,8 +1417,8 @@ mod tests {
                         .collect();
                     json!({ "context": { "slot": 1000 }, "value": value })
                 }
-                // Per-batch ALT re-read → null so the worker falls back to its
-                // in-memory ALT order (the mock doesn't model account state).
+                // Unknown account reads return null; this mock does not model
+                // account state.
                 "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
                 other => json!({ "error": format!("unexpected method {other}") }),
             };
@@ -1492,8 +1486,8 @@ mod tests {
                         .collect();
                     json!({ "context": { "slot": 1000 }, "value": value })
                 }
-                // Per-batch ALT re-read → null so the worker falls back to its
-                // in-memory ALT order (the mock doesn't model account state).
+                // Unknown account reads return null; this mock does not model
+                // account state.
                 "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
                 other => json!({ "error": format!("unexpected method {other}") }),
             };
@@ -1799,8 +1793,8 @@ mod tests {
                     sig[..8].copy_from_slice(&nth.to_le_bytes());
                     json!(bs58::encode(sig).into_string())
                 }
-                // Healthy until the switch, so the lock/verify/ALT phases
-                // complete and the batch actually REACHES the redrive loop.
+                // Healthy until the switch, so lock and verification complete
+                // and the batch actually REACHES the redrive loop.
                 // After it, nothing confirms — every match stays unresolved and
                 // the loop keeps redriving, which is what puts it at the mercy
                 // of `getLatestBlockhash`.

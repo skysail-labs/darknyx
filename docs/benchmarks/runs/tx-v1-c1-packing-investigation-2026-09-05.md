@@ -2,7 +2,9 @@
 
 ## Decision
 
-Keep the ordinary saturated C1 run as the post-transaction-v1 CPU baseline.
+Keep the ordinary saturated C1 run as a provisional post-transaction-v1 CPU
+observation. Re-run it with a committed evidence bundle before using it as a
+release, capacity, or GPU-comparison baseline.
 Do not publish an externally wave-synchronised run as a full-batch capacity
 number, and do not retain the experimental loadgen flag that attempted to
 produce one. A client outside the CVM could not reliably place sixteen
@@ -24,7 +26,7 @@ neither belongs in the production image merely to obtain a flattering number.
 | image | `tee-v3-hardening-92` / `sha256:dd31985fee01d921ed4c8e0ea49e479b25a69583831d95d2e60d8bc8d1a2c0f0` |
 | compose hash | `abdc838c3c51a96d9e1f1da44f23e634e9c756658a2bf6135dcd6c0a92f9e726` |
 | prover / witness | rapidsnark CPU / native |
-| settlement | transaction v1 with inline accounts; no ALT create, extend, or warm-up |
+| settlement | transaction v1 with inline accounts and no transaction-setup warm-up stage |
 | Solana RPC | private Helius devnet endpoint |
 | trees / batch concurrency | K=4 / C1 |
 | workload | 16 persistent partial-fill bids × 9 asks = 144 matched pairs |
@@ -39,7 +41,7 @@ and boot SPKI before carrying private traffic.
 
 | Run | Submission strategy | Measured batch pattern | Packing | Confirmed throughput | Total P50 / P95 | Interpretation |
 |---|---|---|---:|---:|---:|---|
-| C1 baseline | bids first, 15 orders/s | alternating `10,6` after warm-up | 49.26% | 1.340 matches/s | 5.726 / 6.579 s | Valid post-v1 production-shaped baseline |
+| C1 baseline | bids first, 15 orders/s | alternating `10,6` after measurement warm-up | 49.26% | 1.340 matches/s | 5.726 / 6.579 s | Provisional post-v1 production-shaped observation |
 | Burst diagnostic | bids first, nominal 1000 orders/s | alternating `14,2` after warm-up | 52.21% | 1.489 matches/s | 5.559 / 6.138 s | Raising the client offer rate alone did not make full pages |
 | Eight-transport wave | one ask per persistent bid after an aligned tick | fragmented, including `2,9,5` and `2,14` | 42.11% | 0.923 matches/s | 5.539 / 6.356 s | Staging added idle time without controlling intake admission |
 | Twenty-transport wave | same experiment with twenty verified transports | calibration `16`; then mostly `1,15`, with later `1,12,3` and `1,11,3,1` | 40.00% | 0.866 matches/s | 5.796 / 8.312 s | Final falsification of the external-synchronisation premise |
@@ -51,13 +53,12 @@ first batch. There were no rejected or ambiguous outcomes. The first three
 runs had no rebroadcasts; the final run had two, or 0.016 per measured confirmed
 match.
 
-The valid C1 baseline removed the former ALT stages entirely:
-`alt_tx` and `alt_wait` both had zero samples. Relative to the 2026-07-23 v0 C1
+The C1 observation removed the former setup stages entirely. Relative to the 2026-07-23 v0 C1
 control, its observed confirmed throughput rose from 0.961 to 1.340 matches/s
 (+39.4%), total P50 fell from 15.683 to 5.726 seconds (-63.5%), and settle P50
 fell from 12.229 seconds to 0.988 seconds (-91.9%). This is a cross-date result,
 not an isolated A/B: the N=16 circuit and other implementation details also
-changed, so only the disappearance of the ALT stages can be attributed
+changed, so only the disappearance of the setup stages can be attributed
 mechanically to transaction v1.
 
 ## Final wave-run detail
@@ -93,8 +94,8 @@ verification off-thread or changing the matcher cadence.
 
 ## Follow-up rule
 
-- Use the ordinary C1 result for transaction-v1 comparisons and future GPU
-  same-box baselines.
+- Use the ordinary C1 result only as directional transaction-v1 evidence until
+  the run is repeated with the committed artifact bundle described below.
 - Treat packing efficiency as an independently reported workload metric; never
   normalize a partial page to sixteen and call it measured throughput.
 - Revisit a deterministic full-page ceiling only if real volume exhibits a
@@ -103,7 +104,22 @@ verification off-thread or changing the matcher cadence.
 - Keep CPU settlement concurrency at one. This experiment does not supersede
   the earlier C1/C2 result in which C2 reduced throughput.
 
-Raw JSON and generated Markdown from all four attempts remain in the external
-benchmark volume. They intentionally are not copied into Git because
-the comparison above contains the durable, reviewable result and the raw run
-directory is the controlled evidence archive.
+## Evidence limitation and replacement gate
+
+This checkout contains the reviewed summary, but not the raw JSON, generated
+Markdown, gateway/boot capture, or before/after cgroup samples from these runs.
+Those files remained on the external benchmark volume and are not presently
+available here. `nvidia-smi` is not applicable because this was a CPU-only CVM.
+The reported values are therefore useful as directional observations, but are
+not independently auditable release or capacity evidence.
+
+The next comparable C1 run must replace this provisional record with a
+redacted, committed artifact bundle containing:
+
+- the generated metrics JSON and Markdown;
+- image digest, compose hash, CVM/instance identity, boot session, and prover
+  configuration;
+- client and gateway latency captures;
+- `cpu.max`, `cpu.stat`, and memory-limit samples before and after the run; and
+- an artifact manifest that names every capture and records any unavailable or
+  inapplicable field explicitly.

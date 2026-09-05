@@ -4,7 +4,7 @@ How to prove, on a real CVM, that an interrupted settlement is recovered rather
 than stranded — and that a planned stop leaves nothing behind.
 
 This is the live half of **T-06**
-([`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md)).
+([audit 6 tracker](../audits/audit_6/tracker.md)).
 The unit and integration tests pin the decision logic; this drill is the only
 thing that exercises a real process dying with real on-chain locks outstanding,
 on the real LUKS volume.
@@ -236,7 +236,7 @@ PF-13…PF-17 settle/API/prover/oracle changes. **All 11 pass criteria hold.**
 | Metric | Value | Note |
 |---|---|---|
 | Harness baseline | 58.51 s test time | Full deposit, proof generation, intake, match, and settle. |
-| Settle pipeline | `total_ms=13711` | lock 1326; prove 3071; verify 1540; ALT tx/wait 1331/683; settle 9077; three rebroadcasts. |
+| Settle pipeline | `total_ms=13711` | Historical pre-v1 run: lock 1326; prove 3071; verify 1540; retired setup tx/wait 1331/683; settle 9077; three rebroadcasts. |
 | Native witness / rapidsnark | 239 / 2762 ms | CPU, N=16 pot19 circuit. |
 | Journal durable writes | `count=2`, p50 3665 µs, p95/max 4929 µs | Read from `/admin/drain` after the successful settle. This is a real distribution and retires the prior single-sample waiver. |
 | Auth CPU canary | 1797 / 1767 / 1687 / 1560 / 1479 ms | Five sequential token issuances. |
@@ -277,7 +277,7 @@ against the leaf count, not against the log's own confidence.
 
 | Metric | Value | Note |
 |---|---|---|
-| Settle end-to-end (baseline) | `total_ms=13365` | lock 2474, prove 2251 (witness 276 + prove_step 1944), verify 1834, ALT 1245 + wait 1075, settle 9226 |
+| Settle end-to-end (baseline) | `total_ms=13365` | Historical pre-v1 run: lock 2474, prove 2251 (witness 276 + prove_step 1944), verify 1834, retired setup 1245 + wait 1075, settle 9226 |
 | Prior runs | 14210 / 14573 / 15310 | This run is the fastest of four, on prod9. Still three-to-four samples across differing network conditions — an observation, not a trend. |
 | **Journal durable write** | **p50 8212 µs / 6353 µs** | **Two runs, ONE SAMPLE EACH — not a percentile. Cause and fix below; the next run reads it from `/admin/drain`.** |
 | Recovery | classified 1 entry, `needs_operator=false` | PF-27's batched reconciliation, first live run |
@@ -382,7 +382,7 @@ clean cycle.
 
 | Metric | Value | Note |
 |---|---|---|
-| Settle end-to-end, journal enabled | `total_ms=14210` | lock 1162, prove 2226, verify 1173, ALT 1300 + wait 462, settle 10762 |
+| Settle end-to-end, journal enabled | `total_ms=14210` | Historical pre-v1 run: lock 1162, prove 2226, verify 1173, retired setup 1300 + wait 462, settle 10762 |
 | Slice-1 baselines (pre-journal) | 14573 / 15310 | The journalled run is **within the spread of the two prior runs**. Three samples across different network conditions cannot establish that the journal's cost is negligible — only that it is not visible at this resolution. Stated as an observation, not a conclusion. |
 | Restart → reconciled | **436 ms** | `20:21:46.195` sweeper spawn → `.631` recovery complete |
 | Journal bytes per match | **~1684 B** | payload 488 + 2×378 lock inputs + 440 scalars/signatures/timestamp |

@@ -608,7 +608,7 @@ RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=16 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$
 # Read the levers from the CVM logs:
 phala cvms logs "$CVM" | grep -E "settle co-inclusion|settle pipeline timing"
 #   distinct_slots = blocks the settles spanned (co-inclusion = n ÷ distinct_slots)
-#   lock_ms / prove_ms / alt_tx_ms / settle_ms = per-stage wall time
+#   lock_ms / prove_ms / verify_ms / settle_ms = per-stage wall time
 ```
 
 ### 6.1 Validate fills delivery — the off-TEE indexer + per-account stream channel

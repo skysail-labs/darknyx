@@ -43,8 +43,8 @@ pub struct BlockhashWithSlot {
     /// The blockhash bytes — caller wraps in `solana_hash::Hash`
     /// when constructing a Message.
     pub blockhash: [u8; 32],
-    /// Slot the blockhash was reported at. ALT creation uses this
-    /// (NOT `getSlot("confirmed")`) — see CRYPTOGRAPHY.md §9.
+    /// Slot the blockhash was reported at. Settlement deadlines and sweepers
+    /// use this context rather than sampling a separate RPC slot.
     pub context_slot: u64,
     /// Last block height the blockhash will be valid for. After
     /// this height the tx must be rebuilt with a fresh blockhash.
@@ -385,10 +385,9 @@ impl SolanaRpcClient {
 
     // ─── The 6 methods ──────────────────────────────────────────
 
-    /// `getLatestBlockhash` — returns the current blockhash + the
-    /// slot it was reported at. Per-batch ALT creation uses that slot; see
-    /// CRYPTOGRAPHY.md §9 for why it must come from the blockhash context and
-    /// not from `getSlot("confirmed")`.
+    /// `getLatestBlockhash` — returns the current blockhash + the slot it was
+    /// reported at. This keeps transaction construction and deadline checks on
+    /// one coherent RPC view.
     pub async fn get_latest_blockhash(&self) -> Result<BlockhashWithSlot, RpcError> {
         #[derive(Deserialize)]
         struct Inner {
@@ -700,7 +699,8 @@ impl SolanaRpcClient {
             .instructions
             .into_iter()
             .map(|ci| RpcInstruction {
-                // Static keys only; ALT-loaded program ids resolve to "".
+                // Darknyx program ids are static transaction keys. Malformed
+                // indices remain empty for fail-closed filtering.
                 program_id: keys.get(ci.program_id_index).cloned().unwrap_or_default(),
                 data: bs58::decode(&ci.data).into_vec().unwrap_or_default(),
             })

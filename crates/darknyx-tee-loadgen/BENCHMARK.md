@@ -37,8 +37,6 @@ scope* for the prover comparison, per the framing):
 | `lock_ms` | A (lock_note ×2) | CONSENSUS/IO | →~0 |
 | **`prove_ms`** | — (VALID_MATCH_BATCH Groth16 prove) | **COMPUTE** | **unchanged — GPU target** |
 | `verify_ms` | B (verify_match_batch) | CONSENSUS/IO | →~0 |
-| `alt_tx_ms` | retired compatibility field (absent for v1 Tx D) | — | — |
-| `alt_wait_ms` | retired compatibility field (absent for v1 Tx D) | — | — |
 | `settle_ms` | D (tee_forced_settle_batched) | CONSENSUS/IO | →~0 |
 | `close_ms` | E (close_batch_validity_marker) | CONSENSUS/IO | →~0 |
 | `total_ms` | wall | — | →`prove_ms` + ε |
@@ -49,7 +47,10 @@ backend logs the split, record both, because the GPU win is bounded by the prove
 (Amdahl: witness-gen becomes the new floor). Derived comparison metrics, per run:
 
 - **`prove_ms` (absolute, per N=16 batch)** — the headline. GPU speedup = `prove_ms_cpu / prove_ms_gpu`.
-- **Finality-free per-batch latency** = `total_ms − (lock+verify+alt_tx+alt_wait+settle+close)` ≈ `prove_ms + ε`. Models the post-Alpenglow world; shows `prove_ms` dominates once IO →0.
+- **Projected post-Alpenglow compute floor** = the measured `prove_ms`. Lock and
+  prove→verify already overlap, so subtracting every stage duration from
+  `total_ms` would double-count that overlap. Use `prove_ms` directly when
+  modelling the world in which consensus/IO latency approaches zero.
 - **Projected post-Alpenglow settle throughput** ≈ `1 / (prove_ms + 6×~0.15 s)` batches/s → today prove-bound, so the GPU ratio passes ~1:1 into throughput.
 - **Client `VALID_INPUT` prove rate** (loadgen-side, native C++ witness +
   ark-groth16) — the order-submission ceiling; the same prover-bound story
@@ -96,7 +97,7 @@ image -20/-21 — prior image, same box class, label accordingly):
 | **`prove_ms`** (witness + prove) | ~4000 | **3661** | ~2200 *(witness-bound)* |
 | `verify_ms` (IO) | — | 1119 | →~0 |
 | `settle_ms` (IO) | ~14000 | **11222** | →~0 |
-| `alt_tx`+`alt_wait` (IO) | — | 3380 | →0 |
+| retired v0 setup + wait (IO) | — | 3380 | removed by transaction v1 |
 | `lock_ms`+`close_ms` (IO) | — | 4332 | →~0 |
 | `total_ms` (wall, w/ overlap) | ~22500 | **16938** | →`prove_ms`+ε |
 | prove share of wall | ~18% | **~22%** | — |
@@ -359,8 +360,8 @@ The settle-rate plateau across the steps is the prover ceiling.
   GPU-accelerated proving.**
 
 **Historical pre-v1 finding — multi-batch settle failed under concurrent load.**
-V1 removes the shared rolling-ALT half of this failure class; the continuation
-dependency remains. The original `-30` run found:
+V1 removes the shared transaction-setup half of this failure class; the
+continuation dependency remains. The original `-30` run found:
 - partial-fill continuation batches failed `AccountOwnedByWrongProgram (3007)` on
   `note_lock_a` — a dependent batch's settle simulated before the prior batch that
   creates its relock NoteLock landed → a **cross-batch continuation ordering race**.
@@ -368,10 +369,10 @@ dependency remains. The original `-30` run found:
 - **net result: `leaf_count` 14→14 — 0/7 matches settled.**
 
 **Root cause + fix — `SETTLE_CONCURRENCY` 3→1** (image `-31`, commit `d9a388b`):
-the scheduler ran up to 3 settle batches concurrently while batches shared one
-rolling per-batch ALT and continuation batches depended on a prior batch's relock
-NoteLock. Serializing settle (FIFO, one batch at a time) respected both invariants.
-The v1 migration deletes the ALT race, but does not by itself make dependent
+the scheduler ran up to 3 settle batches concurrently while batches shared
+mutable transaction-setup state and continuation batches depended on a prior
+batch's relock NoteLock. Serializing settle (FIFO, one batch at a time) respected
+both invariants. The v1 migration deletes that race, but does not by itself make dependent
 continuations safe to reorder. The within-batch co-inclusion
 (`settle_send_concurrency=16`, the tree-sharding win) is untouched.
 

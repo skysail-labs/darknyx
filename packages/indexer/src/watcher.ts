@@ -30,7 +30,7 @@ export interface GtfaTx {
   meta?: { err: unknown | null } | null;
 }
 /** A jsonParsed top-level instruction. For our (unparsed) vault program the RPC
- *  returns the resolved `programId` + base58 `data` (no manual ALT/index work). */
+ *  returns the resolved `programId` + base58 `data`. */
 interface GtfaInstruction {
   programId: string;
   data?: string; // base58; present for unparsed instructions

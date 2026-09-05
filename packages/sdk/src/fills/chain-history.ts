@@ -220,7 +220,7 @@ export type ChainScan = (opts: {
 }) => Promise<RawSettleTx[]>;
 
 /** Pull the vault program's top-level ix data out of a legacy, v0, or v1 tx.
- * Program ids are always static account keys, so no ALT lookup is needed. */
+ * Program ids used by the vault are static account keys. */
 function extractVaultIxDatas(
   tx: VersionedTransactionResponse,
   programId: PublicKey,

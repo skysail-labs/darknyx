@@ -15,7 +15,7 @@ language: en-US
 # sat broken. Keep it short and check the length before editing.
 #
 # The per-area invariants this used to enumerate (cross-language byte-equality,
-# BN254 Fr safety, conservation/replay, the 1232-byte budget, circuit/VK
+# BN254 Fr safety, conservation/replay, transaction-v1 limits, circuit/VK
 # lockstep, secret handling) live in `reviews.path_instructions` below, which is
 # where they belong: scoped to the files they apply to, with no length cap.
 tone_instructions: >-
@@ -111,9 +111,9 @@ reviews:
       instructions: >-
         The settle handlers. Verify (a) the conservation laws still hold (inputs
         == outputs + change + fees per mint) and aren't loosened; (b) the
-        1232-byte v0 tx budget (CLAUDE.md §5) — any new account or ix-data field
-        risks overflow, account for the worst-case change-note variant (no
-        note_lock_e/f dedup); (c) BatchValidityMarker is 1:N — it must NOT be
+        transaction-v1 4096-byte and 64-inline-account limits (CLAUDE.md §6) —
+        any new account or ix-data field consumes explicit headroom; (c)
+        BatchValidityMarker is 1:N — it must NOT be
         closed per match (only close_batch_validity_marker closes it; a
         try_borrow_mut_lamports against the marker here re-introduces the
         §7.4 bug); (d) `init` constraints on NoteLock/ConsumedNote/Nullifier
@@ -124,17 +124,14 @@ reviews:
     - path: "crates/darknyx-tee/src/settle/**/*.rs"
       instructions: >-
         The in-TEE settle pipeline (lock → prove → verify_match_batch →
-        per-batch ALT → tee_forced_settle_batched → close). Watch the
-        Solana-integration seams this repo has been bitten by: ALT recent_slot
-        must come from getLatestBlockhash().context_slot with a small backoff
-        (load-balanced RPC replicas); a freshly created/extended ALT isn't
-        loadable until the next slot (wait, don't settle against an unloadable
-        table); the BatchValidityMarker expiry is a TWO-SIDED bound
-        (clock.slot < expiry ≤ clock.slot + 300); the settle v0 tx needs a
-        ComputeBudget limit + must stack the static + per-batch ALTs to stay
-        under 1232 B; a multi-match batch's ALT must union EVERY match's
-        note_locks, not just matches[0]. Flag fee/collateral math that could
-        break conservation (each side must lock nominal + its own fee).
+        tee_forced_settle_batched → close). Watch the Solana-integration seams
+        this repo has been bitten by: transaction deadlines must use the
+        getLatestBlockhash context slot (not a separately sampled RPC view);
+        the BatchValidityMarker expiry is a TWO-SIDED bound
+        (clock.slot < expiry ≤ clock.slot + 300); Tx D must remain a v1 message
+        with every account inline and explicit compute/data/fee configuration.
+        Flag fee/collateral math that could break conservation (each side must
+        lock nominal + its own fee).
     - path: "crates/darknyx-tee/src/config.rs"
       instructions: >-
         CVM env config. Compose interpolates `${VAR}` to an empty string when
