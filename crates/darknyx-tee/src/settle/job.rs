@@ -482,8 +482,9 @@ mod tests {
     //    error happened to format into itself — one such error interpolated the
     //    RPC endpoint, credential included.
 
-    /// Every label a client can observe. Adding a variant without adding it
-    /// here fails to compile, so the wire contract cannot drift silently.
+    /// The currently published labels. Keep this list in sync with the enum
+    /// and OpenAPI; `label()` is compile-exhaustive, while this array drives
+    /// serialization coverage for every current variant.
     fn all_kinds() -> [SettleFailureKind; 5] {
         [
             SettleFailureKind::Rpc,

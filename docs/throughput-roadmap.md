@@ -33,9 +33,12 @@ the prerequisite work, and where the inline analysis lives.
 
 ## Cost model this roadmap is reasoned against
 
-The current reference is the 2026-09-05 transaction-v1 C1 run on a prod9
-8-vCPU CVM. Packing was 49.26%, so this is a production-shaped baseline rather
-than a normalized full-batch ceiling:
+The latest directional observation is the 2026-09-05 transaction-v1 C1 run on
+a prod9 8-vCPU CVM. Packing was 49.26%, so it represents a production-shaped
+workload rather than a normalized full-batch ceiling. Its summary is committed,
+but its raw artifact bundle is unavailable in this checkout; do not use it as a
+release, capacity, or GPU-comparison gate until a replacement run commits the
+redacted evidence bundle required by the run report:
 
 | Term | ms | Nature | Killed by |
 |---|--:|---|---|
@@ -46,7 +49,7 @@ than a normalized full-batch ceiling:
 Two facts drive everything below: (1) lock and prove+verify are already
 overlapped (`worker.rs` `tokio::join!`), and (2) at the production-default
 `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1` each batch owns one serial pipeline
-slot. The current reference is prove-dominated; older pre-v1 samples are not a
+slot. The provisional observation is prove-dominated; older pre-v1 samples are not a
 valid model for the current critical path.
 
 ---
@@ -85,7 +88,7 @@ excessive rebroadcasting, so neither is a production-capacity promotion result.
 Evidence:
 [`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
 
-**Transaction-v1 C1 re-baseline 2026-09-05:** the inline-account image produced
+**Transaction-v1 C1 provisional observation 2026-09-05:** the inline-account image produced
 no setup-transaction stage and delivered 1.340 confirmed matches/s with a
 5.726-second total P50. Attempts to manufacture 100% N=16 packing through
 bursting and externally aligned waves failed even with twenty independently
@@ -228,8 +231,10 @@ above.
 ### 7. Transaction-v1 settlement rollout and capacity follow-up
 
 **Status:** Tx D uses transaction v1 with every account inline. The signed
-submit/read probe, local Surfpool matrix, devnet settlement, and the 2026-09-05
-CPU-CVM C1 baseline passed. Mainnet use remains gated on cluster activation.
+submit/read probe, local Surfpool matrix, and devnet settlement passed. The
+2026-09-05 CPU-CVM C1 run produced a provisional directional observation; a
+release-grade re-baseline with committed raw evidence remains open. Mainnet use
+remains gated on cluster activation.
 
 Tx D is currently 1,392 bytes under the 4,096-byte wire ceiling and stays
 within the 64-inline-account maximum. It sets compute, loaded-account-data, and

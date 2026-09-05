@@ -299,7 +299,8 @@ template MatchSlot() {
     component remainderBits = Num2Bits(64);
     remainderBits.in <== price_remainder;
 
-    // ── Amount-privacy soundness gate (see CRYPTOGRAPHY.md §7.4) ─────────
+    // ── Amount-privacy soundness gate (P1a, see
+    //    docs/settlement-amount-privacy-p0-soundness.md) ──────────────────
     // When the on-chain settle drops its plaintext `u64` + `checked_add`
     // conservation backstop, THIS circuit becomes the sole no-inflation
     // guarantor. Conservation (`a_amount === quote + buyer_change + buyer_fee`,
@@ -362,8 +363,8 @@ template MatchSlot() {
     //
     // FLOOR  `(fee+1)·10000 > notional·rate`  ⇒ fee ≥ ⌊notional·rate/10000⌋
     // CEIL   `fee·10000 <= notional·rate`      ⇒ fee ≤ ⌊notional·rate/10000⌋
-    // together ⇒ fee == ⌊notional·rate/10000⌋; the ceiling and floor are
-    // symmetric around the unique integer quotient.
+    // together ⇒ fee == ⌊notional·rate/10000⌋ (proof of the floor half in
+    // docs/settlement-amount-privacy-p0-soundness.md §8; the ceil is symmetric).
     //
     // C-04: WITHOUT the ceiling the circuit only lower-bounds the fee, so a
     // malicious TEE could set a fee as large as the whole input note and

@@ -47,7 +47,10 @@ backend logs the split, record both, because the GPU win is bounded by the prove
 (Amdahl: witness-gen becomes the new floor). Derived comparison metrics, per run:
 
 - **`prove_ms` (absolute, per N=16 batch)** — the headline. GPU speedup = `prove_ms_cpu / prove_ms_gpu`.
-- **Finality-free per-batch latency** = `total_ms − (lock+verify+settle+close)` ≈ `prove_ms + ε`. Models the post-Alpenglow world; shows `prove_ms` dominates once IO →0.
+- **Projected post-Alpenglow compute floor** = the measured `prove_ms`. Lock and
+  prove→verify already overlap, so subtracting every stage duration from
+  `total_ms` would double-count that overlap. Use `prove_ms` directly when
+  modelling the world in which consensus/IO latency approaches zero.
 - **Projected post-Alpenglow settle throughput** ≈ `1 / (prove_ms + 6×~0.15 s)` batches/s → today prove-bound, so the GPU ratio passes ~1:1 into throughput.
 - **Client `VALID_INPUT` prove rate** (loadgen-side, native C++ witness +
   ark-groth16) — the order-submission ceiling; the same prover-bound story
